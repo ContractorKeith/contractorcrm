@@ -6,8 +6,9 @@ use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    Actor, ChannelKind, Company, Contact, ContactChannel, ContactRole, HandoffRef, LostReason,
-    Money, Opportunity, OpportunitySource, PartyKind, Stage, StageHistoryEntry, StageKind,
+    Activity, ActivityDirection, ActivityKind, Actor, ChannelKind, Company, Contact,
+    ContactChannel, ContactRole, HandoffRef, LostReason, Money, Opportunity, OpportunitySource,
+    ParentType, PartyKind, Stage, StageHistoryEntry, StageKind,
 };
 use crate::error::ApplicationError;
 use crate::storage::{new_id, now_utc, Storage};
@@ -1062,6 +1063,244 @@ pub fn get_opportunity(
 }
 
 // ---------------------------------------------------------------------------
+// Activity requests (camelCase)
+// ---------------------------------------------------------------------------
+
+/// Editable activity fields; updates replace the full editable set (v1).
+/// The parent never changes after logging.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityPatch {
+    /// Wire enum value, e.g. "call"; validated by the application layer.
+    pub kind: String,
+    /// Wire enum value; defaults to "none" when absent.
+    pub direction: Option<String>,
+    /// User-editable UTC ISO-8601 timestamp; defaults to now when absent.
+    pub occurred_at: Option<String>,
+    pub summary: String,
+    /// Markdown, optional.
+    pub body: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogActivityRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    /// Wire enum value: "contact", "company", or "opportunity".
+    pub parent_type: String,
+    pub parent_id: String,
+    #[serde(flatten)]
+    pub activity: ActivityPatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateActivityRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub activity_id: String,
+    pub expected_version: i64,
+    pub patch: ActivityPatch,
+}
+
+/// Hard delete — activities are user notes, so there is no archive state.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteActivityRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub activity_id: String,
+    pub expected_version: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Activity use-cases (unified timeline)
+// ---------------------------------------------------------------------------
+
+/// Log an activity on a contact, company, or opportunity; the parent must
+/// exist (validated here — the table has no FK on the polymorphic parent_id).
+pub fn log_activity(
+    storage: &mut Storage,
+    request: LogActivityRequest,
+) -> Result<Activity, ApplicationError> {
+    let parent_type = parse_parent_type("parentType", &request.parent_type)?;
+    let parent_id = required_text("parentId", request.parent_id, 100)?;
+    let fields = validate_activity_patch(request.activity)?;
+    let now = now_utc();
+    let activity = Activity {
+        id: new_id(),
+        parent_type,
+        parent_id,
+        kind: fields.kind,
+        direction: fields.direction,
+        occurred_at: fields.occurred_at,
+        summary: fields.summary,
+        body: fields.body,
+        actor: request.actor,
+        created_at: now.clone(),
+        updated_at: now,
+        version: 1,
+    };
+
+    let transaction = immediate(storage)?;
+    require_activity_parent(&transaction, parent_type, &activity.parent_id)?;
+    transaction.execute(
+        "INSERT INTO activities (
+            id, parent_type, parent_id, kind, direction, occurred_at,
+            summary, body, actor, created_at, updated_at, version
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            activity.id,
+            activity.parent_type.as_database_value(),
+            activity.parent_id,
+            activity.kind.as_database_value(),
+            activity.direction.as_database_value(),
+            activity.occurred_at,
+            activity.summary,
+            activity.body,
+            activity.actor.as_database_value(),
+            activity.created_at,
+            activity.updated_at,
+            activity.version,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "activity",
+        &activity.id,
+        &format!(
+            "logged {} activity \"{}\"",
+            activity.kind.as_database_value(),
+            activity.summary
+        ),
+    )?;
+    transaction.commit()?;
+    Ok(activity)
+}
+
+/// Replace an activity's editable fields; the parent and original actor stay
+/// fixed. Requires the expected version.
+pub fn update_activity(
+    storage: &mut Storage,
+    request: UpdateActivityRequest,
+) -> Result<Activity, ApplicationError> {
+    let fields = validate_activity_patch(request.patch)?;
+    let transaction = immediate(storage)?;
+    let mut activity = require_activity(&transaction, &request.activity_id)?;
+    check_version(
+        "activity",
+        &activity.id,
+        request.expected_version,
+        activity.version,
+    )?;
+
+    activity.kind = fields.kind;
+    activity.direction = fields.direction;
+    activity.occurred_at = fields.occurred_at;
+    activity.summary = fields.summary;
+    activity.body = fields.body;
+    activity.updated_at = now_utc();
+    activity.version += 1;
+    transaction.execute(
+        "UPDATE activities SET
+            kind = ?2, direction = ?3, occurred_at = ?4, summary = ?5,
+            body = ?6, updated_at = ?7, version = ?8
+         WHERE id = ?1",
+        params![
+            activity.id,
+            activity.kind.as_database_value(),
+            activity.direction.as_database_value(),
+            activity.occurred_at,
+            activity.summary,
+            activity.body,
+            activity.updated_at,
+            activity.version,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "activity",
+        &activity.id,
+        &format!("updated activity \"{}\"", activity.summary),
+    )?;
+    transaction.commit()?;
+    Ok(activity)
+}
+
+/// Hard-delete an activity (they are user notes — no archive convention);
+/// requires the expected version and logs the command.
+pub fn delete_activity(
+    storage: &mut Storage,
+    request: DeleteActivityRequest,
+) -> Result<(), ApplicationError> {
+    let transaction = immediate(storage)?;
+    let activity = require_activity(&transaction, &request.activity_id)?;
+    check_version(
+        "activity",
+        &activity.id,
+        request.expected_version,
+        activity.version,
+    )?;
+    transaction.execute("DELETE FROM activities WHERE id = ?1", [&activity.id])?;
+    log_command(
+        &transaction,
+        request.actor,
+        "activity",
+        &activity.id,
+        &format!("deleted activity \"{}\"", activity.summary),
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Read a parent's timeline, newest first by user-editable occurred_at. With
+/// `include_related`, a contact's timeline also carries activities of
+/// opportunities linked via opportunities.contact_id (a company's via
+/// company_id) — stored once on the opportunity, joined at read time.
+pub fn get_timeline(
+    storage: &Storage,
+    parent_type: &str,
+    parent_id: &str,
+    include_related: bool,
+) -> Result<Vec<Activity>, ApplicationError> {
+    let parent_type = parse_parent_type("parentType", parent_type)?;
+    let connection = storage.connection();
+    require_activity_parent(connection, parent_type, parent_id)?;
+
+    // Which opportunities column links related activities back to this parent.
+    let related_link_column = match parent_type {
+        ParentType::Contact => Some("contact_id"),
+        ParentType::Company => Some("company_id"),
+        ParentType::Opportunity => None,
+    };
+    let mut sql = format!(
+        "SELECT {ACTIVITY_COLUMNS} FROM activities
+         WHERE (parent_type = ?1 AND parent_id = ?2)"
+    );
+    if include_related {
+        if let Some(column) = related_link_column {
+            sql.push_str(&format!(
+                " OR (parent_type = 'opportunity' AND parent_id IN
+                     (SELECT id FROM opportunities WHERE {column} = ?2))"
+            ));
+        }
+    }
+    sql.push_str(" ORDER BY occurred_at DESC, id DESC");
+
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement
+        .query_map(
+            params![parent_type.as_database_value(), parent_id],
+            activity_from_row,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(finish_activity).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Hand-off use-cases (quote/job references + envelope export)
 // ---------------------------------------------------------------------------
 
@@ -1750,6 +1989,68 @@ fn validate_opportunity_patch(
     })
 }
 
+/// Activity patch after validation, with parsed enums and trimmed text.
+struct ValidActivityFields {
+    kind: ActivityKind,
+    direction: ActivityDirection,
+    occurred_at: String,
+    summary: String,
+    body: Option<String>,
+}
+
+fn validate_activity_patch(patch: ActivityPatch) -> Result<ValidActivityFields, ApplicationError> {
+    let kind = ActivityKind::from_database_value(patch.kind.trim()).ok_or_else(|| {
+        ApplicationError::InvalidInput {
+            field: "kind".into(),
+            message: format!(
+                "unknown kind \"{}\"; expected one of call, email, text, site_visit, \
+                 meeting, note",
+                patch.kind
+            ),
+        }
+    })?;
+    let direction = match optional_text(patch.direction) {
+        None => ActivityDirection::None,
+        Some(value) => ActivityDirection::from_database_value(&value).ok_or_else(|| {
+            ApplicationError::InvalidInput {
+                field: "direction".into(),
+                message: format!(
+                    "unknown direction \"{value}\"; expected one of inbound, outbound, none"
+                ),
+            }
+        })?,
+    };
+    // Light rule: notes and on-site touches have no direction; calls, emails,
+    // and texts may be inbound, outbound, or none.
+    if matches!(
+        kind,
+        ActivityKind::Note | ActivityKind::SiteVisit | ActivityKind::Meeting
+    ) && direction != ActivityDirection::None
+    {
+        return Err(ApplicationError::InvalidInput {
+            field: "direction".into(),
+            message: format!("must be none for {} activities", kind.as_database_value()),
+        });
+    }
+    Ok(ValidActivityFields {
+        kind,
+        direction,
+        // User-editable; defaults to now so quick logging stays one field.
+        occurred_at: optional_text(patch.occurred_at).unwrap_or_else(now_utc),
+        summary: required_text("summary", patch.summary, 500)?,
+        body: optional_text(patch.body),
+    })
+}
+
+fn parse_parent_type(field: &str, value: &str) -> Result<ParentType, ApplicationError> {
+    ParentType::from_database_value(value.trim()).ok_or_else(|| ApplicationError::InvalidInput {
+        field: field.into(),
+        message: format!(
+            "unknown parent type \"{value}\"; expected one of contact, company, opportunity"
+        ),
+    })
+}
+
 fn parse_party_kind(field: &str, value: &str) -> Result<PartyKind, ApplicationError> {
     PartyKind::from_database_value(value.trim()).ok_or_else(|| ApplicationError::InvalidInput {
         field: field.into(),
@@ -2319,6 +2620,100 @@ fn load_stage_history(
             Ok(entry)
         })
         .collect()
+}
+
+const ACTIVITY_COLUMNS: &str = "id, parent_type, parent_id, kind, direction, occurred_at, \
+    summary, body, actor, created_at, updated_at, version";
+
+/// Row tuple with raw enum texts, finished into an Activity after parsing.
+type ActivityRow = (Activity, String, String, String, String);
+
+fn activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityRow> {
+    let parent_type_text: String = row.get(1)?;
+    let kind_text: String = row.get(3)?;
+    let direction_text: String = row.get(4)?;
+    let actor_text: String = row.get(8)?;
+    Ok((
+        Activity {
+            id: row.get(0)?,
+            parent_type: ParentType::Contact, // replaced in finish_activity
+            parent_id: row.get(2)?,
+            kind: ActivityKind::Note, // replaced in finish_activity
+            direction: ActivityDirection::None, // replaced in finish_activity
+            occurred_at: row.get(5)?,
+            summary: row.get(6)?,
+            body: row.get(7)?,
+            actor: Actor::User, // replaced in finish_activity
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+            version: row.get(11)?,
+        },
+        parent_type_text,
+        kind_text,
+        direction_text,
+        actor_text,
+    ))
+}
+
+/// Parse stored enum texts once the rusqlite row mapping is done.
+fn finish_activity(
+    (mut activity, parent_type_text, kind_text, direction_text, actor_text): ActivityRow,
+) -> Result<Activity, ApplicationError> {
+    let invalid = |what: &str, value: &str| {
+        ApplicationError::InvalidStoredData(format!(
+            "activity {} has unsupported {what} {value}",
+            activity.id
+        ))
+    };
+    activity.parent_type = ParentType::from_database_value(&parent_type_text)
+        .ok_or_else(|| invalid("parent type", &parent_type_text))?;
+    activity.kind =
+        ActivityKind::from_database_value(&kind_text).ok_or_else(|| invalid("kind", &kind_text))?;
+    activity.direction = ActivityDirection::from_database_value(&direction_text)
+        .ok_or_else(|| invalid("direction", &direction_text))?;
+    activity.actor =
+        Actor::from_database_value(&actor_text).ok_or_else(|| invalid("actor", &actor_text))?;
+    Ok(activity)
+}
+
+fn require_activity(
+    transaction: &Transaction<'_>,
+    activity_id: &str,
+) -> Result<Activity, ApplicationError> {
+    let row = transaction
+        .query_row(
+            &format!("SELECT {ACTIVITY_COLUMNS} FROM activities WHERE id = ?1"),
+            [activity_id],
+            activity_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "activity",
+            id: activity_id.into(),
+        })?;
+    finish_activity(row)
+}
+
+/// An activity's polymorphic parent must exist in its table (any archive
+/// state) — the schema has no FK on parent_id, so this is the guard.
+fn require_activity_parent(
+    connection: &rusqlite::Connection,
+    parent_type: ParentType,
+    parent_id: &str,
+) -> Result<(), ApplicationError> {
+    let sql = match parent_type {
+        ParentType::Contact => "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = ?1)",
+        ParentType::Company => "SELECT EXISTS(SELECT 1 FROM companies WHERE id = ?1)",
+        ParentType::Opportunity => "SELECT EXISTS(SELECT 1 FROM opportunities WHERE id = ?1)",
+    };
+    let exists: bool = connection.query_row(sql, [parent_id], |row| row.get(0))?;
+    if !exists {
+        return Err(ApplicationError::NotFound {
+            resource: parent_type.as_database_value(),
+            id: parent_id.into(),
+        });
+    }
+    Ok(())
 }
 
 /// Append a command_log row for undo/audit; part of the mutation transaction.

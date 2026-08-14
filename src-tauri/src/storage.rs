@@ -205,6 +205,29 @@ ALTER TABLE opportunities ADD COLUMN job_label TEXT;
 ALTER TABLE opportunities ADD COLUMN job_linked_at TEXT;
 ";
 
+/// v4 activities table per docs/DATA_MODEL.md — one polymorphic timeline row
+/// per logged touch. No FK on parent_id (parent_type picks the table); the
+/// application layer validates parent existence. `occurred_at` is
+/// user-editable UTC ISO-8601 — logging yesterday's call is normal.
+const MIGRATION_004: &str = "\
+CREATE TABLE activities (
+    id TEXT PRIMARY KEY,
+    parent_type TEXT NOT NULL CHECK (parent_type IN ('contact', 'company', 'opportunity')),
+    parent_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('call', 'email', 'text', 'site_visit', 'meeting', 'note')),
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'none')),
+    occurred_at TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body TEXT,
+    actor TEXT NOT NULL CHECK (actor IN ('user', 'agent', 'import')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)
+);
+CREATE INDEX activities_parent ON activities(parent_type, parent_id, occurred_at);
+CREATE INDEX activities_occurred ON activities(occurred_at);
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -218,6 +241,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         sql: MIGRATION_003,
+    },
+    Migration {
+        version: 4,
+        sql: MIGRATION_004,
     },
 ];
 

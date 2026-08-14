@@ -10,7 +10,7 @@ use contractorcrm_lib::application::{
 };
 use contractorcrm_lib::domain::{Actor, Contact, Opportunity, StageKind};
 use contractorcrm_lib::error::ApplicationError;
-use contractorcrm_lib::storage::Storage;
+use contractorcrm_lib::storage::{latest_migration_version, Storage};
 
 fn open_storage(temp: &tempfile::TempDir) -> Storage {
     Storage::open_in_app_data(temp.path()).expect("open storage")
@@ -370,5 +370,5 @@ fn migration_003_applies_on_fresh_and_existing_databases() {
             row.get(0)
         })
         .expect("read applied version");
-    assert_eq!(applied, 3);
+    assert_eq!(applied, latest_migration_version());
 }

@@ -7,12 +7,12 @@ use std::sync::Mutex;
 
 use application::{
     ArchiveRequest, CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest,
-    DatabaseInfo, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
-    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport,
-    UnlinkHandoffRequest, UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest,
-    UpdateStageRequest,
+    DatabaseInfo, DeleteActivityRequest, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
+    LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem,
+    RestoreReport, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
+    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest,
 };
-use domain::{Company, Contact, LostReason, Opportunity, Stage};
+use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage};
 use error::ApplicationError;
 use serde::Serialize;
 use storage::Storage;
@@ -321,6 +321,47 @@ fn move_opportunity_stage(
     application::move_opportunity_stage(&mut storage, request).map_err(Into::into)
 }
 
+// Activity commands — logged touches and the unified timeline.
+
+#[tauri::command]
+fn log_activity(
+    storage: State<'_, SharedStorage>,
+    request: LogActivityRequest,
+) -> Result<Activity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::log_activity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn update_activity(
+    storage: State<'_, SharedStorage>,
+    request: UpdateActivityRequest,
+) -> Result<Activity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_activity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn delete_activity(
+    storage: State<'_, SharedStorage>,
+    request: DeleteActivityRequest,
+) -> Result<(), CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::delete_activity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn get_timeline(
+    storage: State<'_, SharedStorage>,
+    parent_type: String,
+    parent_id: String,
+    include_related: bool,
+) -> Result<Vec<Activity>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_timeline(&storage, &parent_type, &parent_id, include_related)
+        .map_err(Into::into)
+}
+
 // Hand-off commands — quote/job references and the versioned envelope export.
 
 #[tauri::command]
@@ -438,6 +479,10 @@ pub fn run() {
             list_opportunities,
             get_opportunity,
             move_opportunity_stage,
+            log_activity,
+            update_activity,
+            delete_activity,
+            get_timeline,
             link_quote,
             unlink_quote,
             link_job,

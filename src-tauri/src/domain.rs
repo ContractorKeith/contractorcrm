@@ -313,6 +313,120 @@ pub struct Opportunity {
     pub version: i64,
 }
 
+/// Which record type an activity hangs off — its polymorphic parent.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParentType {
+    Contact,
+    Company,
+    Opportunity,
+}
+
+impl ParentType {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Contact => "contact",
+            Self::Company => "company",
+            Self::Opportunity => "opportunity",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "contact" => Some(Self::Contact),
+            "company" => Some(Self::Company),
+            "opportunity" => Some(Self::Opportunity),
+            _ => None,
+        }
+    }
+}
+
+/// What kind of touch an activity records.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    Call,
+    Email,
+    Text,
+    SiteVisit,
+    Meeting,
+    Note,
+}
+
+impl ActivityKind {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Call => "call",
+            Self::Email => "email",
+            Self::Text => "text",
+            Self::SiteVisit => "site_visit",
+            Self::Meeting => "meeting",
+            Self::Note => "note",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "call" => Some(Self::Call),
+            "email" => Some(Self::Email),
+            "text" => Some(Self::Text),
+            "site_visit" => Some(Self::SiteVisit),
+            "meeting" => Some(Self::Meeting),
+            "note" => Some(Self::Note),
+            _ => None,
+        }
+    }
+}
+
+/// Which way a communication went; `none` for notes and on-site touches.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityDirection {
+    Inbound,
+    Outbound,
+    #[default]
+    None,
+}
+
+impl ActivityDirection {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Inbound => "inbound",
+            Self::Outbound => "outbound",
+            Self::None => "none",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "inbound" => Some(Self::Inbound),
+            "outbound" => Some(Self::Outbound),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// One logged touch on a contact, company, or opportunity. `occurred_at` is
+/// user-editable (UTC ISO-8601); timelines sort by it, not created_at.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub id: String,
+    pub parent_type: ParentType,
+    pub parent_id: String,
+    pub kind: ActivityKind,
+    pub direction: ActivityDirection,
+    pub occurred_at: String,
+    pub summary: String,
+    /// Markdown body, optional.
+    pub body: Option<String>,
+    pub actor: Actor,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
 /// One append-only stage change; stores stage ids only, never names.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
