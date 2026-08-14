@@ -1,13 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import type { CoreClient } from "./api/health";
-
-const stubClient = (): CoreClient => ({
-  health: vi.fn().mockResolvedValue({ app: "ContractorCRM", version: "0.1.0", status: "ok" }),
-});
+import { stubClient } from "./test/stub-client";
 
 describe("crm shell", () => {
   beforeEach(() => {
@@ -19,7 +15,7 @@ describe("crm shell", () => {
     render(<App client={stubClient()} />);
 
     expect(screen.getByRole("link", { name: "ContractorCRM home" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "No contacts yet" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "No contacts yet" })).toBeVisible();
     expect(await screen.findByText("Core ready · v0.1.0")).toBeVisible();
   });
 
@@ -36,5 +32,16 @@ describe("crm shell", () => {
 
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(window.localStorage.getItem("contractorcrm.theme")).toBe("light");
+  });
+
+  it("switches between the contacts and companies sections", async () => {
+    const user = userEvent.setup();
+    render(<App client={stubClient()} />);
+
+    await user.click(screen.getByRole("button", { name: "Companies" }));
+    expect(await screen.findByRole("heading", { name: "No companies yet" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Contacts" }));
+    expect(await screen.findByRole("heading", { name: "No contacts yet" })).toBeVisible();
   });
 });

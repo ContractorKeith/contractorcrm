@@ -1,18 +1,31 @@
 import { useEffect, useState } from "react";
 
-import { tauriCoreClient, type CoreClient, type HealthReport } from "./api/health";
+import { tauriCoreClient, type CoreClient } from "./api/client";
+import type { HealthReport } from "./api/types";
 import { BrandMark } from "./components/BrandMark";
 import { loadThemePreference, watchTheme, type ThemePreference } from "./theme";
+import { CompaniesView, CompanyDetailView, CompanyFormView } from "./views/companies";
+import { ContactDetailView, ContactFormView, ContactsView } from "./views/contacts";
 
 interface AppProps {
   client?: CoreClient;
 }
 
-// Shell window: themed chrome, theme control, core health status, and an
-// empty-state workspace. CRM surfaces land here in later milestones.
+// Plain view state instead of a router — one shell window, a handful of views.
+type View =
+  | { name: "contacts" }
+  | { name: "companies" }
+  | { name: "contactDetail"; id: string }
+  | { name: "companyDetail"; id: string }
+  | { name: "contactForm"; id?: string }
+  | { name: "companyForm"; id?: string };
+
+// Shell window: themed chrome, theme control, core health status, and the
+// contact/company workspace backed by the Rust core.
 export function App({ client = tauriCoreClient }: AppProps) {
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  const [view, setView] = useState<View>({ name: "contacts" });
 
   useEffect(
     () =>
@@ -27,7 +40,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
     let active = true;
     client
       .health()
-      .then((report) => {
+      .then((report: HealthReport) => {
         if (active) setHealth(report);
       })
       .catch(() => {
@@ -38,6 +51,11 @@ export function App({ client = tauriCoreClient }: AppProps) {
       active = false;
     };
   }, [client]);
+
+  // Which top-level tab the current view belongs to.
+  const section = view.name.startsWith("company") || view.name === "companies"
+    ? "companies"
+    : "contacts";
 
   return (
     <div className="app-shell">
@@ -69,33 +87,78 @@ export function App({ client = tauriCoreClient }: AppProps) {
       </header>
 
       <main id="main" className="workspace">
-        <section className="workspace-heading" aria-labelledby="crm-heading">
-          <div>
-            <p className="eyebrow">Contacts &amp; pipeline</p>
-            <h1 id="crm-heading">Your book of business, on your machine.</h1>
-            <p className="lede">
-              Leads, clients, subs, and vendors — with the calls, visits, and quotes behind them —
-              stay local unless you choose to export them.
-            </p>
-          </div>
-        </section>
+        <nav className="view-tabs" aria-label="Records">
+          <button
+            type="button"
+            aria-pressed={section === "contacts"}
+            onClick={() => setView({ name: "contacts" })}
+          >
+            Contacts
+          </button>
+          <button
+            type="button"
+            aria-pressed={section === "companies"}
+            onClick={() => setView({ name: "companies" })}
+          >
+            Companies
+          </button>
+        </nav>
 
-        <section className="crm-section" aria-label="Contacts">
-          <div className="section-rule">
-            <h2>Local contacts</h2>
-            <span>0</span>
-          </div>
+        {view.name === "contacts" ? (
+          <ContactsView
+            client={client}
+            onOpen={(id) => setView({ name: "contactDetail", id })}
+            onCreate={() => setView({ name: "contactForm" })}
+          />
+        ) : null}
 
-          <div className="empty-state">
-            <span className="registration-mark" aria-hidden="true" />
-            <p className="eyebrow">Ready when you are</p>
-            <h2>No contacts yet</h2>
-            <p>
-              Contacts, companies, and the pipeline arrive in the next milestone. Everything will
-              be stored in this app&apos;s local database.
-            </p>
-          </div>
-        </section>
+        {view.name === "contactDetail" ? (
+          <ContactDetailView
+            client={client}
+            contactId={view.id}
+            onBack={() => setView({ name: "contacts" })}
+            onEdit={() => setView({ name: "contactForm", id: view.id })}
+          />
+        ) : null}
+
+        {view.name === "contactForm" ? (
+          <ContactFormView
+            client={client}
+            {...(view.id ? { contactId: view.id } : {})}
+            onSaved={(contact) => setView({ name: "contactDetail", id: contact.id })}
+            onCancel={() =>
+              setView(view.id ? { name: "contactDetail", id: view.id } : { name: "contacts" })
+            }
+          />
+        ) : null}
+
+        {view.name === "companies" ? (
+          <CompaniesView
+            client={client}
+            onOpen={(id) => setView({ name: "companyDetail", id })}
+            onCreate={() => setView({ name: "companyForm" })}
+          />
+        ) : null}
+
+        {view.name === "companyDetail" ? (
+          <CompanyDetailView
+            client={client}
+            companyId={view.id}
+            onBack={() => setView({ name: "companies" })}
+            onEdit={() => setView({ name: "companyForm", id: view.id })}
+          />
+        ) : null}
+
+        {view.name === "companyForm" ? (
+          <CompanyFormView
+            client={client}
+            {...(view.id ? { companyId: view.id } : {})}
+            onSaved={(company) => setView({ name: "companyDetail", id: company.id })}
+            onCancel={() =>
+              setView(view.id ? { name: "companyDetail", id: view.id } : { name: "companies" })
+            }
+          />
+        ) : null}
       </main>
     </div>
   );
