@@ -1,4 +1,11 @@
+pub mod error;
+pub mod storage;
+
+use std::sync::Mutex;
+
 use serde::Serialize;
+use storage::Storage;
+use tauri::Manager;
 
 /// Report returned by the `health` command — proves the UI → Rust seam works.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -27,6 +34,14 @@ fn health() -> HealthReport {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // Open and migrate the database in the Tauri app data dir; commands
+            // reach it through managed state (Connection is Send, not Sync).
+            let app_data = app.path().app_data_dir()?;
+            let storage = Storage::open_in_app_data(app_data)?;
+            app.manage(Mutex::new(storage));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![health])
         .run(tauri::generate_context!())
         .expect("error while running ContractorCRM");
