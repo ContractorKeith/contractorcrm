@@ -13,8 +13,8 @@ Marketing automation, email campaigns, lead scoring, a full email client, heavy 
 
 ## 0. Prove the foundation
 
-- [ ] Scaffold the Tauri 2 + React + Rust workspace from the ContractorProject structure; linting, tests, macOS and Windows CI green on hello-world.
-- [ ] Copy the Industry design tokens and base component layer; render one themed window in light and dark.
+- [x] Scaffold the Tauri 2 + React + Rust workspace from the ContractorProject structure; linting, tests, macOS and Windows CI green on hello-world.
+- [x] Copy the Industry design tokens and base component layer; render one themed window in light and dark.
 - [ ] Turn the data model and local API drafts into versioned schemas.
 - [x] Decide the pipeline view question from DESIGN.md: table first, read-only board second (decided 2026-08-14; see DESIGN.md open items).
 
@@ -22,21 +22,21 @@ Exit: the team can build, test, and package the shell on both platforms, and the
 
 ## 1. First durable contact
 
-- [ ] SQLite initialization, forward migrations, and application-data path handling (ported from the sibling).
-- [ ] Create/edit/archive companies and contacts with record-version conflicts, contact channels, and roles.
-- [ ] Contact and company list plus detail views through the real application interface.
-- [ ] Consistent backup command and restore verification test.
+- [x] SQLite initialization, forward migrations, and application-data path handling (ported from the sibling).
+- [x] Create/edit/archive companies and contacts with record-version conflicts, contact channels, and roles.
+- [x] Contact and company list plus detail views through the real application interface.
+- [x] Consistent backup command and restore verification test.
 
 Exit: a packaged development app can create contacts and companies, restart without data loss, archive recoverably, and restore a verified backup.
 
 ## 2. Pipeline
 
-- [ ] User-editable stages with won/lost kinds and defaults (Lead → Estimating → Proposal Sent → Negotiation → Won / Lost).
-- [ ] Opportunities with value (integer minor units), probability, expected close, and source.
-- [ ] Stage moves with append-only stage history; lost moves require a lost reason.
-- [ ] Pipeline table view with stage as a column — the primary view; sortable and keyboard-first.
-- [ ] Read-only kanban board as a summary view (click a card to open the deal); drag-to-move stays out of v1.
-- [ ] Quote and job reference fields with the versioned hand-off envelope (export side only).
+- [x] User-editable stages with won/lost kinds and defaults (Lead → Estimating → Proposal Sent → Negotiation → Won / Lost).
+- [x] Opportunities with value (integer minor units), probability, expected close, and source.
+- [x] Stage moves with append-only stage history; lost moves require a lost reason.
+- [x] Pipeline table view with stage as a column — the primary view; sortable and keyboard-first.
+- [x] Read-only kanban board as a summary view (click a card to open the deal); drag-to-move stays out of v1.
+- [x] Quote and job reference fields with the versioned hand-off envelope (export side only; see docs/HANDOFF.md).
 
 Exit: a user can run an opportunity from lead to won or lost, see the pipeline at a glance, and the history explains every stage change.
 
