@@ -436,6 +436,147 @@ h1 {
   font-size: var(--font-size-label);
 }
 
+/* — pipeline List | Board switch — condensed segmented control — */
+
+.mode-switch {
+  display: inline-flex;
+}
+
+.mode-switch button {
+  height: var(--control-height-small);
+  padding: 0 var(--space-3);
+  font-family: var(--font-heading);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-heading-weight);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700);
+  background: none;
+  border: var(--border-hairline) solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.mode-switch button + button {
+  margin-left: calc(-1 * var(--border-hairline));
+}
+
+.mode-switch button[aria-pressed="true"] {
+  color: var(--color-text);
+  background: var(--state-selected-bg);
+  border-color: var(--color-accent);
+}
+
+/* — pipeline board: read-only stage columns, drawn not filled — */
+
+.pipeline-board {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-bottom: var(--space-3);
+  overflow-x: auto; /* columns scroll sideways rather than wrapping */
+}
+
+.board-column {
+  flex: 0 0 220px;
+  border: var(--border-hairline) solid var(--color-divider);
+}
+
+.board-column__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.board-column__name {
+  font-family: var(--font-heading);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-heading-weight);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700);
+}
+
+.board-column__count {
+  color: var(--color-neutral-500);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-column__total {
+  margin-left: auto;
+  font-size: var(--font-size-table);
+  font-weight: var(--font-body-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Won / Lost summaries — count and total only, visually quieter. */
+.board-column--closed {
+  flex-basis: 160px;
+  border-style: dashed;
+}
+
+.board-column--closed .board-column__head {
+  border-bottom: 0;
+}
+
+.board-column--closed .board-column__total {
+  font-weight: normal;
+  color: var(--color-neutral-700);
+}
+
+.board-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+}
+
+.board-card {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: left;
+  color: var(--color-text);
+  background: none;
+  border: var(--border-hairline) solid var(--color-divider);
+  border-radius: 0; /* square corners per the design system */
+  cursor: pointer;
+}
+
+.board-card:hover {
+  background: var(--color-surface);
+}
+
+.board-card__name {
+  font-size: var(--font-size-table);
+  font-weight: var(--font-body-medium);
+}
+
+.board-card__value {
+  font-size: var(--font-size-table);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-card__party {
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+}
+
+.board-column__empty {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--color-neutral-500);
+  font-size: var(--font-size-label);
+}
+
 /* — buttons — */
 
 .button {

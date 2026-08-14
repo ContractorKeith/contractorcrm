@@ -74,6 +74,83 @@ export function dollarsToMinor(input: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline board — read-only kanban summary (2026-08-14 decision: table is
+// primary; the board is a summary view with no drag-and-drop).
+// ---------------------------------------------------------------------------
+
+type PipelineMode = "list" | "board";
+const PIPELINE_MODE_KEY = "crm.pipelineMode";
+
+// Restore the last List | Board choice; anything unexpected falls back to list.
+function loadPipelineMode(): PipelineMode {
+  return window.localStorage.getItem(PIPELINE_MODE_KEY) === "board" ? "board" : "list";
+}
+
+// Sum a column's values as integer minor units; currency comes from the rows.
+function columnTotal(items: OpportunityListItem[]): Money {
+  return {
+    valueMinor: items.reduce((sum, item) => sum + item.value.valueMinor, 0),
+    currencyCode: items[0]?.value.currencyCode ?? "USD",
+  };
+}
+
+interface PipelineBoardProps {
+  stages: Stage[];
+  opportunities: OpportunityListItem[]; // archived rows already excluded
+  onOpen: (opportunityId: string) => void;
+}
+
+export function PipelineBoard({ stages, opportunities, onOpen }: PipelineBoardProps) {
+  // Open stages in pipeline order, then Won and Lost as quiet summaries.
+  const ordered = [...stages].sort((a, b) => a.sortKey - b.sortKey);
+  const columns = [
+    ...ordered.filter((stage) => stage.kind === "open"),
+    ...ordered.filter((stage) => stage.kind !== "open"),
+  ];
+
+  return (
+    <div className="pipeline-board" role="region" aria-label="Pipeline board">
+      {columns.map((stage) => {
+        const items = opportunities.filter((item) => item.stageId === stage.id);
+        const closed = stage.kind !== "open";
+        return (
+          <section
+            key={stage.id}
+            className={closed ? "board-column board-column--closed" : "board-column"}
+            aria-label={stage.name}
+          >
+            <header className="board-column__head">
+              <span className="board-column__name">{stage.name}</span>
+              <span className="board-column__count">{items.length}</span>
+              <span className="board-column__total">{formatMoney(columnTotal(items))}</span>
+            </header>
+            {closed ? null : items.length === 0 ? (
+              <p className="board-column__empty">Nothing in this stage.</p>
+            ) : (
+              <ul className="board-cards" aria-label={`${stage.name} opportunities`}>
+                {items.map((item) => (
+                  <li key={item.id}>
+                    <button type="button" className="board-card" onClick={() => onOpen(item.id)}>
+                      <span className="board-card__name">{item.name}</span>
+                      <span className="board-card__value">{formatMoney(item.value)}</span>
+                      {(item.contactDisplayName ?? item.companyName) ? (
+                        <span className="board-card__party">
+                          {item.contactDisplayName ?? item.companyName}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline table — the primary pipeline view (2026-08-14 decision).
 // ---------------------------------------------------------------------------
 
@@ -89,6 +166,13 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [showArchived, setShowArchived] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [sort, setSort] = useState<SortState | null>(null);
+  const [mode, setModeState] = useState<PipelineMode>(loadPipelineMode);
+
+  // Persist the List | Board choice across sessions.
+  const setMode = (next: PipelineMode) => {
+    window.localStorage.setItem(PIPELINE_MODE_KEY, next);
+    setModeState(next);
+  };
 
   useEffect(() => {
     let active = true;
@@ -192,14 +276,24 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
       <div className="section-rule">
         <h2>Pipeline</h2>
         <div className="list-tools">
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(event) => setShowArchived(event.target.checked)}
-            />
-            <span>Show archived</span>
-          </label>
+          <div className="mode-switch" role="group" aria-label="Pipeline view">
+            <button type="button" aria-pressed={mode === "list"} onClick={() => setMode("list")}>
+              List
+            </button>
+            <button type="button" aria-pressed={mode === "board"} onClick={() => setMode("board")}>
+              Board
+            </button>
+          </div>
+          {mode === "list" ? (
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(event) => setShowArchived(event.target.checked)}
+              />
+              <span>Show archived</span>
+            </label>
+          ) : null}
           <span className="list-count">{opportunities?.length ?? 0}</span>
           <button type="button" className="button button--primary" onClick={onCreate}>
             New opportunity
@@ -224,14 +318,22 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
       ) : null}
 
       {rows && rows.length > 0 ? (
-        <RecordTable
-          label="Pipeline list"
-          columns={columns}
-          rows={rows}
-          onOpen={(opportunity) => onOpen(opportunity.id)}
-          {...(sort ? { sort } : {})}
-          onSort={handleSort}
-        />
+        mode === "board" ? (
+          <PipelineBoard
+            stages={stages}
+            opportunities={rows.filter((opportunity) => !opportunity.archivedAt)}
+            onOpen={onOpen}
+          />
+        ) : (
+          <RecordTable
+            label="Pipeline list"
+            columns={columns}
+            rows={rows}
+            onOpen={(opportunity) => onOpen(opportunity.id)}
+            {...(sort ? { sort } : {})}
+            onSort={handleSort}
+          />
+        )
       ) : null}
     </section>
   );
