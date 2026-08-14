@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{params, Connection, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use uuid::Uuid;
 
 use crate::error::StorageError;
@@ -149,6 +149,144 @@ impl Storage {
         &mut self.connection
     }
 
+    /// Where the live database file lives on disk.
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
+    }
+
+    /// Write a consistent, compact snapshot of the open database to
+    /// `destination` via `VACUUM INTO`. Refuses to overwrite an existing file
+    /// unless `overwrite` is set; creates missing parent directories.
+    pub fn backup_to(
+        &self,
+        destination: impl AsRef<Path>,
+        overwrite: bool,
+    ) -> Result<(), StorageError> {
+        let destination = destination.as_ref();
+        if destination.exists() {
+            if !overwrite {
+                return Err(StorageError::BackupFailed(format!(
+                    "{} already exists; enable overwrite to replace it",
+                    destination.display()
+                )));
+            }
+            // VACUUM INTO refuses existing files, so clear the old one first.
+            std::fs::remove_file(destination)?;
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let destination_text = destination.to_str().ok_or_else(|| {
+            StorageError::BackupFailed("destination path is not valid UTF-8".into())
+        })?;
+        self.connection
+            .execute("VACUUM INTO ?1", [destination_text])
+            .map_err(|error| StorageError::BackupFailed(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Verify a backup file without touching the live database: it must open
+    /// read-only, pass PRAGMA integrity_check, carry a schema_migrations
+    /// table, and not be newer than this build's latest known migration.
+    pub fn verify_backup_file(backup_path: impl AsRef<Path>) -> Result<(), StorageError> {
+        let backup_path = backup_path.as_ref();
+        if !backup_path.is_file() {
+            return Err(StorageError::RestoreInvalid(format!(
+                "{} is not a file",
+                backup_path.display()
+            )));
+        }
+        let connection = Connection::open_with_flags(backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| {
+                StorageError::RestoreInvalid(format!("cannot open backup: {error}"))
+            })?;
+        // SQLite opens lazily, so a garbage file fails here, not at open.
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|error| {
+                StorageError::RestoreInvalid(format!("not a readable database: {error}"))
+            })?;
+        if integrity != "ok" {
+            return Err(StorageError::RestoreInvalid(format!(
+                "integrity check failed: {integrity}"
+            )));
+        }
+        let has_migrations_table: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'schema_migrations')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_migrations_table {
+            return Err(StorageError::RestoreInvalid(
+                "no schema_migrations table; not a ContractorCRM backup".into(),
+            ));
+        }
+        let backup_version: i64 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        let supported = latest_migration_version();
+        if backup_version > supported {
+            return Err(StorageError::RestoreInvalid(format!(
+                "backup schema version {backup_version} is newer than this app \
+                 supports ({supported}); update the app first"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Replace the live database with a verified backup and return the path of
+    /// the timestamped pre-restore safety copy. Verification happens before the
+    /// live database is touched; the file swap uses a staged copy plus rename
+    /// (atomic on the same filesystem); reopening runs migrations forward for
+    /// older backups.
+    pub fn restore_from(&mut self, backup_path: impl AsRef<Path>) -> Result<PathBuf, StorageError> {
+        let backup_path = backup_path.as_ref();
+        Self::verify_backup_file(backup_path)?;
+
+        let file_name = self
+            .database_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                StorageError::InvalidStoredData("database path has no file name".into())
+            })?
+            .to_string();
+
+        // Consistent timestamped safety copy of the live database, next to it.
+        let stamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+        let safety_path = self
+            .database_path
+            .with_file_name(format!("{file_name}.pre-restore-{stamp}.bak"));
+        self.connection.backup("main", &safety_path, None)?;
+
+        // Close the live connection (swap in a throwaway in-memory one) so the
+        // file can be replaced; drop the WAL/SHM sidecars with it.
+        drop(std::mem::replace(
+            &mut self.connection,
+            Connection::open_in_memory()?,
+        ));
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = self.database_path.clone().into_os_string();
+            sidecar.push(suffix);
+            let _ = std::fs::remove_file(sidecar); // best effort — may not exist
+        }
+
+        // Stage next to the live file, then rename over it.
+        let staged_path = self
+            .database_path
+            .with_file_name(format!("{file_name}.restore-staging"));
+        std::fs::copy(backup_path, &staged_path)?;
+        std::fs::rename(&staged_path, &self.database_path)?;
+
+        // Reopen and migrate forward; replaces the throwaway connection.
+        let database_path = self.database_path.clone();
+        *self = Self::open(database_path)?;
+        Ok(safety_path)
+    }
+
     /// Apply any pending migrations; already-applied versions are skipped, so
     /// re-running on an existing database is a no-op.
     fn migrate(&mut self, database_existed: bool) -> Result<(), StorageError> {
@@ -197,6 +335,14 @@ impl Storage {
         }
         Ok(())
     }
+}
+
+/// Latest schema version this build knows how to open.
+pub fn latest_migration_version() -> i64 {
+    MIGRATIONS
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0)
 }
 
 /// True when a migration version is already recorded in schema_migrations.

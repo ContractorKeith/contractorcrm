@@ -7,6 +7,12 @@ pub enum StorageError {
     #[error("stored data is invalid: {0}")]
     InvalidStoredData(String),
 
+    #[error("backup failed: {0}")]
+    BackupFailed(String),
+
+    #[error("restore rejected: {0}")]
+    RestoreInvalid(String),
+
     #[error("local database error: {0}")]
     Database(#[from] rusqlite::Error),
 
@@ -42,6 +48,12 @@ pub enum ApplicationError {
     #[error("stored data is invalid: {0}")]
     InvalidStoredData(String),
 
+    #[error("backup failed: {0}")]
+    BackupFailed(String),
+
+    #[error("restore rejected: {0}")]
+    RestoreInvalid(String),
+
     #[error("local database error: {0}")]
     Database(#[from] rusqlite::Error),
 
@@ -58,7 +70,10 @@ impl ApplicationError {
             Self::ValidationFailed { .. } => "validation_failed",
             Self::VersionConflict { .. } => "version_conflict",
             Self::InvalidStoredData(_) => "invalid_stored_data",
-            Self::Database(_) | Self::Io(_) => "storage_unavailable",
+            Self::BackupFailed(_) => "backup_failed",
+            Self::RestoreInvalid(_) => "restore_invalid",
+            Self::Database(_) => "storage_unavailable",
+            Self::Io(_) => "io",
         }
     }
 }
@@ -67,6 +82,8 @@ impl From<StorageError> for ApplicationError {
     fn from(error: StorageError) -> Self {
         match error {
             StorageError::InvalidStoredData(message) => Self::InvalidStoredData(message),
+            StorageError::BackupFailed(message) => Self::BackupFailed(message),
+            StorageError::RestoreInvalid(message) => Self::RestoreInvalid(message),
             StorageError::Database(inner) => Self::Database(inner),
             StorageError::Io(inner) => Self::Io(inner),
         }

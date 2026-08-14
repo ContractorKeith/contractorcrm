@@ -592,6 +592,102 @@ pub fn get_contact(storage: &Storage, contact_id: &str) -> Result<Contact, Appli
 }
 
 // ---------------------------------------------------------------------------
+// Database maintenance use-cases (backup / restore / info)
+// ---------------------------------------------------------------------------
+
+/// app_settings key holding the last successful backup timestamp.
+const LAST_BACKUP_AT_KEY: &str = "last_backup_at";
+
+/// Storage-state report for the UI: where the database lives, how big it is,
+/// and when it was last backed up.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseInfo {
+    pub database_path: String,
+    pub file_size_bytes: u64,
+    pub last_backup_at: Option<String>,
+}
+
+/// Result of a successful restore, including where the safety copy went.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreReport {
+    pub restored_from: String,
+    pub safety_copy_path: String,
+}
+
+/// Snapshot the database to a caller-chosen path, record the timestamp in
+/// app_settings, and log the command. Maintenance is user-initiated, so the
+/// actor is always `user`.
+pub fn backup_database(
+    storage: &mut Storage,
+    destination_path: &str,
+    overwrite: bool,
+) -> Result<DatabaseInfo, ApplicationError> {
+    let destination = required_text("destinationPath", destination_path.into(), 4096)?;
+    storage.backup_to(&destination, overwrite)?;
+
+    let transaction = immediate(storage)?;
+    transaction.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![LAST_BACKUP_AT_KEY, now_utc()],
+    )?;
+    log_command(
+        &transaction,
+        Actor::User,
+        "database",
+        "local",
+        &format!("backed up database to \"{destination}\""),
+    )?;
+    transaction.commit()?;
+    get_database_info(storage)
+}
+
+/// Restore the database from a verified backup file; the storage layer keeps a
+/// pre-restore safety copy and migrates older backups forward. The command is
+/// logged into the restored database so the event survives the swap.
+pub fn restore_database(
+    storage: &mut Storage,
+    backup_path: &str,
+) -> Result<RestoreReport, ApplicationError> {
+    let backup_path = required_text("backupPath", backup_path.into(), 4096)?;
+    let safety_copy = storage.restore_from(&backup_path)?;
+
+    let transaction = immediate(storage)?;
+    log_command(
+        &transaction,
+        Actor::User,
+        "database",
+        "local",
+        &format!("restored database from \"{backup_path}\""),
+    )?;
+    transaction.commit()?;
+    Ok(RestoreReport {
+        restored_from: backup_path,
+        safety_copy_path: safety_copy.to_string_lossy().into_owned(),
+    })
+}
+
+/// Read-only storage-state report for the UI's storage display.
+pub fn get_database_info(storage: &Storage) -> Result<DatabaseInfo, ApplicationError> {
+    let file_size_bytes = std::fs::metadata(storage.database_path())?.len();
+    let last_backup_at = storage
+        .connection()
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [LAST_BACKUP_AT_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(DatabaseInfo {
+        database_path: storage.database_path().to_string_lossy().into_owned(),
+        file_size_bytes,
+        last_backup_at,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 

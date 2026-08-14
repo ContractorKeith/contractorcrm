@@ -6,8 +6,8 @@ pub mod storage;
 use std::sync::Mutex;
 
 use application::{
-    ArchiveRequest, CreateCompanyRequest, CreateContactRequest, UpdateCompanyRequest,
-    UpdateContactRequest,
+    ArchiveRequest, CreateCompanyRequest, CreateContactRequest, DatabaseInfo, RestoreReport,
+    UpdateCompanyRequest, UpdateContactRequest,
 };
 use domain::{Company, Contact};
 use error::ApplicationError;
@@ -80,6 +80,8 @@ impl From<ApplicationError> for CommandError {
                 current_version: *current,
             },
             ApplicationError::InvalidStoredData(_)
+            | ApplicationError::BackupFailed(_)
+            | ApplicationError::RestoreInvalid(_)
             | ApplicationError::Database(_)
             | ApplicationError::Io(_) => CommandErrorDetails::None {},
         };
@@ -226,6 +228,33 @@ fn get_contact(
     application::get_contact(&storage, &contact_id).map_err(Into::into)
 }
 
+// Database maintenance commands — backup/restore snapshots and storage info.
+
+#[tauri::command]
+fn backup_database(
+    storage: State<'_, SharedStorage>,
+    destination_path: String,
+    overwrite: bool,
+) -> Result<DatabaseInfo, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::backup_database(&mut storage, &destination_path, overwrite).map_err(Into::into)
+}
+
+#[tauri::command]
+fn restore_database(
+    storage: State<'_, SharedStorage>,
+    backup_path: String,
+) -> Result<RestoreReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::restore_database(&mut storage, &backup_path).map_err(Into::into)
+}
+
+#[tauri::command]
+fn get_database_info(storage: State<'_, SharedStorage>) -> Result<DatabaseInfo, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_database_info(&storage).map_err(Into::into)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -250,7 +279,10 @@ pub fn run() {
             archive_contact,
             unarchive_contact,
             list_contacts,
-            get_contact
+            get_contact,
+            backup_database,
+            restore_database,
+            get_database_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running ContractorCRM");
