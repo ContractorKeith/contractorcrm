@@ -16,7 +16,7 @@ Marketing automation, email campaigns, lead scoring, a full email client, heavy 
 - [ ] Scaffold the Tauri 2 + React + Rust workspace from the ContractorProject structure; linting, tests, macOS and Windows CI green on hello-world.
 - [ ] Copy the Industry design tokens and base component layer; render one themed window in light and dark.
 - [ ] Turn the data model and local API drafts into versioned schemas.
-- [ ] Decide the pipeline view question from DESIGN.md (board, table with stage column, or both) with a low-fi spike.
+- [x] Decide the pipeline view question from DESIGN.md: table first, read-only board second (decided 2026-08-14; see DESIGN.md open items).
 
 Exit: the team can build, test, and package the shell on both platforms, and the record/pipeline UI approach is decided.
 
@@ -34,7 +34,8 @@ Exit: a packaged development app can create contacts and companies, restart with
 - [ ] User-editable stages with won/lost kinds and defaults (Lead → Estimating → Proposal Sent → Negotiation → Won / Lost).
 - [ ] Opportunities with value (integer minor units), probability, expected close, and source.
 - [ ] Stage moves with append-only stage history; lost moves require a lost reason.
-- [ ] Pipeline list and board views per the slice-0 decision.
+- [ ] Pipeline table view with stage as a column — the primary view; sortable and keyboard-first.
+- [ ] Read-only kanban board as a summary view (click a card to open the deal); drag-to-move stays out of v1.
 - [ ] Quote and job reference fields with the versioned hand-off envelope (export side only).
 
 Exit: a user can run an opportunity from lead to won or lost, see the pipeline at a glance, and the history explains every stage change.

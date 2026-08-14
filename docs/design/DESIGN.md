@@ -231,6 +231,6 @@ Across modules the tile, the field colors, the wordmark face, the `Contractor` p
 ## 7. Open items
 
 - CRM-specific surface specs — contact and company records, the pipeline board, the activity timeline, list and detail layouts — are not written yet. They need a product brief first; nothing here should be read as a decision about them.
-- Whether the pipeline board is a column view, a table with a stage column, or both.
+- ~~Whether the pipeline board is a column view, a table with a stage column, or both.~~ Decided 2026-08-14: the table with a stage column is the primary pipeline view; a read-only kanban board ships as a summary view (click a card to open the deal), with drag-to-move deferred past v1.
 - Comfortable vs. compact as the shipped default row height, decided once for the whole suite.
 - The third module's mark, which must be drawn from the same members before the suite grammar can be called settled.
