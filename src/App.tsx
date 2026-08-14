@@ -6,6 +6,7 @@ import { BrandMark } from "./components/BrandMark";
 import { loadThemePreference, watchTheme, type ThemePreference } from "./theme";
 import { CompaniesView, CompanyDetailView, CompanyFormView } from "./views/companies";
 import { ContactDetailView, ContactFormView, ContactsView } from "./views/contacts";
+import { OpportunityDetailView, OpportunityFormView, PipelineView } from "./views/pipeline";
 
 interface AppProps {
   client?: CoreClient;
@@ -15,10 +16,13 @@ interface AppProps {
 type View =
   | { name: "contacts" }
   | { name: "companies" }
+  | { name: "pipeline" }
   | { name: "contactDetail"; id: string }
   | { name: "companyDetail"; id: string }
+  | { name: "opportunityDetail"; id: string }
   | { name: "contactForm"; id?: string }
-  | { name: "companyForm"; id?: string };
+  | { name: "companyForm"; id?: string }
+  | { name: "opportunityForm"; id?: string };
 
 // Shell window: themed chrome, theme control, core health status, and the
 // contact/company workspace backed by the Rust core.
@@ -53,9 +57,12 @@ export function App({ client = tauriCoreClient }: AppProps) {
   }, [client]);
 
   // Which top-level tab the current view belongs to.
-  const section = view.name.startsWith("company") || view.name === "companies"
-    ? "companies"
-    : "contacts";
+  const section =
+    view.name.startsWith("company") || view.name === "companies"
+      ? "companies"
+      : view.name === "pipeline" || view.name.startsWith("opportunity")
+        ? "pipeline"
+        : "contacts";
 
   return (
     <div className="app-shell">
@@ -102,6 +109,13 @@ export function App({ client = tauriCoreClient }: AppProps) {
           >
             Companies
           </button>
+          <button
+            type="button"
+            aria-pressed={section === "pipeline"}
+            onClick={() => setView({ name: "pipeline" })}
+          >
+            Pipeline
+          </button>
         </nav>
 
         {view.name === "contacts" ? (
@@ -146,6 +160,34 @@ export function App({ client = tauriCoreClient }: AppProps) {
             companyId={view.id}
             onBack={() => setView({ name: "companies" })}
             onEdit={() => setView({ name: "companyForm", id: view.id })}
+          />
+        ) : null}
+
+        {view.name === "pipeline" ? (
+          <PipelineView
+            client={client}
+            onOpen={(id) => setView({ name: "opportunityDetail", id })}
+            onCreate={() => setView({ name: "opportunityForm" })}
+          />
+        ) : null}
+
+        {view.name === "opportunityDetail" ? (
+          <OpportunityDetailView
+            client={client}
+            opportunityId={view.id}
+            onBack={() => setView({ name: "pipeline" })}
+            onEdit={() => setView({ name: "opportunityForm", id: view.id })}
+          />
+        ) : null}
+
+        {view.name === "opportunityForm" ? (
+          <OpportunityFormView
+            client={client}
+            {...(view.id ? { opportunityId: view.id } : {})}
+            onSaved={(opportunity) => setView({ name: "opportunityDetail", id: opportunity.id })}
+            onCancel={() =>
+              setView(view.id ? { name: "opportunityDetail", id: view.id } : { name: "pipeline" })
+            }
           />
         ) : null}
 

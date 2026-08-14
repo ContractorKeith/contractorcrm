@@ -54,6 +54,9 @@ export function saveErrorFrom(error: unknown): SaveError {
         : error.message;
       return { fields: { [error.field]: message }, general: null, conflict: false };
     }
+    case "missing_lost_reason":
+      // Surface next to the lost-reason select on stage moves.
+      return { fields: { lostReasonId: error.message }, general: null, conflict: false };
     case "version_conflict":
       return { fields: {}, general: null, conflict: true };
     default:

@@ -1,7 +1,15 @@
 import { vi } from "vitest";
 
 import type { CoreClient } from "../api/client";
-import type { Company, Contact } from "../api/types";
+import type {
+  Company,
+  Contact,
+  LostReason,
+  OpportunityDetail,
+  OpportunityListItem,
+  Stage,
+  StageHistoryEntry,
+} from "../api/types";
 
 // Fully-stubbed CoreClient; tests override the methods they care about.
 export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => ({
@@ -18,6 +26,16 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   unarchiveContact: vi.fn(),
   listContacts: vi.fn().mockResolvedValue([]),
   getContact: vi.fn(),
+  listStages: vi.fn().mockResolvedValue(makeStages()),
+  updateStage: vi.fn(),
+  listLostReasons: vi.fn().mockResolvedValue([]),
+  createOpportunity: vi.fn(),
+  updateOpportunity: vi.fn(),
+  archiveOpportunity: vi.fn(),
+  unarchiveOpportunity: vi.fn(),
+  listOpportunities: vi.fn().mockResolvedValue([]),
+  getOpportunity: vi.fn(),
+  moveOpportunityStage: vi.fn(),
   ...overrides,
 });
 
@@ -68,3 +86,77 @@ export const makeContact = (overrides: Partial<Contact> = {}): Contact => ({
   channels: [],
   ...overrides,
 });
+
+// Default pipeline: three open stages, then won and lost.
+export const makeStages = (): Stage[] =>
+  (
+    [
+      ["stage-new", "New lead", 0, "open"],
+      ["stage-estimating", "Estimating", 1, "open"],
+      ["stage-quoted", "Quoted", 2, "open"],
+      ["stage-won", "Won", 3, "won"],
+      ["stage-lost", "Lost", 4, "lost"],
+    ] as const
+  ).map(([id, name, sortKey, kind]) => ({
+    id,
+    pipelineId: "pipeline-1",
+    name,
+    sortKey,
+    kind,
+    createdAt: "2026-08-14T12:00:00Z",
+    updatedAt: "2026-08-14T12:00:00Z",
+    version: 1,
+  }));
+
+export const makeLostReason = (overrides: Partial<LostReason> = {}): LostReason => ({
+  id: "reason-1",
+  label: "Price too high",
+  sortKey: 0,
+  active: true,
+  ...overrides,
+});
+
+export const makeOpportunity = (
+  overrides: Partial<OpportunityListItem> = {},
+): OpportunityListItem => ({
+  id: "opp-1",
+  name: "Backyard fence",
+  contactId: "contact-1",
+  companyId: null,
+  stageId: "stage-new",
+  value: { valueMinor: 123456, currencyCode: "USD" },
+  probabilityPercent: 50,
+  expectedCloseDate: "2026-09-01",
+  source: "referral",
+  sourceLabel: null,
+  lostReasonId: null,
+  notes: null,
+  archivedAt: null,
+  createdAt: "2026-08-14T12:00:00Z",
+  updatedAt: "2026-08-14T12:00:00Z",
+  version: 1,
+  stageName: "New lead",
+  contactDisplayName: "Dana Ruiz",
+  companyName: null,
+  ...overrides,
+});
+
+export const makeStageHistoryEntry = (
+  overrides: Partial<StageHistoryEntry> = {},
+): StageHistoryEntry => ({
+  id: "history-1",
+  opportunityId: "opp-1",
+  fromStageId: null,
+  toStageId: "stage-new",
+  actor: "user",
+  lostReasonId: null,
+  createdAt: "2026-08-14T12:00:00Z",
+  ...overrides,
+});
+
+export const makeOpportunityDetail = (
+  overrides: Partial<OpportunityDetail> = {},
+): OpportunityDetail => {
+  const { stageName: _s, contactDisplayName: _c, companyName: _n, ...record } = makeOpportunity();
+  return { ...record, stageHistory: [makeStageHistoryEntry()], ...overrides };
+};

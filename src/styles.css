@@ -505,6 +505,22 @@ h1 {
   background: var(--state-selected-bg);
 }
 
+/* Sortable header — inherits the condensed header type, no button chrome. */
+.sort-header {
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.record-table th.is-numeric .sort-header {
+  text-align: right;
+}
+
 .cell-primary {
   display: inline-flex;
   align-items: center;
@@ -619,6 +635,46 @@ h1 {
 .channel-label {
   color: var(--color-neutral-700);
   font-size: var(--font-size-meta);
+}
+
+/* Current stage line under the opportunity title. */
+.detail-stage {
+  margin: var(--space-1) 0 0;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-table);
+}
+
+/* Stage-move control row on the opportunity detail. */
+.stage-move {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+
+/* Stage history timeline — newest move first. */
+.history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--row-h);
+  font-size: var(--font-size-table);
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.history-move {
+  font-weight: var(--font-body-medium);
+}
+
+.history-meta {
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: tabular-nums;
 }
 
 /* — forms — */

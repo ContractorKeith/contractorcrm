@@ -6,6 +6,8 @@ export type PartyKind = "client" | "lead" | "sub" | "vendor" | "supplier" | "oth
 export type ContactRole = "owner" | "estimator" | "site_contact" | "office" | "other";
 export type ChannelKind = "phone" | "email";
 export type Actor = "user" | "agent" | "import";
+export type StageKind = "open" | "won" | "lost";
+export type OpportunitySource = "referral" | "repeat_client" | "website" | "sign" | "other";
 
 // Report from the Rust core's `health` command — proves the UI → Rust seam works.
 export interface HealthReport {
@@ -143,12 +145,128 @@ export interface ArchiveRequest {
   expectedVersion: number;
 }
 
+// One user-editable pipeline step; renaming/reordering never rewrites history.
+export interface Stage {
+  id: string;
+  pipelineId: string;
+  name: string;
+  sortKey: number;
+  kind: StageKind;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+// A user-editable reason an opportunity was lost.
+export interface LostReason {
+  id: string;
+  label: string;
+  sortKey: number;
+  active: boolean;
+}
+
+// Money as integer minor units plus ISO currency code — no floats anywhere.
+export interface Money {
+  valueMinor: number;
+  currencyCode: string;
+}
+
+// Potential work moving through the pipeline toward won or lost.
+export interface Opportunity {
+  id: string;
+  name: string;
+  contactId: string | null;
+  companyId: string | null;
+  stageId: string;
+  value: Money;
+  probabilityPercent: number | null;
+  expectedCloseDate: string | null;
+  source: OpportunitySource | null;
+  sourceLabel: string | null;
+  lostReasonId: string | null;
+  notes: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+// One append-only stage change; stores stage ids only, never names.
+export interface StageHistoryEntry {
+  id: string;
+  opportunityId: string;
+  fromStageId: string | null;
+  toStageId: string;
+  actor: Actor;
+  lostReasonId: string | null;
+  createdAt: string;
+}
+
+// Table row for the opportunity list — record flattened with display names.
+export type OpportunityListItem = Opportunity & {
+  stageName: string;
+  contactDisplayName: string | null;
+  companyName: string | null;
+};
+
+// Detail view — the record flattened with its full stage history.
+export type OpportunityDetail = Opportunity & {
+  stageHistory: StageHistoryEntry[];
+};
+
+// Editable opportunity fields; updates replace the full editable set (v1).
+// Stage changes go through move_opportunity_stage, never through updates.
+export interface OpportunityPatch {
+  name: string;
+  contactId: string | null;
+  companyId: string | null;
+  valueMinor: number;
+  currencyCode: string;
+  probabilityPercent: number | null;
+  expectedCloseDate: string | null;
+  source: OpportunitySource | null;
+  sourceLabel: string | null;
+  notes: string | null;
+}
+
+// Create flattens the patch on the wire; stage defaults to first open stage.
+export type CreateOpportunityRequest = {
+  actor?: Actor;
+  stageId?: string | null;
+} & OpportunityPatch;
+
+export interface UpdateOpportunityRequest {
+  actor?: Actor;
+  opportunityId: string;
+  expectedVersion: number;
+  patch: OpportunityPatch;
+}
+
+export interface MoveOpportunityStageRequest {
+  actor?: Actor;
+  opportunityId: string;
+  toStageId: string;
+  // Required when the target stage kind is "lost".
+  lostReasonId: string | null;
+  expectedVersion: number;
+}
+
+// Rename or reorder one stage; kind and pipeline are fixed in v1.
+export interface UpdateStageRequest {
+  actor?: Actor;
+  stageId: string;
+  expectedVersion: number;
+  name: string;
+  sortKey: number;
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =
   | { kind: "invalid_input"; message: string; field: string }
   | { kind: "validation_failed"; message: string; code: string; field: string }
   | { kind: "not_found"; message: string; resource: string; recordId: string }
+  | { kind: "missing_lost_reason"; message: string; resource: string; recordId: string }
   | {
       kind: "version_conflict";
       message: string;

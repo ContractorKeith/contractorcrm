@@ -6,6 +6,13 @@ export interface ColumnDef<T> {
   header: string;
   render: (row: T) => ReactNode;
   numeric?: boolean;
+  sortable?: boolean;
+}
+
+// Current sort: which column key and which direction.
+export interface SortState {
+  key: string;
+  direction: "ascending" | "descending";
 }
 
 interface RecordTableProps<T extends { id: string }> {
@@ -13,15 +20,20 @@ interface RecordTableProps<T extends { id: string }> {
   columns: ColumnDef<T>[];
   rows: T[];
   onOpen: (row: T) => void;
+  sort?: SortState;
+  onSort?: (key: string) => void;
 }
 
 // Industry-rhythm table (28px rows, hairline dividers, condensed uppercase
 // headers) with a keyboard-first roving selection: arrows move, Enter opens.
+// Columns marked sortable render header buttons and report clicks via onSort.
 export function RecordTable<T extends { id: string }>({
   label,
   columns,
   rows,
   onOpen,
+  sort,
+  onSort,
 }: RecordTableProps<T>) {
   const [selected, setSelected] = useState(0);
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
@@ -54,11 +66,29 @@ export function RecordTable<T extends { id: string }>({
     <table className="record-table" aria-label={label}>
       <thead>
         <tr>
-          {columns.map((column) => (
-            <th key={column.key} scope="col" className={column.numeric ? "is-numeric" : undefined}>
-              {column.header}
-            </th>
-          ))}
+          {columns.map((column) => {
+            const sortableHere = Boolean(column.sortable && onSort);
+            const sorted = sort?.key === column.key ? sort.direction : undefined;
+            return (
+              <th
+                key={column.key}
+                scope="col"
+                className={column.numeric ? "is-numeric" : undefined}
+                aria-sort={sortableHere ? (sorted ?? "none") : undefined}
+              >
+                {sortableHere ? (
+                  <button type="button" className="sort-header" onClick={() => onSort!(column.key)}>
+                    {column.header}
+                    <span aria-hidden="true">
+                      {sorted === "ascending" ? " ▲" : sorted === "descending" ? " ▼" : ""}
+                    </span>
+                  </button>
+                ) : (
+                  column.header
+                )}
+              </th>
+            );
+          })}
         </tr>
       </thead>
       <tbody>
