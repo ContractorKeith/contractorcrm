@@ -42,11 +42,11 @@ Exit: a user can run an opportunity from lead to won or lost, see the pipeline a
 
 ## 3. Timeline, tasks, and attention
 
-- [ ] Log calls, emails, texts, site visits, meetings, and notes on contacts, companies, and opportunities.
-- [ ] Unified timeline rendering with opportunity activities projected onto contact timelines.
-- [ ] Tasks with due dates, priorities, reminders, and optional log-on-complete.
-- [ ] Deterministic needs-attention rules (stale lead, overdue follow-up, proposal without response) with configurable thresholds.
-- [ ] "Last contacted" and next-action columns in list views.
+- [x] Log calls, emails, texts, site visits, meetings, and notes on contacts, companies, and opportunities.
+- [x] Unified timeline rendering with opportunity activities projected onto contact timelines.
+- [x] Tasks with due dates, priorities, reminders, and optional log-on-complete.
+- [x] Deterministic needs-attention rules (stale lead, overdue follow-up, proposal without response) with configurable thresholds.
+- [x] "Last contacted" and next-action columns in list views.
 
 Exit: nothing falls through the cracks — every stale lead and overdue follow-up is visible without opening records one by one.
 
