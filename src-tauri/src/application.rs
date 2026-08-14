@@ -5,7 +5,10 @@
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{Actor, ChannelKind, Company, Contact, ContactChannel, ContactRole, PartyKind};
+use crate::domain::{
+    Actor, ChannelKind, Company, Contact, ContactChannel, ContactRole, LostReason, Money,
+    Opportunity, OpportunitySource, PartyKind, Stage, StageHistoryEntry, StageKind,
+};
 use crate::error::ApplicationError;
 use crate::storage::{new_id, now_utc, Storage};
 
@@ -592,6 +595,471 @@ pub fn get_contact(storage: &Storage, contact_id: &str) -> Result<Contact, Appli
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline requests (camelCase)
+// ---------------------------------------------------------------------------
+
+/// Rename or reorder one stage; kind and pipeline are fixed in v1.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStageRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub stage_id: String,
+    pub expected_version: i64,
+    pub name: String,
+    pub sort_key: i64,
+}
+
+/// Editable opportunity fields; updates replace the full editable set (v1).
+/// Stage changes go through `move_opportunity_stage`, never through updates.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpportunityPatch {
+    pub name: String,
+    pub contact_id: Option<String>,
+    pub company_id: Option<String>,
+    #[serde(default)]
+    pub value_minor: i64,
+    /// ISO 4217 code, e.g. "USD"; validated as three letters.
+    pub currency_code: String,
+    pub probability_percent: Option<i64>,
+    pub expected_close_date: Option<String>,
+    /// Wire enum value, e.g. "referral"; optional.
+    pub source: Option<String>,
+    pub source_label: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateOpportunityRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    /// Starting stage; defaults to the pipeline's first open stage.
+    pub stage_id: Option<String>,
+    #[serde(flatten)]
+    pub opportunity: OpportunityPatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateOpportunityRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub opportunity_id: String,
+    pub expected_version: i64,
+    pub patch: OpportunityPatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveOpportunityStageRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub opportunity_id: String,
+    pub to_stage_id: String,
+    /// Required when the target stage kind is `lost`.
+    pub lost_reason_id: Option<String>,
+    pub expected_version: i64,
+}
+
+/// Table row for the opportunity list — record plus display names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpportunityListItem {
+    #[serde(flatten)]
+    pub opportunity: Opportunity,
+    pub stage_name: String,
+    pub contact_display_name: Option<String>,
+    pub company_name: Option<String>,
+}
+
+/// Detail view — the record plus its full append-only stage history.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpportunityDetail {
+    #[serde(flatten)]
+    pub opportunity: Opportunity,
+    pub stage_history: Vec<StageHistoryEntry>,
+}
+
+// ---------------------------------------------------------------------------
+// Stage and lost-reason use-cases
+// ---------------------------------------------------------------------------
+
+/// List every stage in pipeline order.
+pub fn list_stages(storage: &Storage) -> Result<Vec<Stage>, ApplicationError> {
+    let mut statement = storage.connection().prepare(&format!(
+        "SELECT {STAGE_COLUMNS} FROM stages ORDER BY pipeline_id, sort_key, id"
+    ))?;
+    let rows = statement
+        .query_map([], stage_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(finish_stage).collect()
+}
+
+/// Rename or reorder a stage; history keeps its ids, so it never changes.
+pub fn update_stage(
+    storage: &mut Storage,
+    request: UpdateStageRequest,
+) -> Result<Stage, ApplicationError> {
+    let name = required_text("name", request.name, 100)?;
+    if request.sort_key < 0 {
+        return Err(ApplicationError::InvalidInput {
+            field: "sortKey".into(),
+            message: "must be zero or greater".into(),
+        });
+    }
+    let transaction = immediate(storage)?;
+    let mut stage = require_stage(&transaction, &request.stage_id)?;
+    check_version("stage", &stage.id, request.expected_version, stage.version)?;
+
+    stage.name = name;
+    stage.sort_key = request.sort_key;
+    stage.updated_at = now_utc();
+    stage.version += 1;
+    transaction.execute(
+        "UPDATE stages SET name = ?2, sort_key = ?3, updated_at = ?4, version = ?5 WHERE id = ?1",
+        params![
+            stage.id,
+            stage.name,
+            stage.sort_key,
+            stage.updated_at,
+            stage.version,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "stage",
+        &stage.id,
+        &format!("updated stage \"{}\"", stage.name),
+    )?;
+    transaction.commit()?;
+    Ok(stage)
+}
+
+/// List all lost reasons in sort order, active or not (UI filters).
+pub fn list_lost_reasons(storage: &Storage) -> Result<Vec<LostReason>, ApplicationError> {
+    let mut statement = storage
+        .connection()
+        .prepare("SELECT id, label, sort_key, active FROM lost_reasons ORDER BY sort_key, id")?;
+    let reasons = statement
+        .query_map([], |row| {
+            Ok(LostReason {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                sort_key: row.get(2)?,
+                active: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(reasons)
+}
+
+// ---------------------------------------------------------------------------
+// Opportunity use-cases
+// ---------------------------------------------------------------------------
+
+/// Create an opportunity in its starting stage, record the first stage_history
+/// row, and log the command.
+pub fn create_opportunity(
+    storage: &mut Storage,
+    request: CreateOpportunityRequest,
+) -> Result<Opportunity, ApplicationError> {
+    let fields = validate_opportunity_patch(request.opportunity)?;
+    let now = now_utc();
+    let opportunity_id = new_id();
+
+    let transaction = immediate(storage)?;
+    require_linked_contact(&transaction, fields.contact_id.as_deref())?;
+    require_linked_company(&transaction, fields.company_id.as_deref())?;
+    let stage = match optional_text(request.stage_id) {
+        Some(stage_id) => require_stage(&transaction, &stage_id)?,
+        None => first_open_stage(&transaction)?,
+    };
+    transaction.execute(
+        "INSERT INTO opportunities (
+            id, name, contact_id, company_id, stage_id, value_minor, currency_code,
+            probability_percent, expected_close_date, source, source_label,
+            lost_reason_id, notes, archived_at, created_at, updated_at, version
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                   NULL, ?12, NULL, ?13, ?13, 1)",
+        params![
+            opportunity_id,
+            fields.name,
+            fields.contact_id,
+            fields.company_id,
+            stage.id,
+            fields.value.value_minor,
+            fields.value.currency_code,
+            fields.probability_percent,
+            fields.expected_close_date,
+            fields.source.map(OpportunitySource::as_database_value),
+            fields.source_label,
+            fields.notes,
+            now,
+        ],
+    )?;
+    insert_stage_history(
+        &transaction,
+        &opportunity_id,
+        None,
+        &stage.id,
+        request.actor,
+        None,
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "opportunity",
+        &opportunity_id,
+        &format!("created opportunity \"{}\"", fields.name),
+    )?;
+    let opportunity = require_opportunity(&transaction, &opportunity_id)?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+/// Replace an opportunity's editable fields; the stage and lost reason are
+/// untouched — those move through `move_opportunity_stage`.
+pub fn update_opportunity(
+    storage: &mut Storage,
+    request: UpdateOpportunityRequest,
+) -> Result<Opportunity, ApplicationError> {
+    let fields = validate_opportunity_patch(request.patch)?;
+    let transaction = immediate(storage)?;
+    let existing = require_opportunity(&transaction, &request.opportunity_id)?;
+    check_version(
+        "opportunity",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    require_linked_contact(&transaction, fields.contact_id.as_deref())?;
+    require_linked_company(&transaction, fields.company_id.as_deref())?;
+
+    transaction.execute(
+        "UPDATE opportunities SET
+            name = ?2, contact_id = ?3, company_id = ?4, value_minor = ?5,
+            currency_code = ?6, probability_percent = ?7, expected_close_date = ?8,
+            source = ?9, source_label = ?10, notes = ?11, updated_at = ?12,
+            version = ?13
+         WHERE id = ?1",
+        params![
+            existing.id,
+            fields.name,
+            fields.contact_id,
+            fields.company_id,
+            fields.value.value_minor,
+            fields.value.currency_code,
+            fields.probability_percent,
+            fields.expected_close_date,
+            fields.source.map(OpportunitySource::as_database_value),
+            fields.source_label,
+            fields.notes,
+            now_utc(),
+            existing.version + 1,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "opportunity",
+        &existing.id,
+        &format!("updated opportunity \"{}\"", fields.name),
+    )?;
+    let opportunity = require_opportunity(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+/// Archive an opportunity; history stays, the record leaves default lists.
+pub fn archive_opportunity(
+    storage: &mut Storage,
+    request: ArchiveRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_opportunity_archived(storage, request, true)
+}
+
+/// Bring an archived opportunity back.
+pub fn unarchive_opportunity(
+    storage: &mut Storage,
+    request: ArchiveRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_opportunity_archived(storage, request, false)
+}
+
+fn set_opportunity_archived(
+    storage: &mut Storage,
+    request: ArchiveRequest,
+    archived: bool,
+) -> Result<Opportunity, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let mut opportunity = require_opportunity(&transaction, &request.id)?;
+    check_version(
+        "opportunity",
+        &opportunity.id,
+        request.expected_version,
+        opportunity.version,
+    )?;
+
+    opportunity.archived_at = archived.then(now_utc);
+    opportunity.updated_at = now_utc();
+    opportunity.version += 1;
+    transaction.execute(
+        "UPDATE opportunities SET archived_at = ?2, updated_at = ?3, version = ?4 WHERE id = ?1",
+        params![
+            opportunity.id,
+            opportunity.archived_at,
+            opportunity.updated_at,
+            opportunity.version,
+        ],
+    )?;
+    let verb = if archived { "archived" } else { "unarchived" };
+    log_command(
+        &transaction,
+        request.actor,
+        "opportunity",
+        &opportunity.id,
+        &format!("{verb} opportunity \"{}\"", opportunity.name),
+    )?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+/// Move an opportunity to another stage, appending a stage_history row in the
+/// same transaction. Lost moves require a reason; leaving lost clears it.
+pub fn move_opportunity_stage(
+    storage: &mut Storage,
+    request: MoveOpportunityStageRequest,
+) -> Result<Opportunity, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_opportunity(&transaction, &request.opportunity_id)?;
+    check_version(
+        "opportunity",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    let to_stage = require_stage(&transaction, &request.to_stage_id)?;
+
+    // Lost stage requires a reason; every other stage clears any stored one.
+    let lost_reason_id = if to_stage.kind == StageKind::Lost {
+        let reason_id = optional_text(request.lost_reason_id).ok_or_else(|| {
+            ApplicationError::MissingLostReason {
+                id: existing.id.clone(),
+            }
+        })?;
+        require_lost_reason(&transaction, &reason_id)?;
+        Some(reason_id)
+    } else {
+        None
+    };
+
+    transaction.execute(
+        "UPDATE opportunities SET
+            stage_id = ?2, lost_reason_id = ?3, updated_at = ?4, version = ?5
+         WHERE id = ?1",
+        params![
+            existing.id,
+            to_stage.id,
+            lost_reason_id,
+            now_utc(),
+            existing.version + 1,
+        ],
+    )?;
+    insert_stage_history(
+        &transaction,
+        &existing.id,
+        Some(&existing.stage_id),
+        &to_stage.id,
+        request.actor,
+        lost_reason_id.as_deref(),
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "opportunity",
+        &existing.id,
+        &format!(
+            "moved opportunity \"{}\" to stage \"{}\"",
+            existing.name, to_stage.name
+        ),
+    )?;
+    let opportunity = require_opportunity(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+/// List opportunities with stage and party display names for the table view;
+/// archived rows only when asked for.
+pub fn list_opportunities(
+    storage: &Storage,
+    include_archived: bool,
+) -> Result<Vec<OpportunityListItem>, ApplicationError> {
+    let mut statement = storage.connection().prepare(&format!(
+        "SELECT o.id, o.name, o.contact_id, o.company_id, o.stage_id, o.value_minor,
+                o.currency_code, o.probability_percent, o.expected_close_date, o.source,
+                o.source_label, o.lost_reason_id, o.notes, o.archived_at, o.created_at,
+                o.updated_at, o.version,
+                s.name, c.display_name, co.name
+         FROM opportunities o
+         JOIN stages s ON s.id = o.stage_id
+         LEFT JOIN contacts c ON c.id = o.contact_id
+         LEFT JOIN companies co ON co.id = o.company_id
+         {} ORDER BY o.name, o.id",
+        if include_archived {
+            ""
+        } else {
+            "WHERE o.archived_at IS NULL"
+        }
+    ))?;
+    let rows = statement
+        .query_map([], |row| {
+            let base = opportunity_from_row(row)?;
+            let stage_name: String = row.get(17)?;
+            let contact_display_name: Option<String> = row.get(18)?;
+            let company_name: Option<String> = row.get(19)?;
+            Ok((base, stage_name, contact_display_name, company_name))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(base, stage_name, contact_display_name, company_name)| {
+            Ok(OpportunityListItem {
+                opportunity: finish_opportunity(base)?,
+                stage_name,
+                contact_display_name,
+                company_name,
+            })
+        })
+        .collect()
+}
+
+/// Fetch one opportunity with its full stage history, archived or not.
+pub fn get_opportunity(
+    storage: &Storage,
+    opportunity_id: &str,
+) -> Result<OpportunityDetail, ApplicationError> {
+    let connection = storage.connection();
+    let row = connection
+        .query_row(
+            &format!("SELECT {OPPORTUNITY_COLUMNS} FROM opportunities WHERE id = ?1"),
+            [opportunity_id],
+            opportunity_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "opportunity",
+            id: opportunity_id.into(),
+        })?;
+    Ok(OpportunityDetail {
+        opportunity: finish_opportunity(row)?,
+        stage_history: load_stage_history(connection, opportunity_id)?,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Database maintenance use-cases (backup / restore / info)
 // ---------------------------------------------------------------------------
 
@@ -850,6 +1318,81 @@ fn validate_channels(inputs: Vec<ChannelInput>) -> Result<Vec<ValidChannel>, App
         });
     }
     Ok(channels)
+}
+
+/// Opportunity patch after validation, with parsed enums and typed money.
+struct ValidOpportunityFields {
+    name: String,
+    contact_id: Option<String>,
+    company_id: Option<String>,
+    value: Money,
+    probability_percent: Option<i64>,
+    expected_close_date: Option<String>,
+    source: Option<OpportunitySource>,
+    source_label: Option<String>,
+    notes: Option<String>,
+}
+
+fn validate_opportunity_patch(
+    patch: OpportunityPatch,
+) -> Result<ValidOpportunityFields, ApplicationError> {
+    let contact_id = optional_text(patch.contact_id);
+    let company_id = optional_text(patch.company_id);
+    if contact_id.is_none() && company_id.is_none() {
+        return Err(ApplicationError::ValidationFailed {
+            code: "opportunity_needs_contact_or_company",
+            field: "contactId".into(),
+            message: "an opportunity needs a contact or a company (or both)".into(),
+        });
+    }
+    if patch.value_minor < 0 {
+        return Err(ApplicationError::InvalidInput {
+            field: "valueMinor".into(),
+            message: "must be zero or greater (integer minor units)".into(),
+        });
+    }
+    let currency_code = patch.currency_code.trim().to_ascii_uppercase();
+    if currency_code.len() != 3 || !currency_code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err(ApplicationError::InvalidInput {
+            field: "currencyCode".into(),
+            message: "must be a three-letter ISO code like USD".into(),
+        });
+    }
+    if let Some(probability) = patch.probability_percent {
+        if !(0..=100).contains(&probability) {
+            return Err(ApplicationError::InvalidInput {
+                field: "probabilityPercent".into(),
+                message: "must be between 0 and 100".into(),
+            });
+        }
+    }
+    let source =
+        match optional_text(patch.source) {
+            None => None,
+            Some(value) => Some(OpportunitySource::from_database_value(&value).ok_or_else(
+                || ApplicationError::InvalidInput {
+                    field: "source".into(),
+                    message: format!(
+                        "unknown source \"{value}\"; expected one of referral, repeat_client, \
+                     website, sign, other"
+                    ),
+                },
+            )?),
+        };
+    Ok(ValidOpportunityFields {
+        name: required_text("name", patch.name, 200)?,
+        contact_id,
+        company_id,
+        value: Money {
+            value_minor: patch.value_minor,
+            currency_code,
+        },
+        probability_percent: patch.probability_percent,
+        expected_close_date: optional_text(patch.expected_close_date),
+        source,
+        source_label: optional_text(patch.source_label),
+        notes: optional_text(patch.notes),
+    })
 }
 
 fn parse_party_kind(field: &str, value: &str) -> Result<PartyKind, ApplicationError> {
@@ -1147,6 +1690,246 @@ fn load_channels(
                 })
             },
         )
+        .collect()
+}
+
+const STAGE_COLUMNS: &str =
+    "id, pipeline_id, name, sort_key, kind, created_at, updated_at, version";
+
+const OPPORTUNITY_COLUMNS: &str = "id, name, contact_id, company_id, stage_id, value_minor, \
+    currency_code, probability_percent, expected_close_date, source, source_label, \
+    lost_reason_id, notes, archived_at, created_at, updated_at, version";
+
+/// Row tuple with the raw kind text, finished into a Stage after parsing.
+type StageRow = (Stage, String);
+
+fn stage_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StageRow> {
+    let kind_text: String = row.get(4)?;
+    Ok((
+        Stage {
+            id: row.get(0)?,
+            pipeline_id: row.get(1)?,
+            name: row.get(2)?,
+            sort_key: row.get(3)?,
+            kind: StageKind::Open, // replaced in finish_stage
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+            version: row.get(7)?,
+        },
+        kind_text,
+    ))
+}
+
+/// Parse the stored kind text once the rusqlite row mapping is done.
+fn finish_stage((mut stage, kind_text): StageRow) -> Result<Stage, ApplicationError> {
+    stage.kind = StageKind::from_database_value(&kind_text).ok_or_else(|| {
+        ApplicationError::InvalidStoredData(format!(
+            "stage {} has unsupported kind {kind_text}",
+            stage.id
+        ))
+    })?;
+    Ok(stage)
+}
+
+fn require_stage(transaction: &Transaction<'_>, stage_id: &str) -> Result<Stage, ApplicationError> {
+    let row = transaction
+        .query_row(
+            &format!("SELECT {STAGE_COLUMNS} FROM stages WHERE id = ?1"),
+            [stage_id],
+            stage_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "stage",
+            id: stage_id.into(),
+        })?;
+    finish_stage(row)
+}
+
+/// The pipeline's first open stage — where new opportunities start.
+fn first_open_stage(transaction: &Transaction<'_>) -> Result<Stage, ApplicationError> {
+    let row = transaction
+        .query_row(
+            &format!(
+                "SELECT {STAGE_COLUMNS} FROM stages WHERE kind = 'open'
+                 ORDER BY sort_key, id LIMIT 1"
+            ),
+            [],
+            stage_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::InvalidStoredData("pipeline has no open stage".into()))?;
+    finish_stage(row)
+}
+
+/// An opportunity's linked contact must exist (any archive state).
+fn require_linked_contact(
+    transaction: &Transaction<'_>,
+    contact_id: Option<&str>,
+) -> Result<(), ApplicationError> {
+    let Some(contact_id) = contact_id else {
+        return Ok(());
+    };
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = ?1)",
+        [contact_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(ApplicationError::NotFound {
+            resource: "contact",
+            id: contact_id.into(),
+        });
+    }
+    Ok(())
+}
+
+/// A referenced lost reason must exist (active or not).
+fn require_lost_reason(
+    transaction: &Transaction<'_>,
+    lost_reason_id: &str,
+) -> Result<(), ApplicationError> {
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lost_reasons WHERE id = ?1)",
+        [lost_reason_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(ApplicationError::NotFound {
+            resource: "lost_reason",
+            id: lost_reason_id.into(),
+        });
+    }
+    Ok(())
+}
+
+/// Row tuple with raw enum text, finished into an Opportunity after parsing.
+type OpportunityRow = (Opportunity, Option<String>);
+
+fn opportunity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OpportunityRow> {
+    let source_text: Option<String> = row.get(9)?;
+    Ok((
+        Opportunity {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            contact_id: row.get(2)?,
+            company_id: row.get(3)?,
+            stage_id: row.get(4)?,
+            value: Money {
+                value_minor: row.get(5)?,
+                currency_code: row.get(6)?,
+            },
+            probability_percent: row.get(7)?,
+            expected_close_date: row.get(8)?,
+            source: None, // replaced in finish_opportunity
+            source_label: row.get(10)?,
+            lost_reason_id: row.get(11)?,
+            notes: row.get(12)?,
+            archived_at: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
+            version: row.get(16)?,
+        },
+        source_text,
+    ))
+}
+
+/// Parse the stored source text once the rusqlite row mapping is done.
+fn finish_opportunity(
+    (mut opportunity, source_text): OpportunityRow,
+) -> Result<Opportunity, ApplicationError> {
+    opportunity.source = match source_text {
+        None => None,
+        Some(source_text) => Some(
+            OpportunitySource::from_database_value(&source_text).ok_or_else(|| {
+                ApplicationError::InvalidStoredData(format!(
+                    "opportunity {} has unsupported source {source_text}",
+                    opportunity.id
+                ))
+            })?,
+        ),
+    };
+    Ok(opportunity)
+}
+
+fn require_opportunity(
+    transaction: &Transaction<'_>,
+    opportunity_id: &str,
+) -> Result<Opportunity, ApplicationError> {
+    let row = transaction
+        .query_row(
+            &format!("SELECT {OPPORTUNITY_COLUMNS} FROM opportunities WHERE id = ?1"),
+            [opportunity_id],
+            opportunity_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "opportunity",
+            id: opportunity_id.into(),
+        })?;
+    finish_opportunity(row)
+}
+
+/// Append one stage_history row; part of the same mutation transaction.
+fn insert_stage_history(
+    transaction: &Transaction<'_>,
+    opportunity_id: &str,
+    from_stage_id: Option<&str>,
+    to_stage_id: &str,
+    actor: Actor,
+    lost_reason_id: Option<&str>,
+) -> Result<(), ApplicationError> {
+    transaction.execute(
+        "INSERT INTO stage_history
+            (id, opportunity_id, from_stage_id, to_stage_id, actor, lost_reason_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            new_id(),
+            opportunity_id,
+            from_stage_id,
+            to_stage_id,
+            actor.as_database_value(),
+            lost_reason_id,
+            now_utc(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_stage_history(
+    connection: &rusqlite::Connection,
+    opportunity_id: &str,
+) -> Result<Vec<StageHistoryEntry>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, opportunity_id, from_stage_id, to_stage_id, actor, lost_reason_id, created_at
+         FROM stage_history WHERE opportunity_id = ?1 ORDER BY created_at, id",
+    )?;
+    let rows = statement
+        .query_map([opportunity_id], |row| {
+            Ok((
+                StageHistoryEntry {
+                    id: row.get(0)?,
+                    opportunity_id: row.get(1)?,
+                    from_stage_id: row.get(2)?,
+                    to_stage_id: row.get(3)?,
+                    actor: Actor::User, // replaced below
+                    lost_reason_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                },
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(mut entry, actor_text)| {
+            entry.actor = Actor::from_database_value(&actor_text).ok_or_else(|| {
+                ApplicationError::InvalidStoredData(format!(
+                    "stage_history {} has unsupported actor {actor_text}",
+                    entry.id
+                ))
+            })?;
+            Ok(entry)
+        })
         .collect()
 }
 

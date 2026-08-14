@@ -6,10 +6,12 @@ pub mod storage;
 use std::sync::Mutex;
 
 use application::{
-    ArchiveRequest, CreateCompanyRequest, CreateContactRequest, DatabaseInfo, RestoreReport,
-    UpdateCompanyRequest, UpdateContactRequest,
+    ArchiveRequest, CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest,
+    DatabaseInfo, MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem,
+    RestoreReport, UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest,
+    UpdateStageRequest,
 };
-use domain::{Company, Contact};
+use domain::{Company, Contact, LostReason, Opportunity, Stage};
 use error::ApplicationError;
 use serde::Serialize;
 use storage::Storage;
@@ -66,6 +68,10 @@ impl From<ApplicationError> for CommandError {
             }
             ApplicationError::NotFound { resource, id } => CommandErrorDetails::Record {
                 resource,
+                record_id: id.clone(),
+            },
+            ApplicationError::MissingLostReason { id } => CommandErrorDetails::Record {
+                resource: "opportunity",
                 record_id: id.clone(),
             },
             ApplicationError::VersionConflict {
@@ -228,6 +234,92 @@ fn get_contact(
     application::get_contact(&storage, &contact_id).map_err(Into::into)
 }
 
+// Pipeline commands — stages, lost reasons, opportunities, stage moves.
+
+#[tauri::command]
+fn list_stages(storage: State<'_, SharedStorage>) -> Result<Vec<Stage>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_stages(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn update_stage(
+    storage: State<'_, SharedStorage>,
+    request: UpdateStageRequest,
+) -> Result<Stage, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_stage(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_lost_reasons(storage: State<'_, SharedStorage>) -> Result<Vec<LostReason>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_lost_reasons(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn create_opportunity(
+    storage: State<'_, SharedStorage>,
+    request: CreateOpportunityRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::create_opportunity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn update_opportunity(
+    storage: State<'_, SharedStorage>,
+    request: UpdateOpportunityRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_opportunity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn archive_opportunity(
+    storage: State<'_, SharedStorage>,
+    request: ArchiveRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::archive_opportunity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn unarchive_opportunity(
+    storage: State<'_, SharedStorage>,
+    request: ArchiveRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::unarchive_opportunity(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_opportunities(
+    storage: State<'_, SharedStorage>,
+    include_archived: bool,
+) -> Result<Vec<OpportunityListItem>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_opportunities(&storage, include_archived).map_err(Into::into)
+}
+
+#[tauri::command]
+fn get_opportunity(
+    storage: State<'_, SharedStorage>,
+    opportunity_id: String,
+) -> Result<OpportunityDetail, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_opportunity(&storage, &opportunity_id).map_err(Into::into)
+}
+
+#[tauri::command]
+fn move_opportunity_stage(
+    storage: State<'_, SharedStorage>,
+    request: MoveOpportunityStageRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::move_opportunity_stage(&mut storage, request).map_err(Into::into)
+}
+
 // Database maintenance commands — backup/restore snapshots and storage info.
 
 #[tauri::command]
@@ -280,6 +372,16 @@ pub fn run() {
             unarchive_contact,
             list_contacts,
             get_contact,
+            list_stages,
+            update_stage,
+            list_lost_reasons,
+            create_opportunity,
+            update_opportunity,
+            archive_opportunity,
+            unarchive_opportunity,
+            list_opportunities,
+            get_opportunity,
+            move_opportunity_stage,
             backup_database,
             restore_database,
             get_database_info

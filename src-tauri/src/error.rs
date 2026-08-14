@@ -37,6 +37,9 @@ pub enum ApplicationError {
         message: String,
     },
 
+    #[error("moving opportunity {id} to the lost stage requires a lost reason")]
+    MissingLostReason { id: String },
+
     #[error("{resource} {id} changed: expected version {expected}, current version {current}")]
     VersionConflict {
         resource: &'static str,
@@ -68,6 +71,7 @@ impl ApplicationError {
             Self::InvalidInput { .. } => "invalid_input",
             Self::NotFound { .. } => "not_found",
             Self::ValidationFailed { .. } => "validation_failed",
+            Self::MissingLostReason { .. } => "missing_lost_reason",
             Self::VersionConflict { .. } => "version_conflict",
             Self::InvalidStoredData(_) => "invalid_stored_data",
             Self::BackupFailed(_) => "backup_failed",

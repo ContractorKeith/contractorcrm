@@ -98,11 +98,110 @@ CREATE TABLE app_settings (
 );
 ";
 
+/// v2 pipeline tables per docs/DATA_MODEL.md — pipelines, stages, lost
+/// reasons, opportunities, and append-only stage history. Seeds the default
+/// pipeline, its stages, and the default lost reasons so every database has
+/// them; seed ids are stable text so tests and exports can rely on them.
+const MIGRATION_002: &str = "\
+CREATE TABLE pipelines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE stages (
+    id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sort_key INTEGER NOT NULL DEFAULT 0 CHECK (sort_key >= 0),
+    kind TEXT NOT NULL CHECK (kind IN ('open', 'won', 'lost')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE lost_reasons (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    sort_key INTEGER NOT NULL DEFAULT 0 CHECK (sort_key >= 0),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
+);
+
+CREATE TABLE opportunities (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    contact_id TEXT,
+    company_id TEXT,
+    stage_id TEXT NOT NULL,
+    value_minor INTEGER NOT NULL DEFAULT 0 CHECK (value_minor >= 0),
+    currency_code TEXT NOT NULL,
+    probability_percent INTEGER CHECK (probability_percent BETWEEN 0 AND 100),
+    expected_close_date TEXT,
+    source TEXT,
+    source_label TEXT,
+    lost_reason_id TEXT,
+    notes TEXT,
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE RESTRICT,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT,
+    FOREIGN KEY (stage_id) REFERENCES stages(id) ON DELETE RESTRICT,
+    FOREIGN KEY (lost_reason_id) REFERENCES lost_reasons(id) ON DELETE RESTRICT
+);
+CREATE INDEX opportunities_stage ON opportunities(stage_id);
+CREATE INDEX opportunities_contact ON opportunities(contact_id);
+CREATE INDEX opportunities_company ON opportunities(company_id);
+
+CREATE TABLE stage_history (
+    id TEXT PRIMARY KEY,
+    opportunity_id TEXT NOT NULL,
+    from_stage_id TEXT,
+    to_stage_id TEXT NOT NULL,
+    actor TEXT NOT NULL CHECK (actor IN ('user', 'agent', 'import')),
+    lost_reason_id TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_stage_id) REFERENCES stages(id) ON DELETE RESTRICT,
+    FOREIGN KEY (lost_reason_id) REFERENCES lost_reasons(id) ON DELETE RESTRICT
+);
+CREATE INDEX stage_history_opportunity ON stage_history(opportunity_id, created_at);
+
+INSERT INTO pipelines (id, name) VALUES ('pipeline-default', 'Default');
+INSERT INTO stages (id, pipeline_id, name, sort_key, kind, created_at, updated_at, version)
+VALUES
+    ('stage-lead', 'pipeline-default', 'Lead', 0, 'open',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1),
+    ('stage-estimating', 'pipeline-default', 'Estimating', 1, 'open',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1),
+    ('stage-proposal-sent', 'pipeline-default', 'Proposal Sent', 2, 'open',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1),
+    ('stage-negotiation', 'pipeline-default', 'Negotiation', 3, 'open',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1),
+    ('stage-won', 'pipeline-default', 'Won', 4, 'won',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1),
+    ('stage-lost', 'pipeline-default', 'Lost', 5, 'lost',
+     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1);
+INSERT INTO lost_reasons (id, label, sort_key, active) VALUES
+    ('lost-reason-price', 'Price', 0, 1),
+    ('lost-reason-timing', 'Timing', 1, 1),
+    ('lost-reason-competitor', 'Went with competitor', 2, 1),
+    ('lost-reason-no-response', 'No response', 3, 1),
+    ('lost-reason-out-of-scope', 'Out of scope', 4, 1);
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: MIGRATION_001,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: MIGRATION_001,
+    },
+    Migration {
+        version: 2,
+        sql: MIGRATION_002,
+    },
+];
 
 /// Owns the SQLite connection; the repository layer builds on it. The UI and
 /// agents never touch SQLite directly — every write goes through this seam.

@@ -1,14 +1,19 @@
 use contractorcrm_lib::storage::{new_id, now_utc, Storage};
 use rusqlite::params;
 
-/// Table names migration 001 must create, plus the migration ledger itself.
+/// Table names the migrations must create, plus the migration ledger itself.
 const EXPECTED_TABLES: &[&str] = &[
     "app_settings",
     "command_log",
     "companies",
     "contact_channels",
     "contacts",
+    "lost_reasons",
+    "opportunities",
+    "pipelines",
     "schema_migrations",
+    "stage_history",
+    "stages",
 ];
 
 fn table_names(storage: &Storage) -> Vec<String> {
@@ -65,12 +70,12 @@ fn schema_migrations_records_versions_and_rerunning_is_a_no_op() {
     let database_path = temp.path().join("contractorcrm.sqlite3");
 
     let storage = Storage::open(&database_path).expect("first open");
-    assert_eq!(applied_versions(&storage), vec![1]);
+    assert_eq!(applied_versions(&storage), vec![1, 2]);
     drop(storage);
 
     // Reopening re-runs the migration framework; applied versions are skipped.
     let reopened = Storage::open(&database_path).expect("second open");
-    assert_eq!(applied_versions(&reopened), vec![1]);
+    assert_eq!(applied_versions(&reopened), vec![1, 2]);
     assert_eq!(table_names(&reopened), EXPECTED_TABLES);
 }
 

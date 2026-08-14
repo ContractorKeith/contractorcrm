@@ -114,6 +114,15 @@ impl Actor {
             Self::Import => "import",
         }
     }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "agent" => Some(Self::Agent),
+            "import" => Some(Self::Import),
+            _ => None,
+        }
+    }
 }
 
 /// A company — client, sub, vendor, or supplier grouping contacts.
@@ -178,4 +187,125 @@ pub struct ContactChannel {
     pub value: String,
     pub preferred: bool,
     pub sort_key: i64,
+}
+
+/// What a pipeline stage means for an opportunity sitting in it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageKind {
+    Open,
+    Won,
+    Lost,
+}
+
+impl StageKind {
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "open" => Some(Self::Open),
+            "won" => Some(Self::Won),
+            "lost" => Some(Self::Lost),
+            _ => None,
+        }
+    }
+}
+
+/// Where an opportunity came from (docs/DATA_MODEL.md source enum).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpportunitySource {
+    Referral,
+    RepeatClient,
+    Website,
+    Sign,
+    Other,
+}
+
+impl OpportunitySource {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Referral => "referral",
+            Self::RepeatClient => "repeat_client",
+            Self::Website => "website",
+            Self::Sign => "sign",
+            Self::Other => "other",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "referral" => Some(Self::Referral),
+            "repeat_client" => Some(Self::RepeatClient),
+            "website" => Some(Self::Website),
+            "sign" => Some(Self::Sign),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+}
+
+/// One user-editable pipeline step; renaming/reordering never rewrites history.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stage {
+    pub id: String,
+    pub pipeline_id: String,
+    pub name: String,
+    pub sort_key: i64,
+    pub kind: StageKind,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
+/// A user-editable reason an opportunity was lost.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LostReason {
+    pub id: String,
+    pub label: String,
+    pub sort_key: i64,
+    pub active: bool,
+}
+
+/// Money as integer minor units plus ISO currency code — no floats anywhere.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Money {
+    pub value_minor: i64,
+    pub currency_code: String,
+}
+
+/// Potential work moving through the pipeline toward won or lost.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Opportunity {
+    pub id: String,
+    pub name: String,
+    pub contact_id: Option<String>,
+    pub company_id: Option<String>,
+    pub stage_id: String,
+    pub value: Money,
+    pub probability_percent: Option<i64>,
+    pub expected_close_date: Option<String>,
+    pub source: Option<OpportunitySource>,
+    pub source_label: Option<String>,
+    pub lost_reason_id: Option<String>,
+    pub notes: Option<String>,
+    pub archived_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
+/// One append-only stage change; stores stage ids only, never names.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageHistoryEntry {
+    pub id: String,
+    pub opportunity_id: String,
+    pub from_stage_id: Option<String>,
+    pub to_stage_id: String,
+    pub actor: Actor,
+    pub lost_reason_id: Option<String>,
+    pub created_at: String,
 }

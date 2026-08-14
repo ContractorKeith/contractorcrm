@@ -206,14 +206,17 @@ fn restoring_an_older_schema_backup_migrates_forward() {
     application::restore_database(&mut storage, old_path.to_str().unwrap())
         .expect("restore older backup");
 
-    // Migration 1 ran forward on reopen: the v1 tables exist and are usable.
+    // Every migration ran forward on reopen: the tables exist and are usable.
     let applied: i64 = storage
         .connection()
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })
         .expect("read applied version");
-    assert_eq!(applied, 1);
+    assert_eq!(
+        applied,
+        contractorcrm_lib::storage::latest_migration_version()
+    );
     let companies = application::list_companies(&storage, true).expect("list on migrated restore");
     assert!(companies.is_empty());
 }
