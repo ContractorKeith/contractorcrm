@@ -1,4 +1,5 @@
 pub mod application;
+pub mod attention;
 pub mod domain;
 pub mod error;
 pub mod storage;
@@ -6,13 +7,15 @@ pub mod storage;
 use std::sync::Mutex;
 
 use application::{
-    ArchiveRequest, CompleteTaskRequest, CreateCompanyRequest, CreateContactRequest,
-    CreateOpportunityRequest, CreateTaskRequest, DatabaseInfo, DeleteActivityRequest,
-    EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
-    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport,
-    TaskActionRequest, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
-    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
+    ArchiveRequest, CompleteTaskRequest, ContactListItem, CreateCompanyRequest,
+    CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, DatabaseInfo,
+    DeleteActivityRequest, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
+    ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
+    OpportunityListItem, RestoreReport, SetAttentionThresholdsRequest, TaskActionRequest,
+    UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest,
+    UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
 };
+use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
 use serde::Serialize;
@@ -222,7 +225,7 @@ fn unarchive_contact(
 fn list_contacts(
     storage: State<'_, SharedStorage>,
     include_archived: bool,
-) -> Result<Vec<Contact>, CommandError> {
+) -> Result<Vec<ContactListItem>, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::list_contacts(&storage, include_archived).map_err(Into::into)
 }
@@ -483,6 +486,32 @@ fn export_handoff_envelope(
     .map_err(Into::into)
 }
 
+// Needs-attention commands — deterministic flags and their thresholds.
+
+#[tauri::command]
+fn get_attention_flags(
+    storage: State<'_, SharedStorage>,
+    reference_time: Option<String>,
+) -> Result<Vec<AttentionFlag>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_attention_flags(&storage, reference_time).map_err(Into::into)
+}
+
+#[tauri::command]
+fn get_attention_thresholds(storage: State<'_, SharedStorage>) -> Result<Thresholds, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_attention_thresholds(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn set_attention_thresholds(
+    storage: State<'_, SharedStorage>,
+    request: SetAttentionThresholdsRequest,
+) -> Result<Thresholds, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::set_attention_thresholds(&mut storage, request).map_err(Into::into)
+}
+
 // Database maintenance commands — backup/restore snapshots and storage info.
 
 #[tauri::command]
@@ -561,6 +590,9 @@ pub fn run() {
             link_job,
             unlink_job,
             export_handoff_envelope,
+            get_attention_flags,
+            get_attention_thresholds,
+            set_attention_thresholds,
             backup_database,
             restore_database,
             get_database_info

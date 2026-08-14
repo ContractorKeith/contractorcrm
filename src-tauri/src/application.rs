@@ -2,9 +2,13 @@
 //! one immediate transaction, checks the expected record version, bumps the
 //! version, and writes a command_log row before committing.
 
+use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
+use crate::attention::{
+    self, AttentionFlag, AttentionInputs, ContactFacts, OpportunityFacts, TaskFacts, Thresholds,
+};
 use crate::domain::{
     Activity, ActivityDirection, ActivityKind, Actor, ChannelKind, Company, Contact,
     ContactChannel, ContactRole, HandoffRef, LostReason, Money, Opportunity, OpportunitySource,
@@ -550,14 +554,36 @@ fn set_contact_archived(
     Ok(contact)
 }
 
-/// List contacts with their channels; archived rows only when asked for.
+/// List row for the contact table — record plus read-time projections
+/// (computed from activities and tasks, never stored).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactListItem {
+    #[serde(flatten)]
+    pub contact: Contact,
+    /// Latest activity on the contact or any of its opportunities.
+    pub last_contacted_at: Option<String>,
+    /// Earliest due date among the contact's open tasks.
+    pub next_open_task_due_at: Option<String>,
+}
+
+/// List contacts with their channels and read-time projections; archived rows
+/// only when asked for.
 pub fn list_contacts(
     storage: &Storage,
     include_archived: bool,
-) -> Result<Vec<Contact>, ApplicationError> {
+) -> Result<Vec<ContactListItem>, ApplicationError> {
     let connection = storage.connection();
     let mut statement = connection.prepare(&format!(
-        "SELECT {CONTACT_COLUMNS} FROM contacts {} ORDER BY display_name, id",
+        "SELECT {CONTACT_COLUMNS},
+                (SELECT MAX(a.occurred_at) FROM activities a
+                 WHERE (a.parent_type = 'contact' AND a.parent_id = c.id)
+                    OR (a.parent_type = 'opportunity' AND a.parent_id IN
+                        (SELECT o.id FROM opportunities o WHERE o.contact_id = c.id))),
+                (SELECT MIN(t.due_at) FROM tasks t
+                 WHERE t.status = 'open' AND t.parent_type = 'contact'
+                   AND t.parent_id = c.id AND t.due_at IS NOT NULL)
+         FROM contacts c {} ORDER BY display_name, id",
         if include_archived {
             ""
         } else {
@@ -565,13 +591,22 @@ pub fn list_contacts(
         }
     ))?;
     let rows = statement
-        .query_map([], contact_from_row)?
+        .query_map([], |row| {
+            let base = contact_from_row(row)?;
+            let last_contacted_at: Option<String> = row.get(20)?;
+            let next_open_task_due_at: Option<String> = row.get(21)?;
+            Ok((base, last_contacted_at, next_open_task_due_at))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|row| {
+        .map(|(row, last_contacted_at, next_open_task_due_at)| {
             let mut contact = finish_contact(row)?;
             contact.channels = load_channels(connection, &contact.id)?;
-            Ok(contact)
+            Ok(ContactListItem {
+                contact,
+                last_contacted_at,
+                next_open_task_due_at,
+            })
         })
         .collect()
 }
@@ -673,6 +708,10 @@ pub struct OpportunityListItem {
     pub stage_name: String,
     pub contact_display_name: Option<String>,
     pub company_name: Option<String>,
+    /// Latest activity logged on the opportunity (read-time, never stored).
+    pub last_contacted_at: Option<String>,
+    /// Earliest due date among the opportunity's open tasks.
+    pub next_open_task_due_at: Option<String>,
 }
 
 /// Detail view — the record plus its full append-only stage history.
@@ -1006,7 +1045,12 @@ pub fn list_opportunities(
                 o.quote_tool, o.quote_external_id, o.quote_label, o.quote_linked_at,
                 o.job_tool, o.job_external_id, o.job_label, o.job_linked_at,
                 o.archived_at, o.created_at, o.updated_at, o.version,
-                s.name, c.display_name, co.name
+                s.name, c.display_name, co.name,
+                (SELECT MAX(a.occurred_at) FROM activities a
+                 WHERE a.parent_type = 'opportunity' AND a.parent_id = o.id),
+                (SELECT MIN(t.due_at) FROM tasks t
+                 WHERE t.status = 'open' AND t.parent_type = 'opportunity'
+                   AND t.parent_id = o.id AND t.due_at IS NOT NULL)
          FROM opportunities o
          JOIN stages s ON s.id = o.stage_id
          LEFT JOIN contacts c ON c.id = o.contact_id
@@ -1024,18 +1068,38 @@ pub fn list_opportunities(
             let stage_name: String = row.get(25)?;
             let contact_display_name: Option<String> = row.get(26)?;
             let company_name: Option<String> = row.get(27)?;
-            Ok((base, stage_name, contact_display_name, company_name))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|(base, stage_name, contact_display_name, company_name)| {
-            Ok(OpportunityListItem {
-                opportunity: finish_opportunity(base)?,
+            let last_contacted_at: Option<String> = row.get(28)?;
+            let next_open_task_due_at: Option<String> = row.get(29)?;
+            Ok((
+                base,
                 stage_name,
                 contact_display_name,
                 company_name,
-            })
-        })
+                last_contacted_at,
+                next_open_task_due_at,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(
+            |(
+                base,
+                stage_name,
+                contact_display_name,
+                company_name,
+                last_contacted_at,
+                next_open_task_due_at,
+            )| {
+                Ok(OpportunityListItem {
+                    opportunity: finish_opportunity(base)?,
+                    stage_name,
+                    contact_display_name,
+                    company_name,
+                    last_contacted_at,
+                    next_open_task_due_at,
+                })
+            },
+        )
         .collect()
 }
 
@@ -2167,6 +2231,293 @@ pub fn get_database_info(storage: &Storage) -> Result<DatabaseInfo, ApplicationE
         file_size_bytes,
         last_backup_at,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Needs-attention use-cases (thresholds + flag query)
+// ---------------------------------------------------------------------------
+
+/// app_settings keys for the attention thresholds; absent keys mean defaults.
+const ATTENTION_STALE_LEAD_DAYS_KEY: &str = "attention.stale_lead_days";
+const ATTENTION_PROPOSAL_DAYS_KEY: &str = "attention.proposal_no_response_days";
+const ATTENTION_PROPOSAL_STAGE_KEY: &str = "attention.proposal_stage_name";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAttentionThresholdsRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub stale_lead_days: i64,
+    pub proposal_no_response_days: i64,
+    /// Name of the stage the proposal rule watches; absent keeps the default.
+    pub proposal_stage_name: Option<String>,
+}
+
+/// Read the attention thresholds from app_settings, falling back to the
+/// defaults in `attention::Thresholds` for any absent key.
+pub fn get_attention_thresholds(storage: &Storage) -> Result<Thresholds, ApplicationError> {
+    let defaults = Thresholds::default();
+    let connection = storage.connection();
+    Ok(Thresholds {
+        stale_lead_days: read_setting_days(
+            connection,
+            ATTENTION_STALE_LEAD_DAYS_KEY,
+            defaults.stale_lead_days,
+        )?,
+        proposal_no_response_days: read_setting_days(
+            connection,
+            ATTENTION_PROPOSAL_DAYS_KEY,
+            defaults.proposal_no_response_days,
+        )?,
+        proposal_stage_name: read_setting(connection, ATTENTION_PROPOSAL_STAGE_KEY)?
+            .unwrap_or(defaults.proposal_stage_name),
+    })
+}
+
+/// Persist the attention thresholds as individual app_settings keys; day
+/// counts must be positive integers.
+pub fn set_attention_thresholds(
+    storage: &mut Storage,
+    request: SetAttentionThresholdsRequest,
+) -> Result<Thresholds, ApplicationError> {
+    for (field, value) in [
+        ("staleLeadDays", request.stale_lead_days),
+        ("proposalNoResponseDays", request.proposal_no_response_days),
+    ] {
+        if value < 1 {
+            return Err(ApplicationError::InvalidInput {
+                field: field.into(),
+                message: "must be a positive number of days".into(),
+            });
+        }
+    }
+    let proposal_stage_name = match request.proposal_stage_name {
+        Some(name) => required_text("proposalStageName", name, 100)?,
+        None => Thresholds::default().proposal_stage_name,
+    };
+
+    let transaction = immediate(storage)?;
+    for (key, value) in [
+        (
+            ATTENTION_STALE_LEAD_DAYS_KEY,
+            request.stale_lead_days.to_string(),
+        ),
+        (
+            ATTENTION_PROPOSAL_DAYS_KEY,
+            request.proposal_no_response_days.to_string(),
+        ),
+        (ATTENTION_PROPOSAL_STAGE_KEY, proposal_stage_name.clone()),
+    ] {
+        transaction.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+    }
+    log_command(
+        &transaction,
+        request.actor,
+        "settings",
+        "attention",
+        "updated needs-attention thresholds",
+    )?;
+    transaction.commit()?;
+    Ok(Thresholds {
+        stale_lead_days: request.stale_lead_days,
+        proposal_no_response_days: request.proposal_no_response_days,
+        proposal_stage_name,
+    })
+}
+
+/// Compute the needs-attention flags: gather the facts (last activity per
+/// contact including related opportunities, stage entry times, open tasks) and
+/// hand them to the pure rules in `attention`. `reference_time` defaults to
+/// now; results are never stored.
+pub fn get_attention_flags(
+    storage: &Storage,
+    reference_time: Option<String>,
+) -> Result<Vec<AttentionFlag>, ApplicationError> {
+    let reference_time = match optional_text(reference_time) {
+        Some(value) => DateTime::parse_from_rfc3339(&value)
+            .map(|parsed| parsed.with_timezone(&Utc))
+            .map_err(|_| ApplicationError::InvalidInput {
+                field: "referenceTime".into(),
+                message: "must be a UTC ISO-8601 timestamp".into(),
+            })?,
+        None => Utc::now(),
+    };
+    let connection = storage.connection();
+    let inputs = AttentionInputs {
+        reference_time,
+        thresholds: get_attention_thresholds(storage)?,
+        contacts: load_contact_facts(connection)?,
+        opportunities: load_opportunity_facts(connection)?,
+        tasks: load_task_facts(connection)?,
+    };
+    Ok(attention::evaluate(&inputs))
+}
+
+/// Read one app_settings value, if present.
+fn read_setting(
+    connection: &rusqlite::Connection,
+    key: &str,
+) -> Result<Option<String>, ApplicationError> {
+    Ok(connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Read a stored day count; absent means the default, garbage is an error.
+fn read_setting_days(
+    connection: &rusqlite::Connection,
+    key: &str,
+    default: i64,
+) -> Result<i64, ApplicationError> {
+    match read_setting(connection, key)? {
+        None => Ok(default),
+        Some(value) => value
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|days| *days > 0)
+            .ok_or_else(|| {
+                ApplicationError::InvalidStoredData(format!(
+                    "app_settings {key} holds \"{value}\", not a positive day count"
+                ))
+            }),
+    }
+}
+
+/// Parse a stored UTC ISO-8601 timestamp into a chrono value for the rules.
+fn parse_stored_timestamp(context: &str, value: &str) -> Result<DateTime<Utc>, ApplicationError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|parsed| parsed.with_timezone(&Utc))
+        .map_err(|_| {
+            ApplicationError::InvalidStoredData(format!(
+                "{context} holds \"{value}\", not a UTC ISO-8601 timestamp"
+            ))
+        })
+}
+
+/// Facts for the stale-lead rule: active contacts with the latest activity on
+/// the contact itself or any opportunity linked to it.
+fn load_contact_facts(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<ContactFacts>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT c.id, c.display_name, c.kind, c.created_at,
+                (SELECT MAX(a.occurred_at) FROM activities a
+                 WHERE (a.parent_type = 'contact' AND a.parent_id = c.id)
+                    OR (a.parent_type = 'opportunity' AND a.parent_id IN
+                        (SELECT o.id FROM opportunities o WHERE o.contact_id = c.id)))
+         FROM contacts c WHERE c.archived_at IS NULL",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(id, display_name, kind, created_at, last_activity_at)| {
+            Ok(ContactFacts {
+                created_at: parse_stored_timestamp("contacts.created_at", &created_at)?,
+                last_activity_at: last_activity_at
+                    .map(|value| parse_stored_timestamp("activities.occurred_at", &value))
+                    .transpose()?,
+                id,
+                display_name,
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// Facts for the proposal rule: active opportunities with their current stage,
+/// when they entered it (latest stage_history row, falling back to created_at),
+/// and the latest inbound activity.
+fn load_opportunity_facts(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<OpportunityFacts>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT o.id, o.name, s.kind, s.name,
+                COALESCE((SELECT MAX(h.created_at) FROM stage_history h
+                          WHERE h.opportunity_id = o.id), o.created_at),
+                (SELECT MAX(a.occurred_at) FROM activities a
+                 WHERE a.parent_type = 'opportunity' AND a.parent_id = o.id
+                   AND a.direction = 'inbound')
+         FROM opportunities o
+         JOIN stages s ON s.id = o.stage_id
+         WHERE o.archived_at IS NULL",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(
+            |(id, name, stage_kind, stage_name, entered_at, last_inbound_at)| {
+                Ok(OpportunityFacts {
+                    stage_entered_at: parse_stored_timestamp(
+                        "stage_history.created_at",
+                        &entered_at,
+                    )?,
+                    last_inbound_activity_at: last_inbound_at
+                        .map(|value| parse_stored_timestamp("activities.occurred_at", &value))
+                        .transpose()?,
+                    id,
+                    name,
+                    stage_kind,
+                    stage_name,
+                })
+            },
+        )
+        .collect()
+}
+
+/// Facts for the overdue rule: open tasks with a due date.
+fn load_task_facts(connection: &rusqlite::Connection) -> Result<Vec<TaskFacts>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, title, status, due_at FROM tasks
+         WHERE status = 'open' AND due_at IS NOT NULL",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(id, title, status, due_at)| {
+            Ok(TaskFacts {
+                due_at: Some(parse_stored_timestamp("tasks.due_at", &due_at)?),
+                id,
+                title,
+                status,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

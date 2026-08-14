@@ -36,6 +36,13 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listOpportunities: vi.fn().mockResolvedValue([]),
   getOpportunity: vi.fn(),
   moveOpportunityStage: vi.fn(),
+  getAttentionFlags: vi.fn().mockResolvedValue([]),
+  getAttentionThresholds: vi.fn().mockResolvedValue({
+    staleLeadDays: 21,
+    proposalNoResponseDays: 7,
+    proposalStageName: "Proposal Sent",
+  }),
+  setAttentionThresholds: vi.fn(),
   ...overrides,
 });
 

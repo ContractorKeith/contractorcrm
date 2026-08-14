@@ -202,11 +202,21 @@ export interface StageHistoryEntry {
   createdAt: string;
 }
 
-// Table row for the opportunity list — record flattened with display names.
+// Table row for the opportunity list — record flattened with display names
+// plus read-time projections (computed from activities/tasks, never stored).
 export type OpportunityListItem = Opportunity & {
   stageName: string;
   contactDisplayName: string | null;
   companyName: string | null;
+  lastContactedAt?: string | null;
+  nextOpenTaskDueAt?: string | null;
+};
+
+// List row for the contact table — record flattened with read-time
+// projections (latest activity incl. related opportunities, next open task).
+export type ContactListItem = Contact & {
+  lastContactedAt?: string | null;
+  nextOpenTaskDueAt?: string | null;
 };
 
 // Detail view — the record flattened with its full stage history.
@@ -258,6 +268,35 @@ export interface UpdateStageRequest {
   expectedVersion: number;
   name: string;
   sortKey: number;
+}
+
+// Needs-attention thresholds (src-tauri/src/attention.rs); persisted in
+// app_settings, defaults 21 / 7 / "Proposal Sent".
+export interface AttentionThresholds {
+  staleLeadDays: number;
+  proposalNoResponseDays: number;
+  proposalStageName: string;
+}
+
+export interface SetAttentionThresholdsRequest {
+  actor?: Actor;
+  staleLeadDays: number;
+  proposalNoResponseDays: number;
+  proposalStageName?: string | null;
+}
+
+export type AttentionRule = "stale_lead" | "overdue_task" | "proposal_no_response";
+export type AttentionRecordType = "contact" | "opportunity" | "task";
+
+// One deterministic attention flag — computed on demand, never stored.
+// Ordered by severity: overdue tasks, then proposals, then stale leads.
+export interface AttentionFlag {
+  id: string;
+  rule: AttentionRule;
+  recordType: AttentionRecordType;
+  recordId: string;
+  recordDisplayName: string;
+  explanation: string;
 }
 
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,

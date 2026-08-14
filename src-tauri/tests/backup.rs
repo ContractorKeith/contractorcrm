@@ -97,8 +97,8 @@ fn backup_restore_round_trip_preserves_records_and_versions() {
     let source_contacts = application::list_contacts(&source, true).expect("source contacts");
     let target_contacts = application::list_contacts(&target, true).expect("target contacts");
     assert_eq!(source_contacts, target_contacts);
-    assert_eq!(target_contacts, vec![contact]);
-    assert_eq!(target_contacts[0].version, 2);
+    assert_eq!(target_contacts[0].contact, contact);
+    assert_eq!(target_contacts[0].contact.version, 2);
 }
 
 #[test]

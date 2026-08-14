@@ -2,8 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   ArchiveRequest,
+  AttentionFlag,
+  AttentionThresholds,
   Company,
   Contact,
+  ContactListItem,
   CreateCompanyRequest,
   CreateContactRequest,
   CreateOpportunityRequest,
@@ -13,6 +16,7 @@ import type {
   Opportunity,
   OpportunityDetail,
   OpportunityListItem,
+  SetAttentionThresholdsRequest,
   Stage,
   UpdateCompanyRequest,
   UpdateContactRequest,
@@ -34,7 +38,7 @@ export interface CoreClient {
   updateContact(request: UpdateContactRequest): Promise<Contact>;
   archiveContact(request: ArchiveRequest): Promise<Contact>;
   unarchiveContact(request: ArchiveRequest): Promise<Contact>;
-  listContacts(includeArchived: boolean): Promise<Contact[]>;
+  listContacts(includeArchived: boolean): Promise<ContactListItem[]>;
   getContact(contactId: string): Promise<Contact>;
   listStages(): Promise<Stage[]>;
   updateStage(request: UpdateStageRequest): Promise<Stage>;
@@ -46,6 +50,9 @@ export interface CoreClient {
   listOpportunities(includeArchived: boolean): Promise<OpportunityListItem[]>;
   getOpportunity(opportunityId: string): Promise<OpportunityDetail>;
   moveOpportunityStage(request: MoveOpportunityStageRequest): Promise<Opportunity>;
+  getAttentionFlags(referenceTime?: string): Promise<AttentionFlag[]>;
+  getAttentionThresholds(): Promise<AttentionThresholds>;
+  setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -73,4 +80,7 @@ export const tauriCoreClient: CoreClient = {
   listOpportunities: (includeArchived) => invoke("list_opportunities", { includeArchived }),
   getOpportunity: (opportunityId) => invoke("get_opportunity", { opportunityId }),
   moveOpportunityStage: (request) => invoke("move_opportunity_stage", { request }),
+  getAttentionFlags: (referenceTime) => invoke("get_attention_flags", { referenceTime }),
+  getAttentionThresholds: () => invoke("get_attention_thresholds"),
+  setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),
 };
