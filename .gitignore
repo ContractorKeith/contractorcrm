@@ -1,9 +1,12 @@
-# dependencies & build output
 node_modules/
 dist/
-target/
-
-# env & local
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 .env
-.env.local
+.env.*
+!.env.example
 .DS_Store
+*.log
+src-tauri/target/
+src-tauri/gen/

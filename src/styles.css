@@ -1,0 +1,426 @@
+/* Industry token sheet — values copied from docs/design/DESIGN.md and the
+   styles.css inside docs/design/_ds/. Foundations are shared with
+   ContractorProject and are copied, never re-decided. */
+
+:root {
+  font-family: var(--font-body);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* Base roles (light) */
+  --color-paper: #f2f2f3;
+  --color-dark-ui-paper: #ececed;
+  --color-ink: #1d1f20;
+  --color-steel: #5980a6;
+  --color-bg: var(--color-paper);
+  --color-surface: #e9e9ea;
+  --color-text: var(--color-ink);
+  --color-accent: var(--color-steel);
+  --color-divider: rgb(29 31 32 / 0.16);
+
+  /* Tonal ramps — OKLCH-generated, one shared lightness scale */
+  --color-neutral-100: #f5f5f8;
+  --color-neutral-200: #e7e7ea;
+  --color-neutral-300: #d4d4d7;
+  --color-neutral-400: #b7b7ba;
+  --color-neutral-500: #98989b;
+  --color-neutral-600: #7a7a7d;
+  --color-neutral-700: #5d5d60;
+  --color-neutral-800: #424244;
+  --color-neutral-900: #2b2b2d;
+
+  --color-accent-100: #eef6ff;
+  --color-accent-200: #d6ebff;
+  --color-accent-300: #b5d9fd;
+  --color-accent-400: #94bce3;
+  --color-accent-500: #749dc4;
+  --color-accent-600: #597ea3;
+  --color-accent-700: #416180;
+  --color-accent-800: #2c455d;
+  --color-accent-900: #1d2d3d;
+
+  /* CRM semantic aliases — thin layer over the ramps, nothing else */
+  --state-proposed: var(--color-accent-600); /* unapplied AI value */
+  --state-selected-bg: var(--color-accent-100);
+  --state-focus-ring: var(--color-accent);
+  --state-attention: var(--color-accent-800); /* stale, overdue, blocked */
+
+  /* Usage aliases (same layer as the sibling shell) */
+  --color-accent-text: var(--color-accent-700);
+  --color-action: var(--color-accent-800);
+  --color-action-hover: var(--color-accent-900);
+  --color-on-action: var(--color-paper);
+  --state-tag-bg: var(--color-accent-100);
+  --state-tag-border: var(--color-accent-300);
+  --brand-field: var(--color-accent-900);
+  --brand-paper: var(--color-paper);
+  --brand-accent: var(--color-accent-400);
+
+  /* Type */
+  --font-heading: "Barlow Condensed", system-ui, sans-serif;
+  --font-body: "Barlow", system-ui, sans-serif;
+  --font-numeric: "Barlow", system-ui, sans-serif; /* tabular figures */
+  --font-heading-weight: 600;
+  --font-body-medium: 500;
+  --font-size-hero: clamp(42px, 6vw, 72px);
+  --font-size-view-title: 24px;
+  --font-size-empty-title: 28px;
+  --font-size-brand: 23px;
+  --font-size-panel: 15px;
+  --font-size-body: 14px;
+  --font-size-table: 13px;
+  --font-size-label: 12px;
+  --font-size-meta: 11px;
+  --line-height-body: 1.5;
+
+  /* Spacing — density 0.85x baked in */
+  --space-1: 3.4px;
+  --space-2: 6.8px;
+  --space-3: 10.2px;
+  --space-4: 13.6px;
+  --space-6: 20.4px;
+  --space-8: 27.2px;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 7px;
+
+  /* Elevation — dialogs and popovers only; working surfaces stay flat */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2b2b2d 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2b2b2d 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent);
+
+  /* Row rhythm — matches the sibling's schedule tables */
+  --row-h: 28px; /* comfortable — default */
+  --row-h-compact: 24px;
+
+  --border-hairline: 1px;
+  --border-focus: 2px;
+  --border-alert: 3px;
+
+  /* Shell layout */
+  --layout-min-width: 320px;
+  --layout-header-height: 68px;
+  --layout-page-gutter: clamp(18px, 3vw, 42px);
+  --layout-content-max: 1120px;
+  --layout-inline-total: 36px;
+  --layout-workspace-padding: clamp(42px, 7vw, 86px) 0 72px;
+  --layout-hero-max: 700px;
+  --layout-copy-max: 56ch;
+  --layout-empty-copy-max: 46ch;
+  --layout-section-gap: clamp(52px, 8vw, 92px);
+  --layout-empty-min-height: 250px;
+  --control-height-small: 28px;
+  --brand-tile-radius: 0;
+  --registration-size: 17px;
+  --registration-center: 8px;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: var(--layout-min-width);
+  min-height: 100%;
+  background: var(--color-bg);
+}
+
+body {
+  margin: 0;
+  min-width: var(--layout-min-width);
+  min-height: 100vh;
+  background: var(--color-bg);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: var(--border-focus) solid var(--state-focus-ring);
+  outline-offset: var(--border-focus);
+}
+
+/* — shell chrome — */
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  height: var(--layout-header-height);
+  padding: 0 var(--layout-page-gutter);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  background: var(--color-bg);
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: var(--space-2);
+  background: var(--brand-field);
+  border-radius: var(--brand-tile-radius);
+}
+
+/* macOS tiles get the 22% squircle radius; square everywhere else */
+html[data-platform="macos"] .brand-mark {
+  --brand-tile-radius: 22%;
+}
+
+.brand-mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.brand-mark__paper {
+  fill: var(--brand-paper);
+}
+
+.brand-mark__accent {
+  fill: var(--brand-accent);
+}
+
+.brand__name {
+  font-family: var(--font-heading);
+  font-size: var(--font-size-brand);
+  font-weight: var(--font-heading-weight);
+  letter-spacing: -0.012em;
+  line-height: 1;
+}
+
+.brand__name span {
+  color: var(--color-accent);
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.theme-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+}
+
+.theme-control select {
+  height: var(--control-height-small);
+  padding: 0 var(--space-2);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-divider);
+  border-radius: var(--radius-sm);
+}
+
+.storage-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-label);
+}
+
+.storage-state__dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  background: var(--color-accent);
+  border: var(--border-hairline) solid var(--color-accent-text);
+}
+
+/* — workspace — */
+
+.workspace {
+  width: min(var(--layout-content-max), calc(100% - var(--layout-inline-total)));
+  margin: 0 auto;
+  padding: var(--layout-workspace-padding);
+}
+
+.eyebrow,
+.section-rule h2 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-heading-weight);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  color: var(--color-accent-text);
+}
+
+h1,
+h2,
+p {
+  text-wrap: pretty;
+}
+
+h1 {
+  max-width: var(--layout-hero-max);
+  margin: var(--space-2) 0 var(--space-3);
+  font-family: var(--font-heading);
+  font-size: var(--font-size-hero);
+  font-weight: var(--font-heading-weight);
+  letter-spacing: -0.025em;
+  line-height: 0.94;
+}
+
+.lede {
+  max-width: var(--layout-copy-max);
+  margin: 0;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-panel);
+  line-height: 1.55;
+}
+
+.crm-section {
+  margin-top: var(--layout-section-gap);
+}
+
+.section-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-hairline) solid var(--color-text);
+}
+
+.section-rule h2 {
+  font-size: var(--font-size-panel);
+}
+
+.section-rule span {
+  color: var(--color-neutral-700);
+  font-variant-numeric: tabular-nums;
+}
+
+/* — empty state (drawn, not filled) — */
+
+.empty-state {
+  position: relative;
+  min-height: var(--layout-empty-min-height);
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--color-bg);
+  border: var(--border-hairline) solid var(--color-divider);
+  border-top: 0;
+}
+
+.empty-state h2 {
+  margin: var(--space-2) 0;
+  font-family: var(--font-heading);
+  font-size: var(--font-size-empty-title);
+  font-weight: var(--font-heading-weight);
+}
+
+.empty-state > p:last-child {
+  max-width: var(--layout-empty-copy-max);
+  margin: 0;
+  color: var(--color-neutral-700);
+}
+
+/* Blueprint registration crosshair */
+.registration-mark {
+  position: absolute;
+  top: var(--space-6);
+  left: var(--space-6);
+  width: var(--registration-size);
+  height: var(--registration-size);
+}
+
+.registration-mark::before,
+.registration-mark::after {
+  content: "";
+  position: absolute;
+  background: var(--color-neutral-500);
+}
+
+.registration-mark::before {
+  top: var(--registration-center);
+  left: 0;
+  width: var(--registration-size);
+  height: var(--border-hairline);
+}
+
+.registration-mark::after {
+  top: 0;
+  left: var(--registration-center);
+  width: var(--border-hairline);
+  height: var(--registration-size);
+}
+
+@media (max-width: 780px) {
+  .storage-state {
+    font-size: 0;
+  }
+
+  .storage-state::after {
+    content: "Local";
+    font-size: var(--font-size-label);
+  }
+}
+
+/* — dark mode: token override only; ramps do not invert, usage inverts — */
+
+[data-theme="dark"] {
+  color: var(--color-text);
+  background: var(--color-bg);
+  --color-bg: #1f2124;
+  --color-surface: #2b2b2d;
+  --color-text: #ececed;
+  --color-accent: #94bce3;
+  --color-neutral-200: #424244;
+  --color-neutral-300: #5d5d60;
+  --color-neutral-500: #98989b;
+  --color-neutral-700: #d4d4d7;
+  --color-neutral-800: #e7e7ea;
+  --color-divider: rgb(236 236 237 / 0.18);
+  --color-accent-text: var(--color-accent-300);
+  --color-action: var(--color-accent-400);
+  --color-action-hover: var(--color-accent-300);
+  --color-on-action: var(--color-ink);
+  --state-tag-bg: var(--color-accent-900);
+  --state-tag-border: var(--color-accent-700);
+  --state-selected-bg: var(--color-accent-900);
+  --brand-field: var(--color-dark-ui-paper);
+  --brand-paper: var(--color-accent-900);
+  --brand-accent: var(--color-steel);
+  color-scheme: dark;
+}
