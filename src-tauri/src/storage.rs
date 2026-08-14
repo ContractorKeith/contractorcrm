@@ -144,6 +144,11 @@ impl Storage {
         &self.connection
     }
 
+    /// Mutable borrow so the application layer can open transactions.
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
     /// Apply any pending migrations; already-applied versions are skipped, so
     /// re-running on an existing database is a no-op.
     fn migrate(&mut self, database_existed: bool) -> Result<(), StorageError> {
