@@ -1,0 +1,37 @@
+# ContractorCRM
+
+ContractorCRM is a local-first, AI-native CRM for contractors — contacts, opportunities,
+and history that live on the user's machine and connect cleanly to jobs and quotes. It is a
+module in the OpenContractorOS suite alongside ContractorProject (sibling repo at
+`../contractorproject`). Done for v1 means a fast, native Mac + Windows desktop CRM with
+contacts, a simple pipeline, activity history, tasks/reminders, local search, a documented
+local agent API, and a clean opportunity → quote → ContractorProject job hand-off.
+
+## Status
+
+v0.1 planning — last touched 2026-08-14. No code yet; docs-first.
+
+## Planning baseline
+
+- `docs/PRODUCT_BRIEF.md` is the product scope. Start here.
+- Architecture, data model, local API, and MVP plan docs will follow the same doc layout
+  as ContractorProject (`docs/ARCHITECTURE.md`, `docs/DATA_MODEL.md`, `docs/LOCAL_API.md`,
+  `docs/MVP_PLAN.md`).
+
+## Conventions & Gotchas
+
+- Stack and packaging must stay consistent with ContractorProject: Tauri + React +
+  TypeScript UI, Rust core, SQLite storage.
+- Local-first and offline by design — no network dependency for core CRM work; AI is
+  BYOK/local models and never called without explicit user action.
+- Route all writes through the Rust application seam; UI and agents never touch SQLite
+  directly (same rule as ContractorProject).
+- Use contractor-facing language (leads, clients, subs, vendors, jobs), not generic
+  sales-team CRM jargon.
+- Suite integrations stay behind versioned interfaces — modular hand-offs, no shared
+  platform or event bus for v1.
+
+## Out of Scope (v1)
+
+- Marketing automation, email campaigns, lead scoring, full email client, heavy reporting
+  dashboards, forced cloud sync, mobile apps, enterprise permissions, multi-tenant.

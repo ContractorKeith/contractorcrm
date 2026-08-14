@@ -1,0 +1,9 @@
+# dependencies & build output
+node_modules/
+dist/
+target/
+
+# env & local
+.env
+.env.local
+.DS_Store
