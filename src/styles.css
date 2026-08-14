@@ -792,6 +792,63 @@ h1 {
   gap: var(--space-4);
 }
 
+/* Hand-off panel — quote/job references and the envelope export. */
+.handoff-ref {
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.handoff-ref__name {
+  display: block;
+  font-size: var(--font-size-label);
+  font-weight: var(--font-body-medium);
+  color: var(--color-neutral-700);
+}
+
+.handoff-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--row-h);
+}
+
+.handoff-row__summary {
+  font-size: var(--font-size-table);
+}
+
+.handoff-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.handoff-hint {
+  margin: var(--space-1) 0 0;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+}
+
+.handoff-export {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.handoff-overwrite {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--font-size-table);
+}
+
+.handoff-exported {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-table);
+}
+
 /* Stage history timeline — newest move first. */
 .history-list {
   margin: 0;

@@ -171,6 +171,48 @@ export interface Money {
   currencyCode: string;
 }
 
+// Stored hand-off reference — where a quote or job lives in an external tool.
+export interface HandoffRef {
+  tool: string;
+  externalId: string;
+  label: string | null;
+  linkedAt: string;
+}
+
+// Caller-supplied reference for link commands; linkedAt is stamped on link.
+export interface HandoffRefInput {
+  tool: string;
+  externalId: string;
+  label?: string | null;
+}
+
+export interface LinkQuoteRequest {
+  actor?: Actor;
+  opportunityId: string;
+  expectedVersion: number;
+  quoteRef: HandoffRefInput;
+}
+
+export interface LinkJobRequest {
+  actor?: Actor;
+  opportunityId: string;
+  expectedVersion: number;
+  jobRef: HandoffRefInput;
+}
+
+// Shared shape for clearing either hand-off reference.
+export interface UnlinkHandoffRequest {
+  actor?: Actor;
+  opportunityId: string;
+  expectedVersion: number;
+}
+
+// Where an exported hand-off envelope landed (docs/HANDOFF.md).
+export interface EnvelopeExportReport {
+  destinationPath: string;
+  schemaVersion: number;
+}
+
 // Potential work moving through the pipeline toward won or lost.
 export interface Opportunity {
   id: string;
@@ -185,6 +227,9 @@ export interface Opportunity {
   sourceLabel: string | null;
   lostReasonId: string | null;
   notes: string | null;
+  // Hand-off references to the external quote and job records, when linked.
+  quoteRef: HandoffRef | null;
+  jobRef: HandoffRef | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;

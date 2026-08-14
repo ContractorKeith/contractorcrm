@@ -14,7 +14,10 @@ import type {
   CreateOpportunityRequest,
   CreateTaskRequest,
   DeleteActivityRequest,
+  EnvelopeExportReport,
   HealthReport,
+  LinkJobRequest,
+  LinkQuoteRequest,
   ListTasksRequest,
   LogActivityRequest,
   LostReason,
@@ -27,6 +30,7 @@ import type {
   Stage,
   Task,
   TaskActionRequest,
+  UnlinkHandoffRequest,
   UpdateActivityRequest,
   UpdateCompanyRequest,
   UpdateContactRequest,
@@ -61,6 +65,15 @@ export interface CoreClient {
   listOpportunities(includeArchived: boolean): Promise<OpportunityListItem[]>;
   getOpportunity(opportunityId: string): Promise<OpportunityDetail>;
   moveOpportunityStage(request: MoveOpportunityStageRequest): Promise<Opportunity>;
+  linkQuote(request: LinkQuoteRequest): Promise<Opportunity>;
+  unlinkQuote(request: UnlinkHandoffRequest): Promise<Opportunity>;
+  linkJob(request: LinkJobRequest): Promise<Opportunity>;
+  unlinkJob(request: UnlinkHandoffRequest): Promise<Opportunity>;
+  exportHandoffEnvelope(
+    opportunityId: string,
+    destinationPath: string,
+    overwrite: boolean,
+  ): Promise<EnvelopeExportReport>;
   logActivity(request: LogActivityRequest): Promise<Activity>;
   updateActivity(request: UpdateActivityRequest): Promise<Activity>;
   deleteActivity(request: DeleteActivityRequest): Promise<void>;
@@ -102,6 +115,12 @@ export const tauriCoreClient: CoreClient = {
   listOpportunities: (includeArchived) => invoke("list_opportunities", { includeArchived }),
   getOpportunity: (opportunityId) => invoke("get_opportunity", { opportunityId }),
   moveOpportunityStage: (request) => invoke("move_opportunity_stage", { request }),
+  linkQuote: (request) => invoke("link_quote", { request }),
+  unlinkQuote: (request) => invoke("unlink_quote", { request }),
+  linkJob: (request) => invoke("link_job", { request }),
+  unlinkJob: (request) => invoke("unlink_job", { request }),
+  exportHandoffEnvelope: (opportunityId, destinationPath, overwrite) =>
+    invoke("export_handoff_envelope", { opportunityId, destinationPath, overwrite }),
   logActivity: (request) => invoke("log_activity", { request }),
   updateActivity: (request) => invoke("update_activity", { request }),
   deleteActivity: (request) => invoke("delete_activity", { request }),

@@ -6,6 +6,7 @@ import type {
   AttentionFlag,
   Company,
   Contact,
+  HandoffRef,
   LostReason,
   OpportunityDetail,
   OpportunityListItem,
@@ -39,6 +40,11 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listOpportunities: vi.fn().mockResolvedValue([]),
   getOpportunity: vi.fn(),
   moveOpportunityStage: vi.fn(),
+  linkQuote: vi.fn(),
+  unlinkQuote: vi.fn(),
+  linkJob: vi.fn(),
+  unlinkJob: vi.fn(),
+  exportHandoffEnvelope: vi.fn(),
   logActivity: vi.fn(),
   updateActivity: vi.fn(),
   deleteActivity: vi.fn(),
@@ -152,6 +158,8 @@ export const makeOpportunity = (
   sourceLabel: null,
   lostReasonId: null,
   notes: null,
+  quoteRef: null,
+  jobRef: null,
   archivedAt: null,
   createdAt: "2026-08-14T12:00:00Z",
   updatedAt: "2026-08-14T12:00:00Z",
@@ -159,6 +167,15 @@ export const makeOpportunity = (
   stageName: "New lead",
   contactDisplayName: "Dana Ruiz",
   companyName: null,
+  ...overrides,
+});
+
+// Stored hand-off reference default — a quote in an external quoting tool.
+export const makeHandoffRef = (overrides: Partial<HandoffRef> = {}): HandoffRef => ({
+  tool: "quoter",
+  externalId: "Q-123",
+  label: null,
+  linkedAt: "2026-08-14T17:55:00Z",
   ...overrides,
 });
 

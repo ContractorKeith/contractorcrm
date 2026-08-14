@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { CoreClient } from "../api/client";
-import type {
-  Company,
-  Contact,
-  LostReason,
-  Money,
-  Opportunity,
-  OpportunityDetail,
-  OpportunityListItem,
-  OpportunityPatch,
-  OpportunitySource,
-  Stage,
+import {
+  isCommandError,
+  type Company,
+  type Contact,
+  type HandoffRef,
+  type HandoffRefInput,
+  type LostReason,
+  type Money,
+  type Opportunity,
+  type OpportunityDetail,
+  type OpportunityListItem,
+  type OpportunityPatch,
+  type OpportunitySource,
+  type Stage,
+  type StageKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import {
@@ -353,6 +357,247 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Hand-off panel — quote/job references and the envelope export
+// (docs/HANDOFF.md). The core enforces the won-stage rule for job links.
+// ---------------------------------------------------------------------------
+
+interface HandoffRefDraft {
+  tool: string;
+  externalId: string;
+  label: string;
+}
+
+const EMPTY_REF_DRAFT: HandoffRefDraft = { tool: "", externalId: "", label: "" };
+
+// One linked reference row: tool, external id, optional label, link time.
+function HandoffRefRow({ reference, onUnlink, unlinkLabel }: {
+  reference: HandoffRef;
+  onUnlink: () => void;
+  unlinkLabel: string;
+}) {
+  return (
+    <div className="handoff-row">
+      <span className="handoff-row__summary">
+        {reference.tool} · {reference.externalId}
+        {reference.label ? ` · ${reference.label}` : ""} · linked {reference.linkedAt}
+      </span>
+      <button type="button" className="button" onClick={onUnlink}>
+        {unlinkLabel}
+      </button>
+    </div>
+  );
+}
+
+interface HandoffSectionProps {
+  client: CoreClient;
+  detail: OpportunityDetail;
+  stageKind: StageKind | null;
+  onChanged: () => void; // reload the record so versions stay current
+}
+
+export function HandoffSection({ client, detail, stageKind, onChanged }: HandoffSectionProps) {
+  const [quoteDraft, setQuoteDraft] = useState<HandoffRefDraft>(EMPTY_REF_DRAFT);
+  const [jobDraft, setJobDraft] = useState<HandoffRefDraft>(EMPTY_REF_DRAFT);
+  const [destinationPath, setDestinationPath] = useState("");
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const [error, setError] = useState<SaveError>(NO_SAVE_ERROR);
+
+  const refInputFrom = (draft: HandoffRefDraft): HandoffRefInput => ({
+    tool: draft.tool.trim(),
+    externalId: draft.externalId.trim(),
+    label: orNull(draft.label),
+  });
+
+  // Shared wrapper: clear stale feedback, run the command, reload on success.
+  const run = async (command: () => Promise<unknown>) => {
+    setError(NO_SAVE_ERROR);
+    try {
+      await command();
+      onChanged();
+      return true;
+    } catch (rejection) {
+      setError(saveErrorFrom(rejection));
+      return false;
+    }
+  };
+
+  const linkQuote = async () => {
+    if (
+      await run(() =>
+        client.linkQuote({
+          opportunityId: detail.id,
+          expectedVersion: detail.version,
+          quoteRef: refInputFrom(quoteDraft),
+        }),
+      )
+    )
+      setQuoteDraft(EMPTY_REF_DRAFT);
+  };
+
+  const linkJob = async () => {
+    if (
+      await run(() =>
+        client.linkJob({
+          opportunityId: detail.id,
+          expectedVersion: detail.version,
+          jobRef: refInputFrom(jobDraft),
+        }),
+      )
+    )
+      setJobDraft(EMPTY_REF_DRAFT);
+  };
+
+  const unlinkQuote = () => {
+    if (!window.confirm("Unlink the quote reference from this opportunity?")) return;
+    void run(() =>
+      client.unlinkQuote({ opportunityId: detail.id, expectedVersion: detail.version }),
+    );
+  };
+
+  const unlinkJob = () => {
+    if (!window.confirm("Unlink the job reference from this opportunity?")) return;
+    void run(() =>
+      client.unlinkJob({ opportunityId: detail.id, expectedVersion: detail.version }),
+    );
+  };
+
+  // Export refuses an existing file unless overwrite is set; a
+  // destination_exists rejection becomes the inline overwrite confirm.
+  const runExport = async (overwrite: boolean) => {
+    setError(NO_SAVE_ERROR);
+    setExportedPath(null);
+    setConfirmOverwrite(false);
+    try {
+      const report = await client.exportHandoffEnvelope(
+        detail.id,
+        destinationPath.trim(),
+        overwrite,
+      );
+      setExportedPath(report.destinationPath);
+      onChanged();
+    } catch (rejection) {
+      if (
+        isCommandError(rejection) &&
+        rejection.kind === "validation_failed" &&
+        rejection.code === "destination_exists"
+      ) {
+        setConfirmOverwrite(true);
+        return;
+      }
+      setError(saveErrorFrom(rejection));
+    }
+  };
+
+  // Inline link form: tool + external id + optional label, per reference.
+  const refForm = (
+    kind: "Quote" | "Job",
+    draft: HandoffRefDraft,
+    setDraft: (draft: HandoffRefDraft) => void,
+    onLink: () => void,
+  ) => (
+    <div className="handoff-form">
+      <Field label={`${kind} tool`}>
+        <input
+          value={draft.tool}
+          onChange={(event) => setDraft({ ...draft, tool: event.target.value })}
+          placeholder={kind === "Job" ? "e.g. contractorproject" : "e.g. quoter"}
+        />
+      </Field>
+      <Field label={`${kind} id`}>
+        <input
+          value={draft.externalId}
+          onChange={(event) => setDraft({ ...draft, externalId: event.target.value })}
+        />
+      </Field>
+      <Field label={`${kind} label`}>
+        <input
+          value={draft.label}
+          onChange={(event) => setDraft({ ...draft, label: event.target.value })}
+          placeholder="optional"
+        />
+      </Field>
+      <button
+        type="button"
+        className="button"
+        disabled={draft.tool.trim() === "" || draft.externalId.trim() === ""}
+        onClick={onLink}
+      >
+        Link {kind.toLowerCase()}
+      </button>
+    </div>
+  );
+
+  return (
+    <>
+      <h3 className="detail-subhead">Hand-off</h3>
+      {error.conflict ? <ConflictBanner onReload={onChanged} /> : null}
+      <GeneralError message={error.general} />
+      {/* opportunity_not_won and other opportunity-level rejections land here. */}
+      <GeneralError message={error.fields.opportunityId ?? null} />
+
+      <div className="handoff-ref">
+        <span className="handoff-ref__name">Quote</span>
+        {detail.quoteRef ? (
+          <HandoffRefRow reference={detail.quoteRef} onUnlink={unlinkQuote} unlinkLabel="Unlink quote" />
+        ) : (
+          <>
+            <p className="detail-empty">Not linked</p>
+            {refForm("Quote", quoteDraft, setQuoteDraft, linkQuote)}
+          </>
+        )}
+      </div>
+
+      <div className="handoff-ref">
+        <span className="handoff-ref__name">Job</span>
+        {detail.jobRef ? (
+          <HandoffRefRow reference={detail.jobRef} onUnlink={unlinkJob} unlinkLabel="Unlink job" />
+        ) : (
+          <>
+            <p className="detail-empty">Not linked</p>
+            {stageKind === "won" ? (
+              refForm("Job", jobDraft, setJobDraft, linkJob)
+            ) : (
+              <p className="handoff-hint">Job hand-off is available once this deal is won.</p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="handoff-export">
+        <Field label="Export destination" error={error.fields.destinationPath}>
+          <input
+            value={destinationPath}
+            onChange={(event) => setDestinationPath(event.target.value)}
+            placeholder="e.g. /Users/you/handoffs/backyard-fence.json"
+          />
+        </Field>
+        <button
+          type="button"
+          className="button"
+          disabled={destinationPath.trim() === ""}
+          onClick={() => void runExport(false)}
+        >
+          Export envelope
+        </button>
+      </div>
+      {confirmOverwrite ? (
+        <div className="handoff-overwrite" role="alert">
+          <span>File exists — overwrite?</span>
+          <button type="button" className="button" onClick={() => void runExport(true)}>
+            Overwrite
+          </button>
+          <button type="button" className="button" onClick={() => setConfirmOverwrite(false)}>
+            Cancel
+          </button>
+        </div>
+      ) : null}
+      {exportedPath ? <p className="handoff-exported">Exported to {exportedPath}</p> : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Opportunity detail — facts, stage move, and the append-only history.
 // ---------------------------------------------------------------------------
 
@@ -506,6 +751,14 @@ export function OpportunityDetailView({
           </div>
         ))}
       </dl>
+
+      {/* Quote/job hand-off links and the envelope export live below the facts. */}
+      <HandoffSection
+        client={client}
+        detail={detail}
+        stageKind={stageById(detail.stageId)?.kind ?? null}
+        onChanged={load}
+      />
 
       <h3 className="detail-subhead">Move stage</h3>
       <div className="stage-move">
