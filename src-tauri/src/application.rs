@@ -6,8 +6,8 @@ use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    Actor, ChannelKind, Company, Contact, ContactChannel, ContactRole, LostReason, Money,
-    Opportunity, OpportunitySource, PartyKind, Stage, StageHistoryEntry, StageKind,
+    Actor, ChannelKind, Company, Contact, ContactChannel, ContactRole, HandoffRef, LostReason,
+    Money, Opportunity, OpportunitySource, PartyKind, Stage, StageHistoryEntry, StageKind,
 };
 use crate::error::ApplicationError;
 use crate::storage::{new_id, now_utc, Storage};
@@ -1001,8 +1001,10 @@ pub fn list_opportunities(
     let mut statement = storage.connection().prepare(&format!(
         "SELECT o.id, o.name, o.contact_id, o.company_id, o.stage_id, o.value_minor,
                 o.currency_code, o.probability_percent, o.expected_close_date, o.source,
-                o.source_label, o.lost_reason_id, o.notes, o.archived_at, o.created_at,
-                o.updated_at, o.version,
+                o.source_label, o.lost_reason_id, o.notes,
+                o.quote_tool, o.quote_external_id, o.quote_label, o.quote_linked_at,
+                o.job_tool, o.job_external_id, o.job_label, o.job_linked_at,
+                o.archived_at, o.created_at, o.updated_at, o.version,
                 s.name, c.display_name, co.name
          FROM opportunities o
          JOIN stages s ON s.id = o.stage_id
@@ -1018,9 +1020,9 @@ pub fn list_opportunities(
     let rows = statement
         .query_map([], |row| {
             let base = opportunity_from_row(row)?;
-            let stage_name: String = row.get(17)?;
-            let contact_display_name: Option<String> = row.get(18)?;
-            let company_name: Option<String> = row.get(19)?;
+            let stage_name: String = row.get(25)?;
+            let contact_display_name: Option<String> = row.get(26)?;
+            let company_name: Option<String> = row.get(27)?;
             Ok((base, stage_name, contact_display_name, company_name))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1056,6 +1058,359 @@ pub fn get_opportunity(
     Ok(OpportunityDetail {
         opportunity: finish_opportunity(row)?,
         stage_history: load_stage_history(connection, opportunity_id)?,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Hand-off use-cases (quote/job references + envelope export)
+// ---------------------------------------------------------------------------
+
+/// Caller-supplied hand-off reference; `linked_at` is stamped on link.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffRefInput {
+    /// External tool name, e.g. "contractorproject".
+    pub tool: String,
+    /// The record's id inside that tool.
+    pub external_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkQuoteRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub opportunity_id: String,
+    pub expected_version: i64,
+    pub quote_ref: HandoffRefInput,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkJobRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub opportunity_id: String,
+    pub expected_version: i64,
+    pub job_ref: HandoffRefInput,
+}
+
+/// Shared shape for clearing either hand-off reference.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlinkHandoffRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub opportunity_id: String,
+    pub expected_version: i64,
+}
+
+/// Which of the two hand-off references a link/unlink touches.
+#[derive(Clone, Copy)]
+enum HandoffKind {
+    Quote,
+    Job,
+}
+
+impl HandoffKind {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Quote => "quote",
+            Self::Job => "job",
+        }
+    }
+
+    /// UPDATE statement writing this ref's four columns plus the bump.
+    fn update_sql(self) -> &'static str {
+        match self {
+            Self::Quote => {
+                "UPDATE opportunities SET
+                    quote_tool = ?2, quote_external_id = ?3, quote_label = ?4,
+                    quote_linked_at = ?5, updated_at = ?6, version = ?7
+                 WHERE id = ?1"
+            }
+            Self::Job => {
+                "UPDATE opportunities SET
+                    job_tool = ?2, job_external_id = ?3, job_label = ?4,
+                    job_linked_at = ?5, updated_at = ?6, version = ?7
+                 WHERE id = ?1"
+            }
+        }
+    }
+}
+
+/// Record a quote reference on an opportunity; version-checked and logged.
+pub fn link_quote(
+    storage: &mut Storage,
+    request: LinkQuoteRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_handoff_ref(
+        storage,
+        HandoffKind::Quote,
+        request.actor,
+        &request.opportunity_id,
+        request.expected_version,
+        Some(request.quote_ref),
+    )
+}
+
+/// Clear an opportunity's quote reference; version-checked and logged.
+pub fn unlink_quote(
+    storage: &mut Storage,
+    request: UnlinkHandoffRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_handoff_ref(
+        storage,
+        HandoffKind::Quote,
+        request.actor,
+        &request.opportunity_id,
+        request.expected_version,
+        None,
+    )
+}
+
+/// Record a ContractorProject job reference; only won opportunities qualify.
+pub fn link_job(
+    storage: &mut Storage,
+    request: LinkJobRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_handoff_ref(
+        storage,
+        HandoffKind::Job,
+        request.actor,
+        &request.opportunity_id,
+        request.expected_version,
+        Some(request.job_ref),
+    )
+}
+
+/// Clear an opportunity's job reference; version-checked and logged.
+pub fn unlink_job(
+    storage: &mut Storage,
+    request: UnlinkHandoffRequest,
+) -> Result<Opportunity, ApplicationError> {
+    set_handoff_ref(
+        storage,
+        HandoffKind::Job,
+        request.actor,
+        &request.opportunity_id,
+        request.expected_version,
+        None,
+    )
+}
+
+/// Shared link/unlink core: validate, enforce the won-stage rule for job
+/// links, write the four ref columns, bump the version, and log the command.
+fn set_handoff_ref(
+    storage: &mut Storage,
+    kind: HandoffKind,
+    actor: Actor,
+    opportunity_id: &str,
+    expected_version: i64,
+    reference: Option<HandoffRefInput>,
+) -> Result<Opportunity, ApplicationError> {
+    let reference = match reference {
+        None => None,
+        Some(input) => Some(validate_handoff_ref(input)?),
+    };
+    let transaction = immediate(storage)?;
+    let existing = require_opportunity(&transaction, opportunity_id)?;
+    check_version(
+        "opportunity",
+        &existing.id,
+        expected_version,
+        existing.version,
+    )?;
+
+    // Business rule: a job hand-off only makes sense once the work is won.
+    if matches!(kind, HandoffKind::Job) && reference.is_some() {
+        let stage = require_stage(&transaction, &existing.stage_id)?;
+        if stage.kind != StageKind::Won {
+            return Err(ApplicationError::ValidationFailed {
+                code: "opportunity_not_won",
+                field: "opportunityId".into(),
+                message: format!(
+                    "cannot link a job to opportunity \"{}\": it is in stage \"{}\", \
+                     and job hand-offs require the won stage",
+                    existing.name, stage.name
+                ),
+            });
+        }
+    }
+
+    let (tool, external_id, label, linked_at) = match &reference {
+        Some(reference) => (
+            Some(reference.tool.as_str()),
+            Some(reference.external_id.as_str()),
+            reference.label.as_deref(),
+            Some(now_utc()),
+        ),
+        None => (None, None, None, None),
+    };
+    transaction.execute(
+        kind.update_sql(),
+        params![
+            existing.id,
+            tool,
+            external_id,
+            label,
+            linked_at,
+            now_utc(),
+            existing.version + 1,
+        ],
+    )?;
+    let summary = match &reference {
+        Some(reference) => format!(
+            "linked {} {} to opportunity \"{}\"",
+            kind.noun(),
+            reference.label.as_deref().unwrap_or(&reference.external_id),
+            existing.name
+        ),
+        None => format!(
+            "unlinked {} from opportunity \"{}\"",
+            kind.noun(),
+            existing.name
+        ),
+    };
+    log_command(&transaction, actor, "opportunity", &existing.id, &summary)?;
+    let opportunity = require_opportunity(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+/// Hand-off ref rules: non-empty tool and external id, optional label.
+fn validate_handoff_ref(input: HandoffRefInput) -> Result<HandoffRefInput, ApplicationError> {
+    Ok(HandoffRefInput {
+        tool: required_text("tool", input.tool, 100)?,
+        external_id: required_text("externalId", input.external_id, 200)?,
+        label: optional_text(input.label),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Hand-off envelope export
+// ---------------------------------------------------------------------------
+
+/// Envelope schema version — additive changes only within a major version
+/// (docs/HANDOFF.md); breaking changes bump this number.
+pub const HANDOFF_SCHEMA_VERSION: i64 = 1;
+
+/// Product stamp inside every exported envelope.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductInfo {
+    pub name: String,
+    pub version: String,
+}
+
+/// Opportunity wire shape plus the resolved stage name for the envelope.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvelopeOpportunity {
+    #[serde(flatten)]
+    pub opportunity: Opportunity,
+    pub stage_name: String,
+}
+
+/// Versioned opportunity hand-off envelope written by
+/// `export_handoff_envelope` (schema in docs/HANDOFF.md).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffEnvelope {
+    pub schema_version: i64,
+    pub kind: String,
+    pub exported_at: String,
+    pub product: ProductInfo,
+    pub opportunity: EnvelopeOpportunity,
+    pub contact: Option<Contact>,
+    pub company: Option<Company>,
+}
+
+/// Where an envelope landed, for the UI and command log.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvelopeExportReport {
+    pub destination_path: String,
+    pub schema_version: i64,
+}
+
+/// Write a pretty-printed JSON hand-off envelope for one opportunity —
+/// opportunity with money and refs, stage name, and linked contact/company.
+/// Refuses an existing destination unless `overwrite` is set (mirrors
+/// `backup_to`). Export is user-initiated, so the actor is always `user`.
+pub fn export_handoff_envelope(
+    storage: &mut Storage,
+    opportunity_id: &str,
+    destination_path: &str,
+    overwrite: bool,
+) -> Result<EnvelopeExportReport, ApplicationError> {
+    let destination = required_text("destinationPath", destination_path.into(), 4096)?;
+    let detail = get_opportunity(storage, opportunity_id)?;
+    let opportunity = detail.opportunity;
+
+    // Resolve linked records and the stage name outside any transaction —
+    // reads only, matching the other query paths.
+    let stage_name: String = storage.connection().query_row(
+        "SELECT name FROM stages WHERE id = ?1",
+        [&opportunity.stage_id],
+        |row| row.get(0),
+    )?;
+    let contact = match &opportunity.contact_id {
+        Some(contact_id) => Some(get_contact(storage, contact_id)?),
+        None => None,
+    };
+    let company = match &opportunity.company_id {
+        Some(company_id) => Some(get_company(storage, company_id)?),
+        None => None,
+    };
+
+    let envelope = HandoffEnvelope {
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        kind: "opportunity_handoff".into(),
+        exported_at: now_utc(),
+        product: ProductInfo {
+            name: "ContractorCRM".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        opportunity: EnvelopeOpportunity {
+            opportunity,
+            stage_name,
+        },
+        contact,
+        company,
+    };
+
+    let destination_file = std::path::Path::new(&destination);
+    if destination_file.exists() && !overwrite {
+        return Err(ApplicationError::ValidationFailed {
+            code: "destination_exists",
+            field: "destinationPath".into(),
+            message: format!("{destination} already exists; enable overwrite to replace it"),
+        });
+    }
+    if let Some(parent) = destination_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|error| ApplicationError::InvalidStoredData(error.to_string()))?;
+    std::fs::write(destination_file, json)?;
+
+    let transaction = immediate(storage)?;
+    log_command(
+        &transaction,
+        Actor::User,
+        "opportunity",
+        &envelope.opportunity.opportunity.id,
+        &format!(
+            "exported hand-off envelope for opportunity \"{}\" to \"{destination}\"",
+            envelope.opportunity.opportunity.name
+        ),
+    )?;
+    transaction.commit()?;
+    Ok(EnvelopeExportReport {
+        destination_path: destination,
+        schema_version: HANDOFF_SCHEMA_VERSION,
     })
 }
 
@@ -1698,7 +2053,9 @@ const STAGE_COLUMNS: &str =
 
 const OPPORTUNITY_COLUMNS: &str = "id, name, contact_id, company_id, stage_id, value_minor, \
     currency_code, probability_percent, expected_close_date, source, source_label, \
-    lost_reason_id, notes, archived_at, created_at, updated_at, version";
+    lost_reason_id, notes, quote_tool, quote_external_id, quote_label, quote_linked_at, \
+    job_tool, job_external_id, job_label, job_linked_at, \
+    archived_at, created_at, updated_at, version";
 
 /// Row tuple with the raw kind text, finished into a Stage after parsing.
 type StageRow = (Stage, String);
@@ -1825,13 +2182,44 @@ fn opportunity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Opportunity
             source_label: row.get(10)?,
             lost_reason_id: row.get(11)?,
             notes: row.get(12)?,
-            archived_at: row.get(13)?,
-            created_at: row.get(14)?,
-            updated_at: row.get(15)?,
-            version: row.get(16)?,
+            quote_ref: handoff_ref_from_columns(
+                row.get(13)?,
+                row.get(14)?,
+                row.get(15)?,
+                row.get(16)?,
+            ),
+            job_ref: handoff_ref_from_columns(
+                row.get(17)?,
+                row.get(18)?,
+                row.get(19)?,
+                row.get(20)?,
+            ),
+            archived_at: row.get(21)?,
+            created_at: row.get(22)?,
+            updated_at: row.get(23)?,
+            version: row.get(24)?,
         },
         source_text,
     ))
+}
+
+/// Assemble an optional hand-off ref from its four columns; a ref exists only
+/// when tool, external id, and linked timestamp are all present.
+fn handoff_ref_from_columns(
+    tool: Option<String>,
+    external_id: Option<String>,
+    label: Option<String>,
+    linked_at: Option<String>,
+) -> Option<HandoffRef> {
+    match (tool, external_id, linked_at) {
+        (Some(tool), Some(external_id), Some(linked_at)) => Some(HandoffRef {
+            tool,
+            external_id,
+            label,
+            linked_at,
+        }),
+        _ => None,
+    }
 }
 
 /// Parse the stored source text once the rusqlite row mapping is done.

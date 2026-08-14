@@ -7,8 +7,9 @@ use std::sync::Mutex;
 
 use application::{
     ArchiveRequest, CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest,
-    DatabaseInfo, MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem,
-    RestoreReport, UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest,
+    DatabaseInfo, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
+    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport,
+    UnlinkHandoffRequest, UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest,
     UpdateStageRequest,
 };
 use domain::{Company, Contact, LostReason, Opportunity, Stage};
@@ -320,6 +321,61 @@ fn move_opportunity_stage(
     application::move_opportunity_stage(&mut storage, request).map_err(Into::into)
 }
 
+// Hand-off commands — quote/job references and the versioned envelope export.
+
+#[tauri::command]
+fn link_quote(
+    storage: State<'_, SharedStorage>,
+    request: LinkQuoteRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::link_quote(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn unlink_quote(
+    storage: State<'_, SharedStorage>,
+    request: UnlinkHandoffRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::unlink_quote(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn link_job(
+    storage: State<'_, SharedStorage>,
+    request: LinkJobRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::link_job(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn unlink_job(
+    storage: State<'_, SharedStorage>,
+    request: UnlinkHandoffRequest,
+) -> Result<Opportunity, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::unlink_job(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn export_handoff_envelope(
+    storage: State<'_, SharedStorage>,
+    opportunity_id: String,
+    destination_path: String,
+    overwrite: bool,
+) -> Result<EnvelopeExportReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::export_handoff_envelope(
+        &mut storage,
+        &opportunity_id,
+        &destination_path,
+        overwrite,
+    )
+    .map_err(Into::into)
+}
+
 // Database maintenance commands — backup/restore snapshots and storage info.
 
 #[tauri::command]
@@ -382,6 +438,11 @@ pub fn run() {
             list_opportunities,
             get_opportunity,
             move_opportunity_stage,
+            link_quote,
+            unlink_quote,
+            link_job,
+            unlink_job,
+            export_handoff_envelope,
             backup_database,
             restore_database,
             get_database_info

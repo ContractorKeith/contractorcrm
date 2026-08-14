@@ -70,12 +70,12 @@ fn schema_migrations_records_versions_and_rerunning_is_a_no_op() {
     let database_path = temp.path().join("contractorcrm.sqlite3");
 
     let storage = Storage::open(&database_path).expect("first open");
-    assert_eq!(applied_versions(&storage), vec![1, 2]);
+    assert_eq!(applied_versions(&storage), vec![1, 2, 3]);
     drop(storage);
 
     // Reopening re-runs the migration framework; applied versions are skipped.
     let reopened = Storage::open(&database_path).expect("second open");
-    assert_eq!(applied_versions(&reopened), vec![1, 2]);
+    assert_eq!(applied_versions(&reopened), vec![1, 2, 3]);
     assert_eq!(table_names(&reopened), EXPECTED_TABLES);
 }
 

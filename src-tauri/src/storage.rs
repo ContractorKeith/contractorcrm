@@ -191,6 +191,20 @@ INSERT INTO lost_reasons (id, label, sort_key, active) VALUES
     ('lost-reason-out-of-scope', 'Out of scope', 4, 1);
 ";
 
+/// v3 hand-off reference columns per docs/DATA_MODEL.md — quote_ref and
+/// job_ref stored as four queryable columns each on opportunities (tool,
+/// external id, label, linked timestamp). All nullable: unlinked by default.
+const MIGRATION_003: &str = "\
+ALTER TABLE opportunities ADD COLUMN quote_tool TEXT;
+ALTER TABLE opportunities ADD COLUMN quote_external_id TEXT;
+ALTER TABLE opportunities ADD COLUMN quote_label TEXT;
+ALTER TABLE opportunities ADD COLUMN quote_linked_at TEXT;
+ALTER TABLE opportunities ADD COLUMN job_tool TEXT;
+ALTER TABLE opportunities ADD COLUMN job_external_id TEXT;
+ALTER TABLE opportunities ADD COLUMN job_label TEXT;
+ALTER TABLE opportunities ADD COLUMN job_linked_at TEXT;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -200,6 +214,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 2,
         sql: MIGRATION_002,
+    },
+    Migration {
+        version: 3,
+        sql: MIGRATION_003,
     },
 ];
 

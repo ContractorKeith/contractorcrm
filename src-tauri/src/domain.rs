@@ -275,6 +275,20 @@ pub struct Money {
     pub currency_code: String,
 }
 
+/// Reference to a record in another tool — a quote or a ContractorProject
+/// job — stored on the opportunity once the hand-off happens.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffRef {
+    /// Which external tool owns the record, e.g. "contractorproject".
+    pub tool: String,
+    /// The record's id inside that tool.
+    pub external_id: String,
+    /// Human-readable label, e.g. "Q-123".
+    pub label: Option<String>,
+    pub linked_at: String,
+}
+
 /// Potential work moving through the pipeline toward won or lost.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -291,6 +305,8 @@ pub struct Opportunity {
     pub source_label: Option<String>,
     pub lost_reason_id: Option<String>,
     pub notes: Option<String>,
+    pub quote_ref: Option<HandoffRef>,
+    pub job_ref: Option<HandoffRef>,
     pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,

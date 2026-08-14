@@ -84,6 +84,8 @@ Other OpenContractorOS modules are just MCP clients of this helper. The hand-off
 
 The CRM never writes into another module's database, and vice versa. Envelope schemas are versioned independently of the MCP API version.
 
+The envelope schema, link commands, and won-stage rule are documented in `docs/HANDOFF.md`.
+
 ## Versioning
 
 - The helper reports product and API versions during initialization.
