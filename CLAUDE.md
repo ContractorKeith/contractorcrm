@@ -14,6 +14,7 @@ v0.1 planning — last touched 2026-08-14. No code yet; docs-first.
 ## Planning baseline
 
 - `docs/PRODUCT_BRIEF.md` is the product scope. Start here.
+- `docs/FEATURES.md` is the detailed feature list, suite connections, and AI-native touches.
 - Architecture, data model, local API, and MVP plan docs will follow the same doc layout
   as ContractorProject (`docs/ARCHITECTURE.md`, `docs/DATA_MODEL.md`, `docs/LOCAL_API.md`,
   `docs/MVP_PLAN.md`).
