@@ -50,6 +50,27 @@ describe("contact list and detail", () => {
     expect(within(table).getByText("Marco Bell")).toBeVisible();
   });
 
+  it("renders the last-contacted and next-task projection columns", async () => {
+    const client = stubClient({
+      listContacts: vi.fn().mockResolvedValue([
+        {
+          ...makeContact({ id: "c1", displayName: "Dana Ruiz" }),
+          lastContactedAt: "2026-08-12T15:00:00Z",
+          nextOpenTaskDueAt: "2026-08-20T16:00:00Z",
+        },
+      ]),
+    });
+
+    render(<App client={client} />);
+
+    const table = await screen.findByRole("table", { name: "Contact list" });
+    expect(within(table).getByRole("columnheader", { name: "Last contacted" })).toBeVisible();
+    expect(within(table).getByRole("columnheader", { name: "Next task" })).toBeVisible();
+    const row = within(table).getAllByRole("row")[1]!;
+    expect(within(row).getByText("2026-08-12T15:00:00Z")).toBeVisible();
+    expect(within(row).getByText("2026-08-20T16:00:00Z")).toBeVisible();
+  });
+
   it("moves selection with arrow keys and opens the record with Enter", async () => {
     const user = userEvent.setup();
     const contacts = [

@@ -1,27 +1,38 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  Activity,
   ArchiveRequest,
   AttentionFlag,
   AttentionThresholds,
   Company,
+  CompleteTaskRequest,
   Contact,
   ContactListItem,
   CreateCompanyRequest,
   CreateContactRequest,
   CreateOpportunityRequest,
+  CreateTaskRequest,
+  DeleteActivityRequest,
   HealthReport,
+  ListTasksRequest,
+  LogActivityRequest,
   LostReason,
   MoveOpportunityStageRequest,
   Opportunity,
   OpportunityDetail,
   OpportunityListItem,
+  ParentType,
   SetAttentionThresholdsRequest,
   Stage,
+  Task,
+  TaskActionRequest,
+  UpdateActivityRequest,
   UpdateCompanyRequest,
   UpdateContactRequest,
   UpdateOpportunityRequest,
   UpdateStageRequest,
+  UpdateTaskRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -50,6 +61,17 @@ export interface CoreClient {
   listOpportunities(includeArchived: boolean): Promise<OpportunityListItem[]>;
   getOpportunity(opportunityId: string): Promise<OpportunityDetail>;
   moveOpportunityStage(request: MoveOpportunityStageRequest): Promise<Opportunity>;
+  logActivity(request: LogActivityRequest): Promise<Activity>;
+  updateActivity(request: UpdateActivityRequest): Promise<Activity>;
+  deleteActivity(request: DeleteActivityRequest): Promise<void>;
+  getTimeline(parentType: ParentType, parentId: string, includeRelated: boolean): Promise<Activity[]>;
+  createTask(request: CreateTaskRequest): Promise<Task>;
+  updateTask(request: UpdateTaskRequest): Promise<Task>;
+  completeTask(request: CompleteTaskRequest): Promise<Task>;
+  reopenTask(request: TaskActionRequest): Promise<Task>;
+  dropTask(request: TaskActionRequest): Promise<Task>;
+  deleteTask(request: TaskActionRequest): Promise<void>;
+  listTasks(request: ListTasksRequest): Promise<Task[]>;
   getAttentionFlags(referenceTime?: string): Promise<AttentionFlag[]>;
   getAttentionThresholds(): Promise<AttentionThresholds>;
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
@@ -80,6 +102,18 @@ export const tauriCoreClient: CoreClient = {
   listOpportunities: (includeArchived) => invoke("list_opportunities", { includeArchived }),
   getOpportunity: (opportunityId) => invoke("get_opportunity", { opportunityId }),
   moveOpportunityStage: (request) => invoke("move_opportunity_stage", { request }),
+  logActivity: (request) => invoke("log_activity", { request }),
+  updateActivity: (request) => invoke("update_activity", { request }),
+  deleteActivity: (request) => invoke("delete_activity", { request }),
+  getTimeline: (parentType, parentId, includeRelated) =>
+    invoke("get_timeline", { parentType, parentId, includeRelated }),
+  createTask: (request) => invoke("create_task", { request }),
+  updateTask: (request) => invoke("update_task", { request }),
+  completeTask: (request) => invoke("complete_task", { request }),
+  reopenTask: (request) => invoke("reopen_task", { request }),
+  dropTask: (request) => invoke("drop_task", { request }),
+  deleteTask: (request) => invoke("delete_task", { request }),
+  listTasks: (request) => invoke("list_tasks", { request }),
   getAttentionFlags: (referenceTime) => invoke("get_attention_flags", { referenceTime }),
   getAttentionThresholds: () => invoke("get_attention_thresholds"),
   setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),

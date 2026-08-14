@@ -946,3 +946,154 @@ h1 {
   --brand-accent: var(--color-steel);
   color-scheme: dark;
 }
+
+/* — activity timeline (contact, company, and opportunity detail) — */
+
+.timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.timeline-form {
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.field textarea {
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-table);
+}
+
+.timeline-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+  font-size: var(--font-size-table);
+}
+
+.timeline-entry--editing {
+  display: block;
+}
+
+.timeline-kind {
+  flex: 0 0 110px;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-body-medium);
+}
+
+.timeline-main {
+  flex: 1;
+}
+
+.timeline-summary {
+  font-weight: var(--font-body-medium);
+}
+
+.timeline-body {
+  margin: var(--space-1) 0 0;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+  white-space: pre-wrap;
+}
+
+.timeline-meta {
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* — tasks — */
+
+.task-editor {
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* Attention hue is never the only channel — pair with an "Overdue" flag. */
+.cell-attention {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--state-attention);
+  font-weight: var(--font-body-medium);
+}
+
+[data-theme="dark"] .cell-attention {
+  color: var(--color-accent-300);
+}
+
+.cell-flag--attention {
+  color: var(--state-attention);
+  border-color: var(--state-attention);
+}
+
+[data-theme="dark"] .cell-flag--attention {
+  color: var(--color-accent-300);
+  border-color: var(--color-accent-300);
+}
+
+/* — needs-attention view — */
+
+.attention-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attention-flag {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  min-height: var(--row-h);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+  font-size: var(--font-size-table);
+}
+
+.attention-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-action);
+  font: inherit;
+  font-weight: var(--font-body-medium);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.attention-link:hover {
+  color: var(--color-action-hover);
+}
+
+.attention-explanation {
+  color: var(--color-neutral-700);
+}

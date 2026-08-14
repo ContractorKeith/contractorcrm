@@ -5,11 +5,13 @@ import type {
   ChannelKind,
   Company,
   Contact,
+  ContactListItem,
   ContactPatch,
   ContactRole,
   PartyKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef } from "../components/RecordTable";
+import { ActivityTimeline } from "./timeline";
 import {
   CONTACT_ROLE_OPTIONS,
   ConflictBanner,
@@ -40,7 +42,7 @@ interface ContactsViewProps {
 }
 
 export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
-  const [contacts, setContacts] = useState<Contact[] | null>(null);
+  const [contacts, setContacts] = useState<ContactListItem[] | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -65,7 +67,7 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const companyName = (companyId: string | null) =>
     companies.find((company) => company.id === companyId)?.name ?? "—";
 
-  const columns: ColumnDef<Contact>[] = [
+  const columns: ColumnDef<ContactListItem>[] = [
     {
       key: "name",
       header: "Name",
@@ -80,6 +82,17 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     { key: "kind", header: "Kind", render: (contact) => partyKindLabel(contact.kind) },
     { key: "role", header: "Role", render: (contact) => contactRoleLabel(contact.role) },
     { key: "channel", header: "Preferred channel", render: bestChannel },
+    // Read-time projections computed by the core from activities and tasks.
+    {
+      key: "lastContacted",
+      header: "Last contacted",
+      render: (contact) => contact.lastContactedAt ?? "—",
+    },
+    {
+      key: "nextTask",
+      header: "Next task",
+      render: (contact) => contact.nextOpenTaskDueAt ?? "—",
+    },
     {
       key: "favorite",
       header: "Favorite",
@@ -252,6 +265,8 @@ export function ContactDetailView({ client, contactId, onBack, onEdit }: Contact
           ))}
         </ul>
       )}
+
+      <ActivityTimeline client={client} parentType="contact" parentId={contact.id} />
     </section>
   );
 }

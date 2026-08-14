@@ -13,6 +13,7 @@ import {
   saveErrorFrom,
   type SaveError,
 } from "./form-support";
+import { ActivityTimeline } from "./timeline";
 
 // ---------------------------------------------------------------------------
 // Company list
@@ -212,6 +213,8 @@ export function CompanyDetailView({ client, companyId, onBack, onEdit }: Company
           </div>
         ))}
       </dl>
+
+      <ActivityTimeline client={client} parentType="company" parentId={company.id} />
     </section>
   );
 }

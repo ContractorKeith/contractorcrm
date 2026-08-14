@@ -50,6 +50,29 @@ describe("pipeline table", () => {
     expect(within(row).getByText("Referral")).toBeVisible();
   });
 
+  it("renders the last-contacted and next-task projection columns", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listOpportunities: vi.fn().mockResolvedValue([
+        makeOpportunity({
+          id: "o1",
+          lastContactedAt: "2026-08-12T15:00:00Z",
+          nextOpenTaskDueAt: "2026-08-20T16:00:00Z",
+        }),
+      ]),
+    });
+
+    render(<App client={client} />);
+    await openPipeline(user);
+
+    const table = await screen.findByRole("table", { name: "Pipeline list" });
+    expect(within(table).getByRole("columnheader", { name: "Last contacted" })).toBeVisible();
+    expect(within(table).getByRole("columnheader", { name: "Next task" })).toBeVisible();
+    const row = within(table).getAllByRole("row")[1]!;
+    expect(within(row).getByText("2026-08-12T15:00:00Z")).toBeVisible();
+    expect(within(row).getByText("2026-08-20T16:00:00Z")).toBeVisible();
+  });
+
   it("sorts by value on header click and reports aria-sort", async () => {
     const user = userEvent.setup();
     const client = stubClient({
@@ -282,6 +305,35 @@ describe("opportunity detail and stage moves", () => {
 
     expect(await screen.findByText(/changed outside this form/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Reload latest" })).toBeVisible();
+  });
+
+  it("shows an em dash for the source when the kind is unset, even with a label", async () => {
+    const user = userEvent.setup();
+    const client = detailClient({
+      getOpportunity: vi.fn().mockResolvedValue(
+        makeOpportunityDetail({ source: null, sourceLabel: "Angie's List" }),
+      ),
+    });
+
+    render(<App client={client} />);
+    await openDetail(user);
+
+    // The free-text label never stands in for a missing source kind.
+    expect(screen.queryByText(/Angie's List/)).not.toBeInTheDocument();
+  });
+
+  it("appends the free-text label to a set source kind", async () => {
+    const user = userEvent.setup();
+    const client = detailClient({
+      getOpportunity: vi.fn().mockResolvedValue(
+        makeOpportunityDetail({ source: "referral", sourceLabel: "referred by Dana" }),
+      ),
+    });
+
+    render(<App client={client} />);
+    await openDetail(user);
+
+    expect(screen.getByText("Referral · referred by Dana")).toBeVisible();
   });
 
   it("renders the stage history newest-first with actor and lost reason", async () => {

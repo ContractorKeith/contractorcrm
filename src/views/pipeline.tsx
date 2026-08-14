@@ -22,6 +22,7 @@ import {
   saveErrorFrom,
   type SaveError,
 } from "./form-support";
+import { ActivityTimeline } from "./timeline";
 
 // Wire enum options with contractor-facing labels.
 export const OPPORTUNITY_SOURCE_OPTIONS: { value: OpportunitySource; label: string }[] = [
@@ -32,13 +33,14 @@ export const OPPORTUNITY_SOURCE_OPTIONS: { value: OpportunitySource; label: stri
   { value: "other", label: "Other" },
 ];
 
+// "—" when the source kind is unset (same convention as the other rows); the
+// free-text label only ever appends to a set kind.
 function sourceLabel(opportunity: Opportunity): string {
-  if (opportunity.sourceLabel) return opportunity.sourceLabel;
   if (!opportunity.source) return "—";
-  return (
+  const kind =
     OPPORTUNITY_SOURCE_OPTIONS.find((option) => option.value === opportunity.source)?.label ??
-    opportunity.source
-  );
+    opportunity.source;
+  return opportunity.sourceLabel ? `${kind} · ${opportunity.sourceLabel}` : kind;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +271,17 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
       render: (o) => o.expectedCloseDate ?? "—",
     },
     { key: "source", header: "Source", render: sourceLabel },
+    // Read-time projections computed by the core from activities and tasks.
+    {
+      key: "lastContacted",
+      header: "Last contacted",
+      render: (o) => o.lastContactedAt ?? "—",
+    },
+    {
+      key: "nextTask",
+      header: "Next task",
+      render: (o) => o.nextOpenTaskDueAt ?? "—",
+    },
   ];
 
   return (
@@ -548,6 +561,9 @@ export function OpportunityDetailView({
           ))}
         </ul>
       )}
+
+      {/* Activities are a separate section from the append-only stage history. */}
+      <ActivityTimeline client={client} parentType="opportunity" parentId={detail.id} />
     </section>
   );
 }

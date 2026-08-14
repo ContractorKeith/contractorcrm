@@ -2,6 +2,8 @@ import { vi } from "vitest";
 
 import type { CoreClient } from "../api/client";
 import type {
+  Activity,
+  AttentionFlag,
   Company,
   Contact,
   LostReason,
@@ -9,6 +11,7 @@ import type {
   OpportunityListItem,
   Stage,
   StageHistoryEntry,
+  Task,
 } from "../api/types";
 
 // Fully-stubbed CoreClient; tests override the methods they care about.
@@ -36,6 +39,17 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listOpportunities: vi.fn().mockResolvedValue([]),
   getOpportunity: vi.fn(),
   moveOpportunityStage: vi.fn(),
+  logActivity: vi.fn(),
+  updateActivity: vi.fn(),
+  deleteActivity: vi.fn(),
+  getTimeline: vi.fn().mockResolvedValue([]),
+  createTask: vi.fn(),
+  updateTask: vi.fn(),
+  completeTask: vi.fn(),
+  reopenTask: vi.fn(),
+  dropTask: vi.fn(),
+  deleteTask: vi.fn(),
+  listTasks: vi.fn().mockResolvedValue([]),
   getAttentionFlags: vi.fn().mockResolvedValue([]),
   getAttentionThresholds: vi.fn().mockResolvedValue({
     staleLeadDays: 21,
@@ -158,6 +172,49 @@ export const makeStageHistoryEntry = (
   actor: "user",
   lostReasonId: null,
   createdAt: "2026-08-14T12:00:00Z",
+  ...overrides,
+});
+
+export const makeActivity = (overrides: Partial<Activity> = {}): Activity => ({
+  id: "act-1",
+  parentType: "contact",
+  parentId: "contact-1",
+  kind: "call",
+  direction: "outbound",
+  occurredAt: "2026-08-14T15:00:00Z",
+  summary: "Called about the estimate",
+  body: null,
+  actor: "user",
+  createdAt: "2026-08-14T15:00:00Z",
+  updatedAt: "2026-08-14T15:00:00Z",
+  version: 1,
+  ...overrides,
+});
+
+export const makeTask = (overrides: Partial<Task> = {}): Task => ({
+  id: "task-1",
+  title: "Follow up with Dana",
+  body: null,
+  parentType: "contact",
+  parentId: "contact-1",
+  dueAt: "2026-08-20T16:00:00Z",
+  remindAt: null,
+  priority: "normal",
+  status: "open",
+  completedAt: null,
+  createdAt: "2026-08-14T12:00:00Z",
+  updatedAt: "2026-08-14T12:00:00Z",
+  version: 1,
+  ...overrides,
+});
+
+export const makeAttentionFlag = (overrides: Partial<AttentionFlag> = {}): AttentionFlag => ({
+  id: "flag-1",
+  rule: "overdue_task",
+  recordType: "task",
+  recordId: "task-1",
+  recordDisplayName: "Follow up with Dana",
+  explanation: 'Task "Follow up with Dana" is overdue.',
   ...overrides,
 });
 

@@ -270,6 +270,128 @@ export interface UpdateStageRequest {
   sortKey: number;
 }
 
+// Which record type an activity or task hangs off — its polymorphic parent.
+export type ParentType = "contact" | "company" | "opportunity";
+
+export type ActivityKind = "call" | "email" | "text" | "site_visit" | "meeting" | "note";
+export type ActivityDirection = "inbound" | "outbound" | "none";
+
+// One logged touch on a contact, company, or opportunity. occurredAt is
+// user-editable UTC ISO-8601; timelines sort by it, not createdAt.
+export interface Activity {
+  id: string;
+  parentType: ParentType;
+  parentId: string;
+  kind: ActivityKind;
+  direction: ActivityDirection;
+  occurredAt: string;
+  summary: string;
+  body: string | null;
+  actor: Actor;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+// Editable activity fields; updates replace the full editable set (v1).
+// direction defaults to "none" and occurredAt to now when absent.
+export interface ActivityPatch {
+  kind: ActivityKind;
+  direction?: ActivityDirection;
+  occurredAt?: string;
+  summary: string;
+  body: string | null;
+}
+
+// Log flattens the patch on the wire; the parent never changes after logging.
+export type LogActivityRequest = {
+  actor?: Actor;
+  parentType: ParentType;
+  parentId: string;
+} & ActivityPatch;
+
+export interface UpdateActivityRequest {
+  actor?: Actor;
+  activityId: string;
+  expectedVersion: number;
+  patch: ActivityPatch;
+}
+
+// Hard delete — activities are user notes, so there is no archive state.
+export interface DeleteActivityRequest {
+  actor?: Actor;
+  activityId: string;
+  expectedVersion: number;
+}
+
+export type TaskPriority = "low" | "normal" | "high";
+export type TaskStatus = "open" | "done" | "dropped";
+
+// A follow-up or to-do, optionally hanging off a contact, company, or
+// opportunity; personal tasks have no parent. Timestamps are UTC ISO-8601.
+export interface Task {
+  id: string;
+  title: string;
+  body: string | null;
+  parentType: ParentType | null;
+  parentId: string | null;
+  dueAt: string | null;
+  remindAt: string | null;
+  priority: TaskPriority;
+  status: TaskStatus;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+// Editable task fields; status moves through complete/reopen/drop, never
+// through updates. Parent fields are set together or not at all.
+export interface TaskPatch {
+  title: string;
+  body?: string | null;
+  parentType?: ParentType | null;
+  parentId?: string | null;
+  dueAt?: string | null;
+  remindAt?: string | null;
+  priority?: TaskPriority;
+}
+
+// Create flattens the patch on the wire; actor defaults to "user".
+export type CreateTaskRequest = { actor?: Actor } & TaskPatch;
+
+export interface UpdateTaskRequest {
+  actor?: Actor;
+  taskId: string;
+  expectedVersion: number;
+  patch: TaskPatch;
+}
+
+export interface CompleteTaskRequest {
+  actor?: Actor;
+  taskId: string;
+  expectedVersion: number;
+  // Also log a "Completed task" note on the task's parent in the same
+  // transaction; invalid for a task with no parent.
+  logActivity?: boolean;
+}
+
+// Shared shape for reopen, drop, and hard delete of a task.
+export interface TaskActionRequest {
+  actor?: Actor;
+  taskId: string;
+  expectedVersion: number;
+}
+
+// Filter shape for list_tasks: absent status means every status; overdueOnly
+// implies open + past dueAt; parent fields go together or not at all.
+export interface ListTasksRequest {
+  status?: TaskStatus;
+  overdueOnly?: boolean;
+  parentType?: ParentType;
+  parentId?: string;
+}
+
 // Needs-attention thresholds (src-tauri/src/attention.rs); persisted in
 // app_settings, defaults 21 / 7 / "Proposal Sent".
 export interface AttentionThresholds {
