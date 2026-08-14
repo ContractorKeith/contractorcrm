@@ -228,6 +228,32 @@ CREATE INDEX activities_parent ON activities(parent_type, parent_id, occurred_at
 CREATE INDEX activities_occurred ON activities(occurred_at);
 ";
 
+/// v5 tasks table per docs/DATA_MODEL.md — follow-ups with due dates,
+/// reminders, and priorities. The parent is optional (personal tasks have
+/// none) but parent_type and parent_id are set together or not at all; like
+/// activities there is no FK on parent_id — the application layer validates
+/// parent existence.
+const MIGRATION_005: &str = "\
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT,
+    parent_type TEXT CHECK (parent_type IN ('contact', 'company', 'opportunity')),
+    parent_id TEXT,
+    due_at TEXT,
+    remind_at TEXT,
+    priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dropped')),
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    CHECK ((parent_type IS NULL) = (parent_id IS NULL))
+);
+CREATE INDEX tasks_status_due ON tasks(status, due_at);
+CREATE INDEX tasks_parent ON tasks(parent_type, parent_id);
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -245,6 +271,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 4,
         sql: MIGRATION_004,
+    },
+    Migration {
+        version: 5,
+        sql: MIGRATION_005,
     },
 ];
 

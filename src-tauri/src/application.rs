@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{
     Activity, ActivityDirection, ActivityKind, Actor, ChannelKind, Company, Contact,
     ContactChannel, ContactRole, HandoffRef, LostReason, Money, Opportunity, OpportunitySource,
-    ParentType, PartyKind, Stage, StageHistoryEntry, StageKind,
+    ParentType, PartyKind, Stage, StageHistoryEntry, StageKind, Task, TaskPriority, TaskStatus,
 };
 use crate::error::ApplicationError;
 use crate::storage::{new_id, now_utc, Storage};
@@ -1301,6 +1301,426 @@ pub fn get_timeline(
 }
 
 // ---------------------------------------------------------------------------
+// Task requests (camelCase)
+// ---------------------------------------------------------------------------
+
+/// Editable task fields; updates replace the full editable set (v1).
+/// Status moves through complete/reopen/drop, never through updates.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPatch {
+    pub title: String,
+    /// Markdown, optional.
+    pub body: Option<String>,
+    /// Wire enum value: "contact", "company", or "opportunity"; optional —
+    /// personal tasks have none. Set together with parentId or not at all.
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    /// UTC ISO-8601 timestamps, both optional.
+    pub due_at: Option<String>,
+    pub remind_at: Option<String>,
+    /// Wire enum value; defaults to "normal" when absent.
+    pub priority: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTaskRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    #[serde(flatten)]
+    pub task: TaskPatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub task_id: String,
+    pub expected_version: i64,
+    pub patch: TaskPatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompleteTaskRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub task_id: String,
+    pub expected_version: i64,
+    /// Also log a "Completed task: …" note on the task's parent in the same
+    /// transaction; invalid for a task with no parent.
+    #[serde(default)]
+    pub log_activity: bool,
+}
+
+/// Shared shape for reopen, drop, and hard delete of a task.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskActionRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub task_id: String,
+    pub expected_version: i64,
+}
+
+/// Filter shape for `list_tasks`: one optional status ("open", "done", or
+/// "dropped"; absent means every status — this replaces a separate
+/// include_done flag), an overdue-only switch (implies open + past due_at),
+/// and an optional parent (both fields together or neither).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTasksRequest {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub overdue_only: bool,
+    #[serde(default)]
+    pub parent_type: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Task use-cases
+// ---------------------------------------------------------------------------
+
+/// Create a task; a linked parent is optional but must exist when given
+/// (validated here — the table has no FK on the polymorphic parent_id).
+pub fn create_task(
+    storage: &mut Storage,
+    request: CreateTaskRequest,
+) -> Result<Task, ApplicationError> {
+    let fields = validate_task_patch(request.task)?;
+    let now = now_utc();
+    let task_id = new_id();
+
+    let transaction = immediate(storage)?;
+    if let Some((parent_type, parent_id)) = &fields.parent {
+        require_activity_parent(&transaction, *parent_type, parent_id)?;
+    }
+    transaction.execute(
+        "INSERT INTO tasks (
+            id, title, body, parent_type, parent_id, due_at, remind_at,
+            priority, status, completed_at, created_at, updated_at, version
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'open', NULL, ?9, ?9, 1)",
+        params![
+            task_id,
+            fields.title,
+            fields.body,
+            fields
+                .parent
+                .as_ref()
+                .map(|(parent_type, _)| parent_type.as_database_value()),
+            fields.parent.as_ref().map(|(_, parent_id)| parent_id),
+            fields.due_at,
+            fields.remind_at,
+            fields.priority.as_database_value(),
+            now,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &task_id,
+        &format!("created task \"{}\"", fields.title),
+    )?;
+    let task = require_task(&transaction, &task_id)?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+/// Replace a task's editable fields (title/body/parent/due/remind/priority);
+/// status and completed_at only move through complete/reopen/drop.
+pub fn update_task(
+    storage: &mut Storage,
+    request: UpdateTaskRequest,
+) -> Result<Task, ApplicationError> {
+    let fields = validate_task_patch(request.patch)?;
+    let transaction = immediate(storage)?;
+    let existing = require_task(&transaction, &request.task_id)?;
+    check_version(
+        "task",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    if let Some((parent_type, parent_id)) = &fields.parent {
+        require_activity_parent(&transaction, *parent_type, parent_id)?;
+    }
+
+    transaction.execute(
+        "UPDATE tasks SET
+            title = ?2, body = ?3, parent_type = ?4, parent_id = ?5,
+            due_at = ?6, remind_at = ?7, priority = ?8, updated_at = ?9,
+            version = ?10
+         WHERE id = ?1",
+        params![
+            existing.id,
+            fields.title,
+            fields.body,
+            fields
+                .parent
+                .as_ref()
+                .map(|(parent_type, _)| parent_type.as_database_value()),
+            fields.parent.as_ref().map(|(_, parent_id)| parent_id),
+            fields.due_at,
+            fields.remind_at,
+            fields.priority.as_database_value(),
+            now_utc(),
+            existing.version + 1,
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &existing.id,
+        &format!("updated task \"{}\"", fields.title),
+    )?;
+    let task = require_task(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+/// Mark an open task done, stamping completed_at. With `log_activity`, a
+/// "Completed task: …" note lands on the task's parent in the same
+/// transaction; a parentless task cannot log one.
+pub fn complete_task(
+    storage: &mut Storage,
+    request: CompleteTaskRequest,
+) -> Result<Task, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_task(&transaction, &request.task_id)?;
+    check_version(
+        "task",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    if existing.status != TaskStatus::Open {
+        return Err(ApplicationError::ValidationFailed {
+            code: "task_not_open",
+            field: "taskId".into(),
+            message: format!(
+                "cannot complete task \"{}\": it is {}, not open",
+                existing.title,
+                existing.status.as_database_value()
+            ),
+        });
+    }
+    if request.log_activity && existing.parent_type.is_none() {
+        return Err(ApplicationError::InvalidInput {
+            field: "logActivity".into(),
+            message: "cannot log an activity for a task with no parent".into(),
+        });
+    }
+
+    let now = now_utc();
+    transaction.execute(
+        "UPDATE tasks SET status = 'done', completed_at = ?2, updated_at = ?2, version = ?3
+         WHERE id = ?1",
+        params![existing.id, now, existing.version + 1],
+    )?;
+    if request.log_activity {
+        // Parent presence was checked above; copy it onto the note.
+        let (parent_type, parent_id) = (
+            existing.parent_type.expect("checked above"),
+            existing.parent_id.clone().expect("checked above"),
+        );
+        let activity_id = new_id();
+        let summary = format!("Completed task: {}", existing.title);
+        transaction.execute(
+            "INSERT INTO activities (
+                id, parent_type, parent_id, kind, direction, occurred_at,
+                summary, body, actor, created_at, updated_at, version
+             ) VALUES (?1, ?2, ?3, 'note', 'none', ?4, ?5, NULL, ?6, ?4, ?4, 1)",
+            params![
+                activity_id,
+                parent_type.as_database_value(),
+                parent_id,
+                now,
+                summary,
+                request.actor.as_database_value(),
+            ],
+        )?;
+        log_command(
+            &transaction,
+            request.actor,
+            "activity",
+            &activity_id,
+            &format!("logged note activity \"{summary}\""),
+        )?;
+    }
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &existing.id,
+        &format!("completed task \"{}\"", existing.title),
+    )?;
+    let task = require_task(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+/// Bring a done or dropped task back to open, clearing completed_at.
+pub fn reopen_task(
+    storage: &mut Storage,
+    request: TaskActionRequest,
+) -> Result<Task, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_task(&transaction, &request.task_id)?;
+    check_version(
+        "task",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    if existing.status == TaskStatus::Open {
+        return Err(ApplicationError::ValidationFailed {
+            code: "task_already_open",
+            field: "taskId".into(),
+            message: format!("task \"{}\" is already open", existing.title),
+        });
+    }
+
+    transaction.execute(
+        "UPDATE tasks SET status = 'open', completed_at = NULL, updated_at = ?2, version = ?3
+         WHERE id = ?1",
+        params![existing.id, now_utc(), existing.version + 1],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &existing.id,
+        &format!("reopened task \"{}\"", existing.title),
+    )?;
+    let task = require_task(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+/// Drop an open task — abandoned, not done, so completed_at stays null.
+pub fn drop_task(
+    storage: &mut Storage,
+    request: TaskActionRequest,
+) -> Result<Task, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_task(&transaction, &request.task_id)?;
+    check_version(
+        "task",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    if existing.status != TaskStatus::Open {
+        return Err(ApplicationError::ValidationFailed {
+            code: "task_not_open",
+            field: "taskId".into(),
+            message: format!(
+                "cannot drop task \"{}\": it is {}, not open",
+                existing.title,
+                existing.status.as_database_value()
+            ),
+        });
+    }
+
+    transaction.execute(
+        "UPDATE tasks SET status = 'dropped', updated_at = ?2, version = ?3 WHERE id = ?1",
+        params![existing.id, now_utc(), existing.version + 1],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &existing.id,
+        &format!("dropped task \"{}\"", existing.title),
+    )?;
+    let task = require_task(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+/// Hard-delete a task (they are user to-dos — no archive convention);
+/// requires the expected version and logs the command.
+pub fn delete_task(
+    storage: &mut Storage,
+    request: TaskActionRequest,
+) -> Result<(), ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_task(&transaction, &request.task_id)?;
+    check_version(
+        "task",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    transaction.execute("DELETE FROM tasks WHERE id = ?1", [&existing.id])?;
+    log_command(
+        &transaction,
+        request.actor,
+        "task",
+        &existing.id,
+        &format!("deleted task \"{}\"", existing.title),
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// List tasks ordered by due date (nulls last), then priority (high first),
+/// then id. Overdue means status open with due_at before now — UTC ISO-8601
+/// strings compare correctly as text.
+pub fn list_tasks(
+    storage: &Storage,
+    request: ListTasksRequest,
+) -> Result<Vec<Task>, ApplicationError> {
+    let status = match optional_text(request.status) {
+        None => None,
+        Some(value) => Some(TaskStatus::from_database_value(&value).ok_or_else(|| {
+            ApplicationError::InvalidInput {
+                field: "status".into(),
+                message: format!("unknown status \"{value}\"; expected one of open, done, dropped"),
+            }
+        })?),
+    };
+    let parent = parse_optional_parent(request.parent_type, request.parent_id)?;
+
+    let mut clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(status) = status {
+        clauses.push("status = ?".into());
+        binds.push(status.as_database_value().into());
+    }
+    if request.overdue_only {
+        clauses.push("status = 'open' AND due_at IS NOT NULL AND due_at < ?".into());
+        binds.push(now_utc());
+    }
+    if let Some((parent_type, parent_id)) = parent {
+        clauses.push("parent_type = ? AND parent_id = ?".into());
+        binds.push(parent_type.as_database_value().into());
+        binds.push(parent_id);
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
+    let mut statement = storage.connection().prepare(&format!(
+        "SELECT {TASK_COLUMNS} FROM tasks {where_sql}
+         ORDER BY (due_at IS NULL), due_at,
+                  CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, id"
+    ))?;
+    let rows = statement
+        .query_map(rusqlite::params_from_iter(binds.iter()), task_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(finish_task).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Hand-off use-cases (quote/job references + envelope export)
 // ---------------------------------------------------------------------------
 
@@ -2042,6 +2462,54 @@ fn validate_activity_patch(patch: ActivityPatch) -> Result<ValidActivityFields, 
     })
 }
 
+/// Task patch after validation, with a parsed optional parent and priority.
+struct ValidTaskFields {
+    title: String,
+    body: Option<String>,
+    parent: Option<(ParentType, String)>,
+    due_at: Option<String>,
+    remind_at: Option<String>,
+    priority: TaskPriority,
+}
+
+fn validate_task_patch(patch: TaskPatch) -> Result<ValidTaskFields, ApplicationError> {
+    let priority = match optional_text(patch.priority) {
+        None => TaskPriority::Normal,
+        Some(value) => TaskPriority::from_database_value(&value).ok_or_else(|| {
+            ApplicationError::InvalidInput {
+                field: "priority".into(),
+                message: format!("unknown priority \"{value}\"; expected one of low, normal, high"),
+            }
+        })?,
+    };
+    Ok(ValidTaskFields {
+        title: required_text("title", patch.title, 200)?,
+        body: optional_text(patch.body),
+        parent: parse_optional_parent(patch.parent_type, patch.parent_id)?,
+        due_at: optional_text(patch.due_at),
+        remind_at: optional_text(patch.remind_at),
+        priority,
+    })
+}
+
+/// A task's optional parent: type and id together or neither.
+fn parse_optional_parent(
+    parent_type: Option<String>,
+    parent_id: Option<String>,
+) -> Result<Option<(ParentType, String)>, ApplicationError> {
+    match (optional_text(parent_type), optional_text(parent_id)) {
+        (None, None) => Ok(None),
+        (Some(parent_type), Some(parent_id)) => Ok(Some((
+            parse_parent_type("parentType", &parent_type)?,
+            parent_id,
+        ))),
+        _ => Err(ApplicationError::InvalidInput {
+            field: "parentType".into(),
+            message: "parentType and parentId must be set together or both left empty".into(),
+        }),
+    }
+}
+
 fn parse_parent_type(field: &str, value: &str) -> Result<ParentType, ApplicationError> {
     ParentType::from_database_value(value.trim()).ok_or_else(|| ApplicationError::InvalidInput {
         field: field.into(),
@@ -2692,6 +3160,76 @@ fn require_activity(
             id: activity_id.into(),
         })?;
     finish_activity(row)
+}
+
+const TASK_COLUMNS: &str = "id, title, body, parent_type, parent_id, due_at, remind_at, \
+    priority, status, completed_at, created_at, updated_at, version";
+
+/// Row tuple with raw enum texts, finished into a Task after parsing.
+type TaskRow = (Task, Option<String>, String, String);
+
+fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
+    let parent_type_text: Option<String> = row.get(3)?;
+    let priority_text: String = row.get(7)?;
+    let status_text: String = row.get(8)?;
+    Ok((
+        Task {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            body: row.get(2)?,
+            parent_type: None, // replaced in finish_task
+            parent_id: row.get(4)?,
+            due_at: row.get(5)?,
+            remind_at: row.get(6)?,
+            priority: TaskPriority::Normal, // replaced in finish_task
+            status: TaskStatus::Open,       // replaced in finish_task
+            completed_at: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+            version: row.get(12)?,
+        },
+        parent_type_text,
+        priority_text,
+        status_text,
+    ))
+}
+
+/// Parse stored enum texts once the rusqlite row mapping is done.
+fn finish_task(
+    (mut task, parent_type_text, priority_text, status_text): TaskRow,
+) -> Result<Task, ApplicationError> {
+    let invalid = |what: &str, value: &str| {
+        ApplicationError::InvalidStoredData(format!(
+            "task {} has unsupported {what} {value}",
+            task.id
+        ))
+    };
+    task.parent_type = match &parent_type_text {
+        None => None,
+        Some(text) => Some(
+            ParentType::from_database_value(text).ok_or_else(|| invalid("parent type", text))?,
+        ),
+    };
+    task.priority = TaskPriority::from_database_value(&priority_text)
+        .ok_or_else(|| invalid("priority", &priority_text))?;
+    task.status = TaskStatus::from_database_value(&status_text)
+        .ok_or_else(|| invalid("status", &status_text))?;
+    Ok(task)
+}
+
+fn require_task(transaction: &Transaction<'_>, task_id: &str) -> Result<Task, ApplicationError> {
+    let row = transaction
+        .query_row(
+            &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
+            [task_id],
+            task_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "task",
+            id: task_id.into(),
+        })?;
+    finish_task(row)
 }
 
 /// An activity's polymorphic parent must exist in its table (any archive

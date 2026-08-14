@@ -6,13 +6,14 @@ pub mod storage;
 use std::sync::Mutex;
 
 use application::{
-    ArchiveRequest, CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest,
-    DatabaseInfo, DeleteActivityRequest, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
-    LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem,
-    RestoreReport, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
-    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest,
+    ArchiveRequest, CompleteTaskRequest, CreateCompanyRequest, CreateContactRequest,
+    CreateOpportunityRequest, CreateTaskRequest, DatabaseInfo, DeleteActivityRequest,
+    EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
+    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport,
+    TaskActionRequest, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
+    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
 };
-use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage};
+use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
 use serde::Serialize;
 use storage::Storage;
@@ -362,6 +363,71 @@ fn get_timeline(
         .map_err(Into::into)
 }
 
+// Task commands — follow-ups with due dates, reminders, and priorities.
+
+#[tauri::command]
+fn create_task(
+    storage: State<'_, SharedStorage>,
+    request: CreateTaskRequest,
+) -> Result<Task, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::create_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn update_task(
+    storage: State<'_, SharedStorage>,
+    request: UpdateTaskRequest,
+) -> Result<Task, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn complete_task(
+    storage: State<'_, SharedStorage>,
+    request: CompleteTaskRequest,
+) -> Result<Task, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::complete_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn reopen_task(
+    storage: State<'_, SharedStorage>,
+    request: TaskActionRequest,
+) -> Result<Task, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::reopen_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn drop_task(
+    storage: State<'_, SharedStorage>,
+    request: TaskActionRequest,
+) -> Result<Task, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::drop_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn delete_task(
+    storage: State<'_, SharedStorage>,
+    request: TaskActionRequest,
+) -> Result<(), CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::delete_task(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_tasks(
+    storage: State<'_, SharedStorage>,
+    request: ListTasksRequest,
+) -> Result<Vec<Task>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_tasks(&storage, request).map_err(Into::into)
+}
+
 // Hand-off commands — quote/job references and the versioned envelope export.
 
 #[tauri::command]
@@ -483,6 +549,13 @@ pub fn run() {
             update_activity,
             delete_activity,
             get_timeline,
+            create_task,
+            update_task,
+            complete_task,
+            reopen_task,
+            drop_task,
+            delete_task,
+            list_tasks,
             link_quote,
             unlink_quote,
             link_job,

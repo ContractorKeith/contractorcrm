@@ -427,6 +427,85 @@ pub struct Activity {
     pub version: i64,
 }
 
+/// How urgent a task is.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+impl TaskPriority {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "low" => Some(Self::Low),
+            "normal" => Some(Self::Normal),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+}
+
+/// Where a task sits in its lifecycle.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    #[default]
+    Open,
+    Done,
+    Dropped,
+}
+
+impl TaskStatus {
+    pub(crate) fn as_database_value(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Done => "done",
+            Self::Dropped => "dropped",
+        }
+    }
+
+    pub(crate) fn from_database_value(value: &str) -> Option<Self> {
+        match value {
+            "open" => Some(Self::Open),
+            "done" => Some(Self::Done),
+            "dropped" => Some(Self::Dropped),
+            _ => None,
+        }
+    }
+}
+
+/// A follow-up or to-do, optionally hanging off a contact, company, or
+/// opportunity; personal tasks have no parent. Timestamps are UTC ISO-8601.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    /// Markdown body, optional.
+    pub body: Option<String>,
+    pub parent_type: Option<ParentType>,
+    pub parent_id: Option<String>,
+    pub due_at: Option<String>,
+    pub remind_at: Option<String>,
+    pub priority: TaskPriority,
+    pub status: TaskStatus,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
 /// One append-only stage change; stores stage ids only, never names.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
