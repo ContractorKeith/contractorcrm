@@ -28,6 +28,7 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 - `get_timeline(parentType, parentId, window?, limit?, cursor?)`
 - `list_tasks(status?, dueBefore?, parentType?, parentId?, limit?, cursor?)`
 - `get_attention_flags(asOfDate?)` — deterministic stale-lead / overdue / no-response flags
+- `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
 
 ### Propose
 
@@ -51,6 +52,7 @@ Proposal tools return a typed diff, warnings, affected versions, and an opaque p
 - `create_task(task)` / `complete_task(taskId, expectedVersion, logActivity?)`
 - `link_quote(opportunityId, quoteRef, expectedVersion)`
 - `link_job(opportunityId, jobRef, expectedVersion)` — records the ContractorProject hand-off result
+- `create_saved_view(request)` / `update_saved_view(request)` / `delete_saved_view(request)` — version-checked local list configuration; definitions are validated, bounded, and never interpreted as SQL
 
 Write tools are available only in read-write mode. Agent onboarding makes the selected mode visible and reversible.
 

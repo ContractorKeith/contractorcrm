@@ -9,8 +9,10 @@ import type {
   ContactPatch,
   ContactRole,
   PartyKind,
+  SavedViewDefinition,
 } from "../api/types";
-import { RecordTable, type ColumnDef } from "../components/RecordTable";
+import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { SavedViews } from "../components/SavedViews";
 import { formatLocalDateTime } from "./date-format";
 import { ActivityTimeline } from "./timeline";
 import {
@@ -46,6 +48,8 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const [contacts, setContacts] = useState<ContactListItem[] | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [showArchived, setShowArchived] = useState(false);
+  const [sort, setSort] = useState<SortState>({ key: "displayName", direction: "ascending" });
+  const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
@@ -68,10 +72,27 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const companyName = (companyId: string | null) =>
     companies.find((company) => company.id === companyId)?.name ?? "—";
 
+  const definition: SavedViewDefinition = {
+    schemaVersion: 1,
+    filter: { includeArchived: showArchived },
+    sort: { field: "displayName", direction: sort.direction },
+  };
+  const applyDefinition = (next: SavedViewDefinition) => {
+    setShowArchived(next.filter.includeArchived);
+    setSort({ key: "displayName", direction: next.sort.direction });
+  };
+  const rows = contacts
+    ? [...contacts].sort((a, b) => {
+        const compared = a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id);
+        return compared * (sort.direction === "ascending" ? 1 : -1);
+      })
+    : null;
+
   const columns: ColumnDef<ContactListItem>[] = [
     {
-      key: "name",
+      key: "displayName",
       header: "Name",
+      sortable: true,
       render: (contact) => (
         <span className="cell-primary">
           {contact.displayName}
@@ -107,6 +128,13 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
       <div className="section-rule">
         <h2>Contacts</h2>
         <div className="list-tools">
+          <SavedViews
+            client={client}
+            entityType="contact"
+            definition={definition}
+            onApply={applyDefinition}
+            onSelectionChange={setSavedViewApplied}
+          />
           <label className="toggle">
             <input
               type="checkbox"
@@ -126,24 +154,28 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
         <GeneralError message="Could not read contacts from the local database." />
       ) : null}
 
-      {contacts && contacts.length === 0 ? (
+      {rows && rows.length === 0 ? (
         <div className="empty-state">
           <span className="registration-mark" aria-hidden="true" />
           <p className="eyebrow">Ready when you are</p>
-          <h2>No contacts yet</h2>
-          <p>
-            Add your first lead, client, sub, or vendor. Everything stays in this app&apos;s local
-            database on this machine.
-          </p>
+          <h2>{savedViewApplied ? "No contacts match this view" : "No contacts yet"}</h2>
+          <p>{savedViewApplied ? "Change the current filters or choose another saved view." : "Add your first lead, client, sub, or vendor. Everything stays in this app's local database on this machine."}</p>
         </div>
       ) : null}
 
-      {contacts && contacts.length > 0 ? (
+      {rows && rows.length > 0 ? (
         <RecordTable
           label="Contact list"
           columns={columns}
-          rows={contacts}
+          rows={rows}
           onOpen={(contact) => onOpen(contact.id)}
+          sort={sort}
+          onSort={() =>
+            setSort((current) => ({
+              key: "displayName",
+              direction: current.direction === "ascending" ? "descending" : "ascending",
+            }))
+          }
         />
       ) : null}
     </section>

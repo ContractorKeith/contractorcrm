@@ -8,12 +8,13 @@ use std::sync::Mutex;
 
 use application::{
     ArchiveRequest, CompleteTaskRequest, ContactListItem, CreateCompanyRequest,
-    CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, DatabaseInfo,
-    DeleteActivityRequest, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
-    ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
-    OpportunityListItem, RestoreReport, SearchResult, SetAttentionThresholdsRequest,
-    TaskActionRequest, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
-    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
+    CreateContactRequest, CreateOpportunityRequest, CreateSavedViewRequest, CreateTaskRequest,
+    DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest, EnvelopeExportReport,
+    LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
+    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport, SavedView,
+    SavedViewEntityType, SearchResult, SetAttentionThresholdsRequest, TaskActionRequest,
+    UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest,
+    UpdateOpportunityRequest, UpdateSavedViewRequest, UpdateStageRequest, UpdateTaskRequest,
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
@@ -34,6 +35,10 @@ macro_rules! with_local_api_v1_commands {
             list_recent_records,
             record_recent,
             list_favorite_contacts,
+            list_saved_views,
+            create_saved_view,
+            update_saved_view,
+            delete_saved_view,
             create_company,
             update_company,
             archive_company,
@@ -233,6 +238,42 @@ fn list_favorite_contacts(
 ) -> Result<Vec<SearchResult>, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::list_favorite_contacts(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_saved_views(
+    storage: State<'_, SharedStorage>,
+    entity_type: SavedViewEntityType,
+) -> Result<Vec<SavedView>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_saved_views(&storage, entity_type).map_err(Into::into)
+}
+
+#[tauri::command]
+fn create_saved_view(
+    storage: State<'_, SharedStorage>,
+    request: CreateSavedViewRequest,
+) -> Result<SavedView, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::create_saved_view(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn update_saved_view(
+    storage: State<'_, SharedStorage>,
+    request: UpdateSavedViewRequest,
+) -> Result<SavedView, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_saved_view(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn delete_saved_view(
+    storage: State<'_, SharedStorage>,
+    request: DeleteSavedViewRequest,
+) -> Result<(), CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::delete_saved_view(&mut storage, request).map_err(Into::into)
 }
 
 // Thin Tauri commands — lock the shared storage, delegate to the application

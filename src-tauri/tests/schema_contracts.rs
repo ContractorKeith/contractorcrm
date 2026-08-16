@@ -1,6 +1,10 @@
 use contractorcrm_lib::{
-    application::SearchResult, error::ApplicationError, storage, LOCAL_API_V1_COMMANDS,
-    LOCAL_API_VERSION,
+    application::{
+        SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter, SavedViewSort,
+        SavedViewSortDirection, SearchResult,
+    },
+    error::ApplicationError,
+    storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -335,5 +339,53 @@ fn navigation_commands_are_additive_v1_contract_entries() {
     assert_eq!(
         string_array(&schema["wireTypes"]["NavigationEntityType"], "enum"),
         ["contact", "company", "opportunity"]
+    );
+}
+
+#[test]
+fn saved_view_v1_matches_the_published_wire_schema() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let saved_view = SavedView {
+        id: "view-1".into(),
+        name: "Active prospects".into(),
+        entity_type: SavedViewEntityType::Opportunity,
+        definition: SavedViewDefinition {
+            schema_version: 1,
+            filter: SavedViewFilter {
+                include_archived: false,
+            },
+            sort: SavedViewSort {
+                field: "expectedClose".into(),
+                direction: SavedViewSortDirection::Ascending,
+            },
+        },
+        sort_key: 0,
+        created_at: "2026-08-16T00:00:00.000Z".into(),
+        updated_at: "2026-08-16T00:00:00.000Z".into(),
+        version: 1,
+    };
+    let serialized = serde_json::to_value(saved_view).expect("serialize saved view");
+    let mut actual_fields = serialized
+        .as_object()
+        .expect("saved view is an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual_fields.sort();
+    let mut expected_fields = string_array(&schema["wireTypes"]["SavedView"], "required");
+    expected_fields.sort();
+    assert_eq!(actual_fields, expected_fields);
+    assert_eq!(serialized["entityType"], "opportunity");
+    assert_eq!(serialized["definition"]["schemaVersion"], 1);
+    assert_eq!(serialized["definition"]["sort"]["direction"], "ascending");
+    for strict_type in ["SavedViewFilter", "SavedViewSort", "SavedViewDefinition"] {
+        assert_eq!(
+            schema["wireTypes"][strict_type]["additionalProperties"], false,
+            "{strict_type} must reject unknown fields"
+        );
+    }
+    assert_eq!(
+        string_array(&schema["wireTypes"]["SavedViewSortField"], "enum"),
+        ["displayName", "name", "stage", "value", "expectedClose"]
     );
 }

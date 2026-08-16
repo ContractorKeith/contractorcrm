@@ -37,6 +37,43 @@ describe("company list and form", () => {
     expect(within(row).getByText("Central Florida")).toBeVisible();
   });
 
+  it("applies a saved company sort and archived filter", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listSavedViews: vi.fn().mockImplementation((entityType) =>
+        Promise.resolve(
+          entityType === "company"
+            ? [{
+                id: "view-companies",
+                name: "All companies Z-A",
+                entityType: "company",
+                definition: { schemaVersion: 1, filter: { includeArchived: true }, sort: { field: "name", direction: "descending" } },
+                sortKey: 0,
+                createdAt: "2026-08-16T20:00:00Z",
+                updatedAt: "2026-08-16T20:00:00Z",
+                version: 1,
+              }]
+            : [],
+        ),
+      ),
+      listCompanies: vi.fn().mockResolvedValue([
+        makeCompany({ id: "a", name: "Alpha" }),
+        makeCompany({ id: "z", name: "Zulu", archivedAt: "2026-08-01T00:00:00Z" }),
+      ]),
+    });
+
+    render(<App client={client} />);
+    await user.click(screen.getByRole("button", { name: "Companies" }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Saved company view" }),
+      "view-companies",
+    );
+    expect(client.listCompanies).toHaveBeenLastCalledWith(true);
+    const rows = within(await screen.findByRole("table", { name: "Company list" })).getAllByRole("row");
+    expect(within(rows[1]!).getByText("Zulu")).toBeVisible();
+    expect(within(rows[2]!).getByText("Alpha")).toBeVisible();
+  });
+
   it("creates a company through the client and lands on its detail", async () => {
     const user = userEvent.setup();
     const created = makeCompany({ id: "co-new", name: "Gulf Gates LLC", kind: "vendor" });

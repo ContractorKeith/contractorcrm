@@ -8,6 +8,10 @@
     {"name":"list_recent_records","mode":"read","input":[],"output":"SearchResult[]"},
     {"name":"record_recent","mode":"write","input":[{"name":"entityType","type":"NavigationEntityType","required":true},{"name":"entityId","type":"string","required":true}],"output":"null"},
     {"name":"list_favorite_contacts","mode":"read","input":[],"output":"SearchResult[]"},
+    {"name":"list_saved_views","mode":"read","input":[{"name":"entityType","type":"SavedViewEntityType","required":true}],"output":"SavedView[]"},
+    {"name":"create_saved_view","mode":"write","input":[{"name":"request","type":"CreateSavedViewRequest","required":true}],"output":"SavedView"},
+    {"name":"update_saved_view","mode":"write","input":[{"name":"request","type":"UpdateSavedViewRequest","required":true}],"output":"SavedView"},
+    {"name":"delete_saved_view","mode":"write","input":[{"name":"request","type":"DeleteSavedViewRequest","required":true}],"output":"null"},
     {"name":"create_company","mode":"write","input":[{"name":"request","type":"CreateCompanyRequest","required":true}],"output":"Company"},
     {"name":"update_company","mode":"write","input":[{"name":"request","type":"UpdateCompanyRequest","required":true}],"output":"Company"},
     {"name":"archive_company","mode":"write","input":[{"name":"request","type":"ArchiveRequest","required":true}],"output":"Company"},
@@ -56,6 +60,47 @@
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
     "NavigationEntityType": {"enum":["contact","company","opportunity"]},
+    "SavedViewEntityType": {"enum":["contact","company","opportunity"]},
+    "SavedViewSortDirection": {"enum":["ascending","descending"]},
+    "SavedViewSortField": {"enum":["displayName","name","stage","value","expectedClose"]},
+    "SavedViewFilter": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["includeArchived"],
+      "properties":{"includeArchived":{"type":"boolean"}}
+    },
+    "SavedViewSort": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["field","direction"],
+      "properties":{"field":{"type":"SavedViewSortField"},"direction":{"type":"SavedViewSortDirection"}}
+    },
+    "SavedViewDefinition": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["schemaVersion","filter","sort"],
+      "properties":{"schemaVersion":{"type":"integer","const":1},"filter":{"type":"SavedViewFilter"},"sort":{"type":"SavedViewSort"}}
+    },
+    "SavedView": {
+      "type":"object",
+      "required":["id","name","entityType","definition","sortKey","createdAt","updatedAt","version"],
+      "properties":{"id":{"type":"string"},"name":{"type":"string"},"entityType":{"type":"SavedViewEntityType"},"definition":{"type":"SavedViewDefinition"},"sortKey":{"type":"integer"},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"version":{"type":"integer"}}
+    },
+    "CreateSavedViewRequest": {
+      "type":"object",
+      "required":["name","entityType","definition"],
+      "properties":{"actor":{"type":"Actor"},"name":{"type":"string"},"entityType":{"type":"SavedViewEntityType"},"definition":{"type":"SavedViewDefinition"}}
+    },
+    "UpdateSavedViewRequest": {
+      "type":"object",
+      "required":["savedViewId","expectedVersion","name","definition"],
+      "properties":{"actor":{"type":"Actor"},"savedViewId":{"type":"string"},"expectedVersion":{"type":"integer"},"name":{"type":"string"},"definition":{"type":"SavedViewDefinition"}}
+    },
+    "DeleteSavedViewRequest": {
+      "type":"object",
+      "required":["savedViewId","expectedVersion"],
+      "properties":{"actor":{"type":"Actor"},"savedViewId":{"type":"string"},"expectedVersion":{"type":"integer"}}
+    },
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",

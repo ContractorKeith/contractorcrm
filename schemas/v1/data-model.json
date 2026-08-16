@@ -1,14 +1,15 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 6,
+  "databaseMigrationVersion": 7,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
     { "version": 3, "name": "handoff_references" },
     { "version": 4, "name": "activities" },
     { "version": 5, "name": "tasks" },
-    { "version": 6, "name": "fts5_search_projection" }
+    { "version": 6, "name": "fts5_search_projection" },
+    { "version": 7, "name": "saved_views" }
   ],
   "tables": {
     "activities": {
@@ -76,6 +77,12 @@
       "columns": {"entity_type":"ANY","entity_id":"ANY","title":"ANY","content":"ANY"},
       "required": [],
       "primaryKey": []
+    },
+    "saved_views": {
+      "columns": {"id":"TEXT","name":"TEXT","entity_type":"TEXT","definition_json":"TEXT","sort_key":"INTEGER","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["name","entity_type","definition_json","sort_key","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["length(name) BETWEEN 1 AND 120", "entity_type IN ('contact', 'company', 'opportunity')", "sort_key >= 0", "version > 0"]
     },
     "stage_history": {
       "columns": {"id":"TEXT","opportunity_id":"TEXT","from_stage_id":"TEXT","to_stage_id":"TEXT","actor":"TEXT","lost_reason_id":"TEXT","created_at":"TEXT"},

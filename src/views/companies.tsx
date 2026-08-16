@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { CoreClient } from "../api/client";
-import type { Company, CompanyPatch, PartyKind } from "../api/types";
-import { RecordTable, type ColumnDef } from "../components/RecordTable";
+import type { Company, CompanyPatch, PartyKind, SavedViewDefinition } from "../api/types";
+import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { SavedViews } from "../components/SavedViews";
 import {
   ConflictBanner,
   Field,
@@ -28,6 +29,8 @@ interface CompaniesViewProps {
 export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) {
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [sort, setSort] = useState<SortState>({ key: "name", direction: "ascending" });
+  const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
@@ -47,10 +50,23 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
     };
   }, [client, showArchived]);
 
+  const definition: SavedViewDefinition = {
+    schemaVersion: 1,
+    filter: { includeArchived: showArchived },
+    sort: { field: "name", direction: sort.direction },
+  };
+  const rows = companies
+    ? [...companies].sort((a, b) => {
+        const compared = a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        return compared * (sort.direction === "ascending" ? 1 : -1);
+      })
+    : null;
+
   const columns: ColumnDef<Company>[] = [
     {
       key: "name",
       header: "Name",
+      sortable: true,
       render: (company) => (
         <span className="cell-primary">
           {company.name}
@@ -73,6 +89,16 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
       <div className="section-rule">
         <h2>Companies</h2>
         <div className="list-tools">
+          <SavedViews
+            client={client}
+            entityType="company"
+            definition={definition}
+            onApply={(next) => {
+              setShowArchived(next.filter.includeArchived);
+              setSort({ key: "name", direction: next.sort.direction });
+            }}
+            onSelectionChange={setSavedViewApplied}
+          />
           <label className="toggle">
             <input
               type="checkbox"
@@ -92,24 +118,28 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
         <GeneralError message="Could not read companies from the local database." />
       ) : null}
 
-      {companies && companies.length === 0 ? (
+      {rows && rows.length === 0 ? (
         <div className="empty-state">
           <span className="registration-mark" aria-hidden="true" />
           <p className="eyebrow">Ready when you are</p>
-          <h2>No companies yet</h2>
-          <p>
-            Add the outfits you work with — GCs, subs, vendors, and suppliers — and link their
-            people to them.
-          </p>
+          <h2>{savedViewApplied ? "No companies match this view" : "No companies yet"}</h2>
+          <p>{savedViewApplied ? "Change the current filters or choose another saved view." : "Add the outfits you work with — GCs, subs, vendors, and suppliers — and link their people to them."}</p>
         </div>
       ) : null}
 
-      {companies && companies.length > 0 ? (
+      {rows && rows.length > 0 ? (
         <RecordTable
           label="Company list"
           columns={columns}
-          rows={companies}
+          rows={rows}
           onOpen={(company) => onOpen(company.id)}
+          sort={sort}
+          onSort={() =>
+            setSort((current) => ({
+              key: "name",
+              direction: current.direction === "ascending" ? "descending" : "ascending",
+            }))
+          }
         />
       ) : null}
     </section>

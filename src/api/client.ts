@@ -12,12 +12,16 @@ import type {
   CreateCompanyRequest,
   CreateContactRequest,
   CreateOpportunityRequest,
+  CreateSavedViewRequest,
   CreateTaskRequest,
   DeleteActivityRequest,
+  DeleteSavedViewRequest,
   EnvelopeExportReport,
   HealthReport,
   SearchEntityType,
   SearchResult,
+  SavedView,
+  SavedViewEntityType,
   NavigationEntityType,
   LinkJobRequest,
   LinkQuoteRequest,
@@ -38,6 +42,7 @@ import type {
   UpdateCompanyRequest,
   UpdateContactRequest,
   UpdateOpportunityRequest,
+  UpdateSavedViewRequest,
   UpdateStageRequest,
   UpdateTaskRequest,
 } from "./types";
@@ -50,6 +55,10 @@ export interface CoreClient {
   listRecentRecords(): Promise<SearchResult[]>;
   recordRecent(entityType: NavigationEntityType, entityId: string): Promise<void>;
   listFavoriteContacts(): Promise<SearchResult[]>;
+  listSavedViews(entityType: SavedViewEntityType): Promise<SavedView[]>;
+  createSavedView(request: CreateSavedViewRequest): Promise<SavedView>;
+  updateSavedView(request: UpdateSavedViewRequest): Promise<SavedView>;
+  deleteSavedView(request: DeleteSavedViewRequest): Promise<void>;
   createCompany(request: CreateCompanyRequest): Promise<Company>;
   updateCompany(request: UpdateCompanyRequest): Promise<Company>;
   archiveCompany(request: ArchiveRequest): Promise<Company>;
@@ -105,6 +114,10 @@ export const tauriCoreClient: CoreClient = {
   listRecentRecords: () => invoke("list_recent_records"),
   recordRecent: (entityType, entityId) => invoke("record_recent", { entityType, entityId }),
   listFavoriteContacts: () => invoke("list_favorite_contacts"),
+  listSavedViews: (entityType) => invoke("list_saved_views", { entityType }),
+  createSavedView: (request) => invoke("create_saved_view", { request }),
+  updateSavedView: (request) => invoke("update_saved_view", { request }),
+  deleteSavedView: (request) => invoke("delete_saved_view", { request }),
   createCompany: (request) => invoke("create_company", { request }),
   updateCompany: (request) => invoke("update_company", { request }),
   archiveCompany: (request) => invoke("archive_company", { request }),

@@ -1,6 +1,6 @@
 # Data model
 
-Status: implemented through database migration 006
+Status: implemented through database migration 007
 Updated: 2026-08-16
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`, including
@@ -125,7 +125,19 @@ Metadata plus a managed relative path under the app assets directory: parent typ
 
 ### `saved_views`
 
-`id`, `name`, `entity_type`, versioned filter definition (JSON), `sort_key`. Filter schema versions are forward-migratable like the database.
+`id`, `name`, `entity_type`, `definition_json`, `sort_key`, timestamps, and optimistic `version`.
+
+The v1 definition is strict JSON with `schemaVersion: 1`,
+`filter.includeArchived`, and `sort` (`field` plus `ascending` or
+`descending`). Views currently apply only to contact, company, and opportunity
+lists. Sort fields are bounded by surface: `displayName`; `name`; or
+`name`/`stage`/`value`/`expectedClose` respectively. Definitions never contain
+SQL or query operators. A known unversioned v0 definition is migrated in
+memory on read; unsupported future or malformed JSON is rejected without
+rewriting the stored bytes. Names are unique case-insensitively per surface;
+each surface is capped at 50 views and ordered by `sort_key`, then id.
+Future tag and custom-field filters extend this envelope through a deliberate
+schema-version migration; v1 does not reserve arbitrary keys or operators.
 
 ### `recents` and needs-attention
 
