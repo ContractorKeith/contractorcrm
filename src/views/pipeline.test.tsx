@@ -11,6 +11,7 @@ import {
   makeStageHistoryEntry,
   stubClient,
 } from "../test/stub-client";
+import { formatLocalDateTime } from "./date-format";
 
 // Open the Pipeline tab from the app shell.
 async function openPipeline(user: ReturnType<typeof userEvent.setup>) {
@@ -69,7 +70,7 @@ describe("pipeline table", () => {
     expect(within(table).getByRole("columnheader", { name: "Last contacted" })).toBeVisible();
     expect(within(table).getByRole("columnheader", { name: "Next task" })).toBeVisible();
     const row = within(table).getAllByRole("row")[1]!;
-    expect(within(row).getByText("2026-08-12T15:00:00Z")).toBeVisible();
+    expect(within(row).getByText(formatLocalDateTime("2026-08-12T15:00:00Z"))).toBeVisible();
     expect(within(row).getByText("2026-08-20T16:00:00Z")).toBeVisible();
   });
 
@@ -319,6 +320,7 @@ describe("opportunity detail and stage moves", () => {
     await openDetail(user);
 
     // The free-text label never stands in for a missing source kind.
+    expect(screen.getByText("Source").nextElementSibling).toHaveTextContent("—");
     expect(screen.queryByText(/Angie's List/)).not.toBeInTheDocument();
   });
 

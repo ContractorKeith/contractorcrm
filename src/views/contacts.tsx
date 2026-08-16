@@ -11,6 +11,7 @@ import type {
   PartyKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef } from "../components/RecordTable";
+import { formatLocalDateTime } from "./date-format";
 import { ActivityTimeline } from "./timeline";
 import {
   CONTACT_ROLE_OPTIONS,
@@ -86,7 +87,8 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     {
       key: "lastContacted",
       header: "Last contacted",
-      render: (contact) => contact.lastContactedAt ?? "—",
+      render: (contact) =>
+        contact.lastContactedAt ? formatLocalDateTime(contact.lastContactedAt) : "—",
     },
     {
       key: "nextTask",

@@ -58,7 +58,7 @@ describe("tasks view", () => {
     expect(client.listTasks).toHaveBeenCalledWith({});
   });
 
-  it("creates a task linked to a contact through the parent picker", async () => {
+  it("keeps a new task's Due input empty and sends null unless it is edited", async () => {
     const user = userEvent.setup();
     const client = stubClient({
       listContacts: vi.fn().mockResolvedValue([makeContact()]),
@@ -68,6 +68,8 @@ describe("tasks view", () => {
     render(<App client={client} />);
     await openTasks(user);
     await user.click(screen.getByRole("button", { name: "New task" }));
+
+    expect(screen.getByLabelText("Due")).toHaveValue("");
 
     await user.type(screen.getByLabelText("Title"), "Call inspector");
     await user.selectOptions(await screen.findByLabelText("Linked to"), "contact:contact-1");

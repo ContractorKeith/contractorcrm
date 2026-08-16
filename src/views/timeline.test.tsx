@@ -122,6 +122,37 @@ describe("activity timeline", () => {
     );
   });
 
+  it.each([
+    ["call", "Call", true],
+    ["email", "Email", true],
+    ["text", "Text", true],
+    ["site_visit", "Site visit", false],
+    ["meeting", "Meeting", false],
+    ["note", "Note", false],
+  ] as const)("persists and renders the %s activity kind", async (kind, label, hasDirection) => {
+    const user = userEvent.setup();
+    const client = timelineClient({
+      logActivity: vi.fn().mockResolvedValue(makeActivity({ kind })),
+      getTimeline: vi.fn().mockResolvedValue([makeActivity({ kind, direction: "none" })]),
+    });
+
+    render(<App client={client} />);
+    await openContactDetail(user);
+
+    await user.selectOptions(screen.getByLabelText("Type"), kind);
+    if (hasDirection) {
+      expect(screen.getByLabelText("Direction")).toBeVisible();
+    } else {
+      expect(screen.queryByLabelText("Direction")).not.toBeInTheDocument();
+    }
+    await user.type(screen.getByLabelText("Summary"), `${label} follow-up`);
+    await user.click(screen.getByRole("button", { name: "Log activity" }));
+
+    expect(client.logActivity).toHaveBeenCalledWith(expect.objectContaining({ kind }));
+    const list = await screen.findByRole("list", { name: "Activity entries" });
+    expect(within(list).getByText(label)).toBeVisible();
+  });
+
   it("requires a summary before anything reaches the core", async () => {
     const user = userEvent.setup();
     const client = timelineClient();

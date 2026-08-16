@@ -18,6 +18,7 @@ import {
   type StageKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { formatLocalDateTime } from "./date-format";
 import {
   ConflictBanner,
   Field,
@@ -279,7 +280,7 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
     {
       key: "lastContacted",
       header: "Last contacted",
-      render: (o) => o.lastContactedAt ?? "—",
+      render: (o) => (o.lastContactedAt ? formatLocalDateTime(o.lastContactedAt) : "—"),
     },
     {
       key: "nextTask",

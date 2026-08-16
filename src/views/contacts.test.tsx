@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App";
 import { makeCompany, makeContact, stubClient } from "../test/stub-client";
+import { formatLocalDateTime } from "./date-format";
 
 describe("contact list and detail", () => {
   beforeEach(() => {
@@ -67,7 +68,7 @@ describe("contact list and detail", () => {
     expect(within(table).getByRole("columnheader", { name: "Last contacted" })).toBeVisible();
     expect(within(table).getByRole("columnheader", { name: "Next task" })).toBeVisible();
     const row = within(table).getAllByRole("row")[1]!;
-    expect(within(row).getByText("2026-08-12T15:00:00Z")).toBeVisible();
+    expect(within(row).getByText(formatLocalDateTime("2026-08-12T15:00:00Z"))).toBeVisible();
     expect(within(row).getByText("2026-08-20T16:00:00Z")).toBeVisible();
   });
 

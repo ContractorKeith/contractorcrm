@@ -166,6 +166,50 @@ fn logs_an_activity_on_each_parent_type() {
 }
 
 #[test]
+fn all_activity_kinds_persist_through_the_application_seam() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Homeowner");
+    let cases = [
+        ("call", Some("outbound"), ActivityKind::Call),
+        ("email", Some("inbound"), ActivityKind::Email),
+        ("text", Some("outbound"), ActivityKind::Text),
+        ("site_visit", None, ActivityKind::SiteVisit),
+        ("meeting", None, ActivityKind::Meeting),
+        ("note", None, ActivityKind::Note),
+    ];
+
+    for (kind, direction, expected_kind) in cases {
+        let summary = format!("{kind} follow-up");
+        let created = log_activity(
+            &mut storage,
+            LogActivityRequest {
+                actor: Actor::User,
+                parent_type: "contact".into(),
+                parent_id: contact.id.clone(),
+                activity: ActivityPatch {
+                    kind: kind.into(),
+                    direction: direction.map(Into::into),
+                    occurred_at: None,
+                    summary: summary.clone(),
+                    body: None,
+                },
+            },
+        )
+        .expect("log activity kind");
+        assert_eq!(created.kind, expected_kind);
+
+        let persisted = get_timeline(&storage, "contact", &contact.id, false)
+            .expect("read timeline")
+            .into_iter()
+            .find(|activity| activity.id == created.id)
+            .expect("persisted activity");
+        assert_eq!(persisted.kind, expected_kind);
+        assert_eq!(persisted.summary, summary);
+    }
+}
+
+#[test]
 fn logging_on_a_missing_parent_is_not_found() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut storage = open_storage(&temp);
