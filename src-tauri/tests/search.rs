@@ -46,17 +46,30 @@ fn migration_backfills_a_populated_v5_database() {
          CREATE TABLE contacts (id TEXT PRIMARY KEY, display_name TEXT, notes TEXT, archived_at TEXT);
          CREATE TABLE contact_channels (contact_id TEXT, value TEXT);
          CREATE TABLE opportunities (id TEXT PRIMARY KEY, name TEXT, notes TEXT, source_label TEXT, archived_at TEXT);
-         CREATE TABLE activities (id TEXT PRIMARY KEY, summary TEXT, body TEXT);
+         CREATE TABLE activities (id TEXT PRIMARY KEY, parent_type TEXT, parent_id TEXT, summary TEXT, body TEXT);
          INSERT INTO companies VALUES ('co', 'Backfill Builders', NULL, NULL, NULL, NULL, NULL);
          INSERT INTO contacts VALUES ('ct', 'Riley Backfill', NULL, NULL);
+         INSERT INTO contacts VALUES ('archived-ct', 'Hidden Backfill', NULL, '2026-01-01T00:00:00Z');
          INSERT INTO contact_channels VALUES ('ct', 'riley@example.test');
          INSERT INTO opportunities VALUES ('op', 'Backfill deck', NULL, NULL, NULL);
-         INSERT INTO activities VALUES ('ac', 'Backfill call', 'left a voicemail');",
+         INSERT INTO activities VALUES ('ac', 'contact', 'ct', 'Backfill call', 'left a voicemail');
+         INSERT INTO activities VALUES ('hidden-ac', 'contact', 'archived-ct', 'Hidden backfill call', NULL);",
     ).expect("seed v5 fixture");
     drop(connection);
 
     let storage = Storage::open(&path).expect("migrate fixture");
-    assert_eq!(hits(&storage, "backfill").len(), 4);
+    let backfill_types = hits(&storage, "backfill")
+        .into_iter()
+        .map(|hit| hit.entity_type)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        backfill_types,
+        ["activity", "company", "contact", "opportunity"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+    assert!(hits(&storage, "hidden").is_empty());
     assert_eq!(
         hits(&storage, "riley@example.test")[0].entity_type,
         "contact"
@@ -161,7 +174,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert!(hits(&storage, "morgan").is_empty());
-    let contact = unarchive_contact(
+    let mut contact = unarchive_contact(
         &mut storage,
         ArchiveRequest {
             actor: Actor::User,
@@ -234,7 +247,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
         LogActivityRequest {
             actor: Actor::User,
             parent_type: "contact".into(),
-            parent_id: contact.id,
+            parent_id: contact.id.clone(),
             activity: ActivityPatch {
                 kind: "note".into(),
                 summary: "Measure stone landing".into(),
@@ -245,6 +258,30 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert_eq!(hits(&storage, "tread")[0].entity_type, "activity");
+    let activity_hits = hits(&storage, "tread");
+    let activity_hit = &activity_hits[0];
+    assert_eq!(activity_hit.parent_type.as_deref(), Some("contact"));
+    assert_eq!(activity_hit.parent_id.as_deref(), Some(contact.id.as_str()));
+    contact = archive_contact(
+        &mut storage,
+        ArchiveRequest {
+            actor: Actor::User,
+            id: contact.id,
+            expected_version: contact.version,
+        },
+    )
+    .unwrap();
+    assert!(hits(&storage, "tread").is_empty());
+    let _unarchived_contact = unarchive_contact(
+        &mut storage,
+        ArchiveRequest {
+            actor: Actor::User,
+            id: contact.id,
+            expected_version: contact.version,
+        },
+    )
+    .unwrap();
+    assert_eq!(hits(&storage, "tread").len(), 1);
     let activity = update_activity(
         &mut storage,
         UpdateActivityRequest {

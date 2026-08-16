@@ -16,8 +16,8 @@ Marketing automation, email campaigns, lead scoring, a full email client, heavy 
 - [x] Scaffold the Tauri 2 + React + Rust workspace from the ContractorProject structure; linting, tests, macOS and Windows CI green on hello-world.
 - [x] Copy the Industry design tokens and base component layer; render one themed window in light and dark.
 - [x] Turn the data model and local API drafts into versioned schemas (v1
-  manifests in `schemas/`, verified against the live migrations and command
-  registry).
+  manifests in `schemas/`, with table fields/constraints and command
+  inputs/outputs verified against live migrations, registry, and wire shapes).
 - [x] Decide the pipeline view question from DESIGN.md: table first, read-only board second (decided 2026-08-14; see DESIGN.md open items).
 
 Exit: the team can build, test, and package the shell on both platforms, and the record/pipeline UI approach is decided.

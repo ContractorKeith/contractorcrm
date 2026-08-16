@@ -23,6 +23,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // The UI suites are interaction-heavy; one worker avoids 5s false
+    // timeouts when several jsdom environments contend on CI or dev laptops.
+    maxWorkers: 1,
     environmentOptions: {
       jsdom: {
         url: "http://localhost/",

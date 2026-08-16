@@ -13,8 +13,10 @@ favorites, or another search index.
 
 ## Application contract
 
-- Reuse #15's `SearchResult` wire shape with `entityType`, canonical
-  `recordId`, title, subtitle/snippet, and activity parent navigation fields.
+- Reuse #15's exact `SearchResult` wire shape: `entityType`, canonical
+  `entityId`, `title`, and nullable `parentType`/`parentId` navigation fields.
+  The parent fields are populated only for activities. Derive visible entity
+  labels in the UI; do not invent a second search DTO.
 - Extend the Rust application seam and `CoreClient` with recents read/write
   commands. React never reads SQLite directly.
 - Store an ordered, capped JSON projection at `navigation.recents.v1` in

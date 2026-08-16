@@ -3,9 +3,11 @@
 Status: implemented through database migration 006
 Updated: 2026-08-16
 
-The machine-readable v1 contract is `schemas/v1/data-model.json`. Forward-only
-SQLite migrations remain the executable source of truth and are verified
-against that manifest by `src-tauri/tests/schema_contracts.rs`.
+The machine-readable v1 contract is `schemas/v1/data-model.json`, including
+each implemented table's columns, required fields, primary key, and SQL checks.
+Forward-only SQLite migrations remain the executable source of truth and are
+verified field-by-field against that contract by
+`src-tauri/tests/schema_contracts.rs`.
 
 ## Domain language
 

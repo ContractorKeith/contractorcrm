@@ -256,7 +256,8 @@ CREATE INDEX tasks_parent ON tasks(parent_type, parent_id);
 
 /// v6 local full-text projection. Canonical tables remain the source of truth;
 /// the application layer refreshes a record's projection in its write
-/// transaction. The migration backfills active records and all activities.
+/// transaction. The migration backfills active records and activities whose
+/// canonical parent is active.
 const MIGRATION_006: &str = "\
 CREATE VIRTUAL TABLE search_index USING fts5(
     entity_type UNINDEXED,
@@ -284,8 +285,18 @@ SELECT 'opportunity', id, name,
             coalesce(source_label, ''))
 FROM opportunities WHERE archived_at IS NULL;
 INSERT INTO search_index (entity_type, entity_id, title, content)
-SELECT 'activity', id, summary, trim(coalesce(summary, '') || ' ' || coalesce(body, ''))
-FROM activities;
+SELECT 'activity', a.id, a.summary,
+       trim(coalesce(a.summary, '') || ' ' || coalesce(a.body, ''))
+FROM activities a
+WHERE (a.parent_type = 'contact' AND EXISTS (
+           SELECT 1 FROM contacts c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+       ))
+   OR (a.parent_type = 'company' AND EXISTS (
+           SELECT 1 FROM companies c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+       ))
+   OR (a.parent_type = 'opportunity' AND EXISTS (
+           SELECT 1 FROM opportunities o WHERE o.id = a.parent_id AND o.archived_at IS NULL
+       ));
 ";
 
 /// Ordered, forward-only migration list; append new versions, never edit old ones.

@@ -10,22 +10,89 @@
     { "version": 5, "name": "tasks" },
     { "version": 6, "name": "fts5_search_projection" }
   ],
-  "tables": [
-    "activities",
-    "app_settings",
-    "command_log",
-    "companies",
-    "contact_channels",
-    "contacts",
-    "lost_reasons",
-    "opportunities",
-    "pipelines",
-    "schema_migrations",
-    "search_index",
-    "stage_history",
-    "stages",
-    "tasks"
-  ],
+  "tables": {
+    "activities": {
+      "columns": {"id":"TEXT","parent_type":"TEXT","parent_id":"TEXT","kind":"TEXT","direction":"TEXT","occurred_at":"TEXT","summary":"TEXT","body":"TEXT","actor":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["parent_type","parent_id","kind","direction","occurred_at","summary","actor","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["parent_type IN ('contact', 'company', 'opportunity')", "kind IN ('call', 'email', 'text', 'site_visit', 'meeting', 'note')", "direction IN ('inbound', 'outbound', 'none')", "actor IN ('user', 'agent', 'import')", "version > 0"]
+    },
+    "app_settings": {
+      "columns": {"key":"TEXT","value":"TEXT"},
+      "required": ["value"],
+      "primaryKey": ["key"]
+    },
+    "command_log": {
+      "columns": {"id":"TEXT","command_id":"TEXT","actor":"TEXT","entity_type":"TEXT","entity_id":"TEXT","summary":"TEXT","created_at":"TEXT"},
+      "required": ["command_id","actor","entity_type","entity_id","summary","created_at"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["actor IN ('user', 'agent', 'import')"]
+    },
+    "companies": {
+      "columns": {"id":"TEXT","name":"TEXT","kind":"TEXT","phone":"TEXT","email":"TEXT","website":"TEXT","address_line1":"TEXT","address_line2":"TEXT","city":"TEXT","state":"TEXT","postal_code":"TEXT","service_area":"TEXT","license_notes":"TEXT","notes":"TEXT","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["name","kind","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["version > 0"]
+    },
+    "contact_channels": {
+      "columns": {"id":"TEXT","contact_id":"TEXT","kind":"TEXT","label":"TEXT","value":"TEXT","preferred":"INTEGER","sort_key":"INTEGER"},
+      "required": ["contact_id","kind","value","preferred","sort_key"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["preferred IN (0, 1)", "sort_key >= 0"]
+    },
+    "contacts": {
+      "columns": {"id":"TEXT","company_id":"TEXT","first_name":"TEXT","last_name":"TEXT","display_name":"TEXT","role":"TEXT","kind":"TEXT","preferred_contact_method":"TEXT","address_line1":"TEXT","address_line2":"TEXT","city":"TEXT","state":"TEXT","postal_code":"TEXT","property_type":"TEXT","notes":"TEXT","favorite":"INTEGER","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["display_name","kind","favorite","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["favorite IN (0, 1)", "version > 0"]
+    },
+    "lost_reasons": {
+      "columns": {"id":"TEXT","label":"TEXT","sort_key":"INTEGER","active":"INTEGER"},
+      "required": ["label","sort_key","active"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["sort_key >= 0", "active IN (0, 1)"]
+    },
+    "opportunities": {
+      "columns": {"id":"TEXT","name":"TEXT","contact_id":"TEXT","company_id":"TEXT","stage_id":"TEXT","value_minor":"INTEGER","currency_code":"TEXT","probability_percent":"INTEGER","expected_close_date":"TEXT","source":"TEXT","source_label":"TEXT","lost_reason_id":"TEXT","notes":"TEXT","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER","quote_tool":"TEXT","quote_external_id":"TEXT","quote_label":"TEXT","quote_linked_at":"TEXT","job_tool":"TEXT","job_external_id":"TEXT","job_label":"TEXT","job_linked_at":"TEXT"},
+      "required": ["name","stage_id","value_minor","currency_code","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["value_minor >= 0", "probability_percent BETWEEN 0 AND 100", "version > 0"]
+    },
+    "pipelines": {
+      "columns": {"id":"TEXT","name":"TEXT"},
+      "required": ["name"],
+      "primaryKey": ["id"]
+    },
+    "schema_migrations": {
+      "columns": {"version":"INTEGER","applied_at":"TEXT"},
+      "required": ["applied_at"],
+      "primaryKey": ["version"]
+    },
+    "search_index": {
+      "kind": "fts5_projection",
+      "columns": {"entity_type":"ANY","entity_id":"ANY","title":"ANY","content":"ANY"},
+      "required": [],
+      "primaryKey": []
+    },
+    "stage_history": {
+      "columns": {"id":"TEXT","opportunity_id":"TEXT","from_stage_id":"TEXT","to_stage_id":"TEXT","actor":"TEXT","lost_reason_id":"TEXT","created_at":"TEXT"},
+      "required": ["opportunity_id","to_stage_id","actor","created_at"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["actor IN ('user', 'agent', 'import')"]
+    },
+    "stages": {
+      "columns": {"id":"TEXT","pipeline_id":"TEXT","name":"TEXT","sort_key":"INTEGER","kind":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["pipeline_id","name","sort_key","kind","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["sort_key >= 0", "kind IN ('open', 'won', 'lost')", "version > 0"]
+    },
+    "tasks": {
+      "columns": {"id":"TEXT","title":"TEXT","body":"TEXT","parent_type":"TEXT","parent_id":"TEXT","due_at":"TEXT","remind_at":"TEXT","priority":"TEXT","status":"TEXT","completed_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "required": ["title","priority","status","created_at","updated_at","version"],
+      "primaryKey": ["id"],
+      "sqlChecks": ["parent_type IN ('contact', 'company', 'opportunity')", "priority IN ('low', 'normal', 'high')", "status IN ('open', 'done', 'dropped')", "(parent_type IS NULL) = (parent_id IS NULL)", "version > 0"]
+    }
+  },
   "recordVersions": {
     "initial": 1,
     "strategy": "positive_integer_incremented_by_version_checked_writes"

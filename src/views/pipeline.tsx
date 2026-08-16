@@ -862,7 +862,7 @@ function draftFrom(opportunity: Opportunity): OpportunityDraft {
     probability: opportunity.probabilityPercent === null ? "" : String(opportunity.probabilityPercent),
     expectedCloseDate: opportunity.expectedCloseDate ?? "",
     source: opportunity.source ?? "",
-    sourceLabel: opportunity.sourceLabel ?? "",
+    sourceLabel: opportunity.source ? (opportunity.sourceLabel ?? "") : "",
     notes: opportunity.notes ?? "",
   };
 }
@@ -958,7 +958,7 @@ export function OpportunityFormView({
       probabilityPercent: probability,
       expectedCloseDate: orNull(draft.expectedCloseDate),
       source: draft.source === "" ? null : draft.source,
-      sourceLabel: orNull(draft.sourceLabel),
+      sourceLabel: draft.source === "" ? null : orNull(draft.sourceLabel),
       notes: orNull(draft.notes),
     };
 
@@ -1062,7 +1062,14 @@ export function OpportunityFormView({
           <Field label="Source" error={error.fields.source}>
             <select
               value={draft.source}
-              onChange={(event) => set("source", event.target.value as OpportunitySource | "")}
+              onChange={(event) => {
+                const source = event.target.value as OpportunitySource | "";
+                setDraft((current) => ({
+                  ...current,
+                  source,
+                  sourceLabel: source === "" ? "" : current.sourceLabel,
+                }));
+              }}
             >
               <option value="">—</option>
               {OPPORTUNITY_SOURCE_OPTIONS.map((option) => (
@@ -1072,13 +1079,15 @@ export function OpportunityFormView({
               ))}
             </select>
           </Field>
-          <Field label="Source detail" error={error.fields.sourceLabel}>
-            <input
-              value={draft.sourceLabel}
-              onChange={(event) => set("sourceLabel", event.target.value)}
-              placeholder="e.g. referred by Dana"
-            />
-          </Field>
+          {draft.source !== "" ? (
+            <Field label="Source detail" error={error.fields.sourceLabel}>
+              <input
+                value={draft.sourceLabel}
+                onChange={(event) => set("sourceLabel", event.target.value)}
+                placeholder="e.g. referred by Dana"
+              />
+            </Field>
+          ) : null}
           <Field label="Notes" error={error.fields.notes}>
             <input value={draft.notes} onChange={(event) => set("notes", event.target.value)} />
           </Field>

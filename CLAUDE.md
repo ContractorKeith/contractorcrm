@@ -16,9 +16,12 @@ local agent API, and a clean opportunity → quote → ContractorProject job han
 
 Core ready — v0.1.0 development. MVP slices 0–3 are implemented and verified:
 native contacts/companies, durable SQLite storage and backup/restore, pipeline and
-won-opportunity hand-off, activities, tasks, and needs-attention workflows. Slice 4
-(search, views, and data portability) is active through GitHub issues #15–#21;
-issue #22 tracks the remaining slice-3 GUI cleanup.
+won-opportunity hand-off, activities, tasks, and needs-attention workflows. The
+Slice 4 foundation is implemented through migration 006: tested versioned data/API
+contracts and a transactionally maintained FTS5 search seam across contacts,
+companies, opportunities, and activities. Slice-3 UX cleanup is complete; global
+search UI, saved views, tags/custom fields, data portability, and attachments remain
+planned in issues #16–#21.
 
 ## Planning baseline
 

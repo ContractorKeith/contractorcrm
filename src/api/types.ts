@@ -23,6 +23,8 @@ export interface SearchResult {
   entityType: SearchEntityType;
   entityId: string;
   title: string;
+  parentType: "contact" | "company" | "opportunity" | null;
+  parentId: string | null;
 }
 
 // A company — client, sub, vendor, or supplier grouping contacts.

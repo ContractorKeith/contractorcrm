@@ -3,10 +3,10 @@
 Status: v1 application command contract implemented; MCP adapter planned
 Updated: 2026-08-16
 
-The implemented command registry and stable error kinds are published in
-`schemas/v1/local-api.json` and verified by
-`src-tauri/tests/schema_contracts.rs`. Tools described below that do not yet
-appear in that manifest remain planned work.
+The implemented command registry, named inputs, outputs, foundational wire
+types, and stable error kinds are published in `schemas/v1/local-api.json` and
+verified by `src-tauri/tests/schema_contracts.rs`. Tools described below that
+do not yet appear in that manifest remain planned work.
 
 ## Interface
 
@@ -18,7 +18,7 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 
 ### Read
 
-- `search_records(query, entityTypes?, limit?, cursor?)` — FTS-backed search across contacts, companies, opportunities, and activities
+- `search_records(query, entityTypes?, limit?)` — bounded FTS-backed search across contacts, companies, opportunities, and activities; activity hits include their parent navigation target
 - `list_contacts(kind?, tag?, limit?, cursor?)`
 - `get_contact(contactId, include?)` — include options: `activities`, `tasks`, `opportunities`, `customFields`
 - `list_companies(kind?, limit?, cursor?)`
@@ -77,7 +77,9 @@ CRM data is personal data — names, phones, emails, addresses. The privacy rule
 - Agent responses omit attachment bodies and provider credentials.
 - Local MCP reads do not imply permission to send contact data to a model provider; provider calls are separate and show exactly which contacts are included.
 - Each mutation records actor, client name, command ID, timestamp, and a concise non-secret summary in the command log.
-- Tool results use cursor pagination and explicit size limits.
+- Implemented desktop commands use explicit size limits. The future MCP adapter
+  will add cursors to list/timeline tools where result sets can grow; the v1
+  desktop search command deliberately returns one bounded page (maximum 50).
 
 ## Suite hand-off surface
 

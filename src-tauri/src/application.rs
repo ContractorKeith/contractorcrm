@@ -138,6 +138,8 @@ pub struct SearchResult {
     pub entity_type: String,
     pub entity_id: String,
     pub title: String,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
 }
 
 /// Search local CRM content. Empty/punctuation-only input intentionally has no
@@ -180,7 +182,10 @@ pub fn search_records(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "SELECT entity_type, entity_id, title FROM search_index \
+        "SELECT search_index.entity_type, search_index.entity_id, search_index.title, \
+                activities.parent_type, activities.parent_id FROM search_index \
+         LEFT JOIN activities ON search_index.entity_type = 'activity' \
+             AND activities.id = search_index.entity_id \
          WHERE search_index MATCH ?1 AND entity_type IN ({placeholders}) \
          ORDER BY bm25(search_index), entity_type, entity_id LIMIT ?{}",
         entity_types.len() + 2
@@ -197,6 +202,8 @@ pub fn search_records(
                 entity_type: row.get(0)?,
                 entity_id: row.get(1)?,
                 title: row.get(2)?,
+                parent_type: row.get(3)?,
+                parent_id: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -410,6 +417,7 @@ fn set_company_archived(
         ],
     )?;
     refresh_search_projection(&transaction, "company", &company.id)?;
+    refresh_activity_projections_for_parent(&transaction, "company", &company.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -623,6 +631,7 @@ fn set_contact_archived(
         ],
     )?;
     refresh_search_projection(&transaction, "contact", &contact.id)?;
+    refresh_activity_projections_for_parent(&transaction, "contact", &contact.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -1040,6 +1049,7 @@ fn set_opportunity_archived(
         ],
     )?;
     refresh_search_projection(&transaction, "opportunity", &opportunity.id)?;
+    refresh_activity_projections_for_parent(&transaction, "opportunity", &opportunity.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -3047,13 +3057,49 @@ fn refresh_search_projection(
         )?,
         "activity" => transaction.execute(
             "INSERT INTO search_index (entity_type, entity_id, title, content)
-             SELECT 'activity', id, summary, trim(coalesce(summary, '') || ' ' || coalesce(body, ''))
-             FROM activities WHERE id = ?1",
+             SELECT 'activity', a.id, a.summary,
+                    trim(coalesce(a.summary, '') || ' ' || coalesce(a.body, ''))
+             FROM activities a WHERE a.id = ?1 AND (
+                 (a.parent_type = 'contact' AND EXISTS (
+                     SELECT 1 FROM contacts c
+                     WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                 )) OR
+                 (a.parent_type = 'company' AND EXISTS (
+                     SELECT 1 FROM companies c
+                     WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                 )) OR
+                 (a.parent_type = 'opportunity' AND EXISTS (
+                     SELECT 1 FROM opportunities o
+                     WHERE o.id = a.parent_id AND o.archived_at IS NULL
+                 ))
+             )",
             [entity_id],
         )?,
         _ => unreachable!("only indexed entity types are refreshed"),
     };
     debug_assert!(inserted <= 1);
+    Ok(())
+}
+
+/// Refresh every activity directly owned by a parent when its archive state
+/// changes. Canonical activity rows stay intact; only the active-record search
+/// projection is removed or rebuilt, inside the parent's write transaction.
+fn refresh_activity_projections_for_parent(
+    transaction: &Transaction<'_>,
+    parent_type: &str,
+    parent_id: &str,
+) -> Result<(), ApplicationError> {
+    let mut statement = transaction
+        .prepare("SELECT id FROM activities WHERE parent_type = ?1 AND parent_id = ?2")?;
+    let activity_ids = statement
+        .query_map(params![parent_type, parent_id], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for activity_id in activity_ids {
+        refresh_search_projection(transaction, "activity", &activity_id)?;
+    }
     Ok(())
 }
 

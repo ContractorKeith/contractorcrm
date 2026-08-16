@@ -324,6 +324,35 @@ describe("opportunity detail and stage moves", () => {
     expect(screen.queryByText(/Angie's List/)).not.toBeInTheDocument();
   });
 
+  it("hides and clears source detail in the editor when source kind is unset", async () => {
+    const user = userEvent.setup();
+    const updateOpportunity = vi.fn().mockResolvedValue(makeOpportunity());
+    const client = detailClient({
+      getOpportunity: vi.fn().mockResolvedValue(
+        makeOpportunityDetail({ source: null, sourceLabel: "orphaned detail" }),
+      ),
+      updateOpportunity,
+    });
+
+    render(<App client={client} />);
+    await openDetail(user);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(await screen.findByRole("heading", { name: "Edit opportunity" })).toBeVisible();
+    expect(screen.queryByLabelText("Source detail")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Source"), "referral");
+    await user.type(screen.getByLabelText("Source detail"), "Dana");
+    await user.selectOptions(screen.getByLabelText("Source"), "");
+    expect(screen.queryByLabelText("Source detail")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save opportunity" }));
+
+    expect(updateOpportunity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({ source: null, sourceLabel: null }),
+      }),
+    );
+  });
+
   it("appends the free-text label to a set source kind", async () => {
     const user = userEvent.setup();
     const client = detailClient({
