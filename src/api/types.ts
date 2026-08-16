@@ -16,6 +16,15 @@ export interface HealthReport {
   status: string;
 }
 
+export type SearchEntityType = "contact" | "company" | "opportunity" | "activity";
+
+// Lightweight FTS hit; fetch the canonical record separately when needed.
+export interface SearchResult {
+  entityType: SearchEntityType;
+  entityId: string;
+  title: string;
+}
+
 // A company — client, sub, vendor, or supplier grouping contacts.
 export interface Company {
   id: string;

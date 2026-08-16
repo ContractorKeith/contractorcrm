@@ -254,6 +254,40 @@ CREATE INDEX tasks_status_due ON tasks(status, due_at);
 CREATE INDEX tasks_parent ON tasks(parent_type, parent_id);
 ";
 
+/// v6 local full-text projection. Canonical tables remain the source of truth;
+/// the application layer refreshes a record's projection in its write
+/// transaction. The migration backfills active records and all activities.
+const MIGRATION_006: &str = "\
+CREATE VIRTUAL TABLE search_index USING fts5(
+    entity_type UNINDEXED,
+    entity_id UNINDEXED,
+    title,
+    content,
+    tokenize = 'unicode61'
+);
+
+INSERT INTO search_index (entity_type, entity_id, title, content)
+SELECT 'company', id, name,
+       trim(coalesce(name, '') || ' ' || coalesce(phone, '') || ' ' ||
+            coalesce(email, '') || ' ' || coalesce(website, '') || ' ' ||
+            coalesce(notes, ''))
+FROM companies WHERE archived_at IS NULL;
+INSERT INTO search_index (entity_type, entity_id, title, content)
+SELECT 'contact', c.id, c.display_name,
+       trim(coalesce(c.display_name, '') || ' ' || coalesce(c.notes, '') || ' ' ||
+            coalesce((SELECT group_concat(value, ' ') FROM contact_channels cc
+                      WHERE cc.contact_id = c.id), ''))
+FROM contacts c WHERE c.archived_at IS NULL;
+INSERT INTO search_index (entity_type, entity_id, title, content)
+SELECT 'opportunity', id, name,
+       trim(coalesce(name, '') || ' ' || coalesce(notes, '') || ' ' ||
+            coalesce(source_label, ''))
+FROM opportunities WHERE archived_at IS NULL;
+INSERT INTO search_index (entity_type, entity_id, title, content)
+SELECT 'activity', id, summary, trim(coalesce(summary, '') || ' ' || coalesce(body, ''))
+FROM activities;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -275,6 +309,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 5,
         sql: MIGRATION_005,
+    },
+    Migration {
+        version: 6,
+        sql: MIGRATION_006,
     },
 ];
 

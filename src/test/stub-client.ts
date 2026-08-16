@@ -18,6 +18,7 @@ import type {
 // Fully-stubbed CoreClient; tests override the methods they care about.
 export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => ({
   health: vi.fn().mockResolvedValue({ app: "ContractorCRM", version: "0.1.0", status: "ok" }),
+  searchRecords: vi.fn().mockResolvedValue([]),
   createCompany: vi.fn(),
   updateCompany: vi.fn(),
   archiveCompany: vi.fn(),

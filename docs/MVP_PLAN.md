@@ -54,7 +54,7 @@ Exit: nothing falls through the cracks — every stale lead and overdue follow-u
 
 ## 4. Search, views, and data in/out
 
-- [ ] FTS5 index across contacts, companies, opportunities, and activities, maintained transactionally.
+- [x] FTS5 index across contacts, companies, opportunities, and activities, maintained transactionally.
 - [ ] Global search with keyboard-first navigation; recents and favorites.
 - [ ] Saved views with versioned filter definitions.
 - [ ] Tags and custom fields (text, number, date, select).

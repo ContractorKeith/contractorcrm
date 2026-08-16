@@ -35,7 +35,7 @@ fn data_model_v1_matches_the_live_database_schema() {
         .connection()
         .prepare(
             "SELECT name FROM sqlite_master
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'search_index_%'
              ORDER BY name",
         )
         .expect("prepare table listing");

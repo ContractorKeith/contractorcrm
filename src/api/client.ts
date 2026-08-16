@@ -16,6 +16,8 @@ import type {
   DeleteActivityRequest,
   EnvelopeExportReport,
   HealthReport,
+  SearchEntityType,
+  SearchResult,
   LinkJobRequest,
   LinkQuoteRequest,
   ListTasksRequest,
@@ -43,6 +45,7 @@ import type {
 // Components never call invoke() directly — everything routes through here.
 export interface CoreClient {
   health(): Promise<HealthReport>;
+  searchRecords(query: string, entityTypes?: SearchEntityType[], limit?: number): Promise<SearchResult[]>;
   createCompany(request: CreateCompanyRequest): Promise<Company>;
   updateCompany(request: UpdateCompanyRequest): Promise<Company>;
   archiveCompany(request: ArchiveRequest): Promise<Company>;
@@ -93,6 +96,8 @@ export interface CoreClient {
 // Production client — one invoke per registered Tauri command.
 export const tauriCoreClient: CoreClient = {
   health: () => invoke("health"),
+  searchRecords: (query, entityTypes, limit) =>
+    invoke("search_records", { query, entityTypes, limit }),
   createCompany: (request) => invoke("create_company", { request }),
   updateCompany: (request) => invoke("update_company", { request }),
   archiveCompany: (request) => invoke("archive_company", { request }),

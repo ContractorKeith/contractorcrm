@@ -4,6 +4,7 @@
   "transport": "tauri-ipc",
   "commands": [
     "health",
+    "search_records",
     "create_company",
     "update_company",
     "archive_company",

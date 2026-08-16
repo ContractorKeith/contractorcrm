@@ -11,9 +11,9 @@ use application::{
     CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, DatabaseInfo,
     DeleteActivityRequest, EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest,
     ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
-    OpportunityListItem, RestoreReport, SetAttentionThresholdsRequest, TaskActionRequest,
-    UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest,
-    UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
+    OpportunityListItem, RestoreReport, SearchResult, SetAttentionThresholdsRequest,
+    TaskActionRequest, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
+    UpdateContactRequest, UpdateOpportunityRequest, UpdateStageRequest, UpdateTaskRequest,
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
@@ -30,6 +30,7 @@ macro_rules! with_local_api_v1_commands {
     ($callback:ident) => {
         $callback! {
             health,
+            search_records,
             create_company,
             update_company,
             archive_company,
@@ -192,6 +193,17 @@ fn health_report() -> HealthReport {
 #[tauri::command]
 fn health() -> HealthReport {
     health_report()
+}
+
+#[tauri::command]
+fn search_records(
+    storage: State<'_, SharedStorage>,
+    query: String,
+    entity_types: Option<Vec<String>>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::search_records(&storage, query, entity_types, limit).map_err(Into::into)
 }
 
 // Thin Tauri commands — lock the shared storage, delegate to the application

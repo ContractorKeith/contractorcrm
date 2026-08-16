@@ -129,6 +129,81 @@ pub struct ArchiveRequest {
     pub expected_version: i64,
 }
 
+/// One bounded FTS result. `entity_type` is one of contact, company,
+/// opportunity, or activity; the canonical record is loaded separately when
+/// callers need its full shape.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub title: String,
+}
+
+/// Search local CRM content. Empty/punctuation-only input intentionally has no
+/// results; FTS syntax is never passed through from the caller.
+pub fn search_records(
+    storage: &Storage,
+    query: String,
+    entity_types: Option<Vec<String>>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, ApplicationError> {
+    let query = bounded_fts_query(&query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let entity_types = entity_types.unwrap_or_else(|| {
+        vec![
+            "contact".into(),
+            "company".into(),
+            "opportunity".into(),
+            "activity".into(),
+        ]
+    });
+    if entity_types.is_empty() {
+        return Ok(Vec::new());
+    }
+    for entity_type in &entity_types {
+        if !matches!(
+            entity_type.as_str(),
+            "contact" | "company" | "opportunity" | "activity"
+        ) {
+            return Err(ApplicationError::InvalidInput {
+                field: "entityTypes".into(),
+                message: "must contain only contact, company, opportunity, or activity".into(),
+            });
+        }
+    }
+    let limit = limit.unwrap_or(25).clamp(1, 50) as i64;
+    let placeholders = (1..=entity_types.len())
+        .map(|index| format!("?{}", index + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT entity_type, entity_id, title FROM search_index \
+         WHERE search_index MATCH ?1 AND entity_type IN ({placeholders}) \
+         ORDER BY bm25(search_index), entity_type, entity_id LIMIT ?{}",
+        entity_types.len() + 2
+    );
+    let mut values: Vec<&dyn rusqlite::ToSql> = vec![&query];
+    for entity_type in &entity_types {
+        values.push(entity_type);
+    }
+    values.push(&limit);
+    let mut statement = storage.connection().prepare(&sql)?;
+    let results = statement
+        .query_map(rusqlite::params_from_iter(values), |row| {
+            Ok(SearchResult {
+                entity_type: row.get(0)?,
+                entity_id: row.get(1)?,
+                title: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into);
+    results
+}
+
 // ---------------------------------------------------------------------------
 // Company use-cases
 // ---------------------------------------------------------------------------
@@ -191,6 +266,7 @@ pub fn create_company(
             company.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "company", &company.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -259,6 +335,7 @@ pub fn update_company(
             company.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "company", &company.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -332,6 +409,7 @@ fn set_company_archived(
             company.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "company", &company.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -424,6 +502,7 @@ pub fn create_contact(
         ],
     )?;
     insert_channels(&transaction, &contact_id, &fields.channels)?;
+    refresh_search_projection(&transaction, "contact", &contact_id)?;
     log_command(
         &transaction,
         request.actor,
@@ -488,6 +567,7 @@ pub fn update_contact(
         [&existing.id],
     )?;
     insert_channels(&transaction, &existing.id, &fields.channels)?;
+    refresh_search_projection(&transaction, "contact", &existing.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -542,6 +622,7 @@ fn set_contact_archived(
             contact.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "contact", &contact.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -849,6 +930,7 @@ pub fn create_opportunity(
         request.actor,
         None,
     )?;
+    refresh_search_projection(&transaction, "opportunity", &opportunity_id)?;
     log_command(
         &transaction,
         request.actor,
@@ -902,6 +984,7 @@ pub fn update_opportunity(
             existing.version + 1,
         ],
     )?;
+    refresh_search_projection(&transaction, "opportunity", &existing.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -956,6 +1039,7 @@ fn set_opportunity_archived(
             opportunity.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "opportunity", &opportunity.id)?;
     let verb = if archived { "archived" } else { "unarchived" };
     log_command(
         &transaction,
@@ -1017,6 +1101,7 @@ pub fn move_opportunity_stage(
         request.actor,
         lost_reason_id.as_deref(),
     )?;
+    refresh_search_projection(&transaction, "opportunity", &existing.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -1229,6 +1314,7 @@ pub fn log_activity(
             activity.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "activity", &activity.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -1283,6 +1369,7 @@ pub fn update_activity(
             activity.version,
         ],
     )?;
+    refresh_search_projection(&transaction, "activity", &activity.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -1309,6 +1396,7 @@ pub fn delete_activity(
         activity.version,
     )?;
     transaction.execute("DELETE FROM activities WHERE id = ?1", [&activity.id])?;
+    refresh_search_projection(&transaction, "activity", &activity.id)?;
     log_command(
         &transaction,
         request.actor,
@@ -1610,6 +1698,7 @@ pub fn complete_task(
                 request.actor.as_database_value(),
             ],
         )?;
+        refresh_search_projection(&transaction, "activity", &activity_id)?;
         log_command(
             &transaction,
             request.actor,
@@ -2923,6 +3012,64 @@ fn immediate(storage: &mut Storage) -> Result<Transaction<'_>, ApplicationError>
     Ok(storage
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?)
+}
+
+/// Replace a record's FTS projection from the canonical rows. This is called
+/// only from the transaction that changed the record, so a failed write cannot
+/// leave the index ahead of or behind its source data.
+fn refresh_search_projection(
+    transaction: &Transaction<'_>,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<(), ApplicationError> {
+    transaction.execute(
+        "DELETE FROM search_index WHERE entity_type = ?1 AND entity_id = ?2",
+        params![entity_type, entity_id],
+    )?;
+    let inserted = match entity_type {
+        "company" => transaction.execute(
+            "INSERT INTO search_index (entity_type, entity_id, title, content)
+             SELECT 'company', id, name, trim(coalesce(name, '') || ' ' || coalesce(phone, '') || ' ' || coalesce(email, '') || ' ' || coalesce(website, '') || ' ' || coalesce(notes, ''))
+             FROM companies WHERE id = ?1 AND archived_at IS NULL",
+            [entity_id],
+        )?,
+        "contact" => transaction.execute(
+            "INSERT INTO search_index (entity_type, entity_id, title, content)
+             SELECT 'contact', c.id, c.display_name, trim(coalesce(c.display_name, '') || ' ' || coalesce(c.notes, '') || ' ' || coalesce((SELECT group_concat(value, ' ') FROM contact_channels cc WHERE cc.contact_id = c.id), ''))
+             FROM contacts c WHERE c.id = ?1 AND c.archived_at IS NULL",
+            [entity_id],
+        )?,
+        "opportunity" => transaction.execute(
+            "INSERT INTO search_index (entity_type, entity_id, title, content)
+             SELECT 'opportunity', id, name, trim(coalesce(name, '') || ' ' || coalesce(notes, '') || ' ' || coalesce(source_label, ''))
+             FROM opportunities WHERE id = ?1 AND archived_at IS NULL",
+            [entity_id],
+        )?,
+        "activity" => transaction.execute(
+            "INSERT INTO search_index (entity_type, entity_id, title, content)
+             SELECT 'activity', id, summary, trim(coalesce(summary, '') || ' ' || coalesce(body, ''))
+             FROM activities WHERE id = ?1",
+            [entity_id],
+        )?,
+        _ => unreachable!("only indexed entity types are refreshed"),
+    };
+    debug_assert!(inserted <= 1);
+    Ok(())
+}
+
+/// Convert caller text into a literal, bounded AND query. Splitting prevents
+/// FTS operators, prefixes, and quoting from changing query semantics.
+fn bounded_fts_query(query: &str) -> String {
+    query
+        .chars()
+        .take(128)
+        .collect::<String>()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(12)
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 fn check_version(

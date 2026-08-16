@@ -1,13 +1,14 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 5,
+  "databaseMigrationVersion": 6,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
     { "version": 3, "name": "handoff_references" },
     { "version": 4, "name": "activities" },
-    { "version": 5, "name": "tasks" }
+    { "version": 5, "name": "tasks" },
+    { "version": 6, "name": "fts5_search_projection" }
   ],
   "tables": [
     "activities",
@@ -20,6 +21,7 @@
     "opportunities",
     "pipelines",
     "schema_migrations",
+    "search_index",
     "stage_history",
     "stages",
     "tasks"

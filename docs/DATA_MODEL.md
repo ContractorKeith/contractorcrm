@@ -1,6 +1,6 @@
 # Data model
 
-Status: implemented through database migration 005
+Status: implemented through database migration 006
 Updated: 2026-08-16
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`. Forward-only
@@ -135,7 +135,7 @@ Same as ContractorProject:
 - `schema_migrations` — forward-only migrations
 - `command_log` — command ID, actor (`user`, `agent`, `import`), timestamp, bounded summary for undo/audit
 - `app_settings` — non-secret preferences (thresholds, density, theme)
-- FTS5 index over contacts, companies, opportunities, activity summaries/bodies, maintained by the repository layer inside the same transaction as the write
+- FTS5 index over active contacts, companies, opportunities, and activity summaries/bodies, maintained by the repository layer inside the same transaction as the write. It is a rebuildable projection; archived records and deleted activities are removed immediately. Contact channel values are included.
 - Provider credentials never stored in these tables
 
 ## Invariants
