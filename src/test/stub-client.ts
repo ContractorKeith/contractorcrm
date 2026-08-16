@@ -19,6 +19,9 @@ import type {
 export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => ({
   health: vi.fn().mockResolvedValue({ app: "ContractorCRM", version: "0.1.0", status: "ok" }),
   searchRecords: vi.fn().mockResolvedValue([]),
+  listRecentRecords: vi.fn().mockResolvedValue([]),
+  recordRecent: vi.fn(),
+  listFavoriteContacts: vi.fn().mockResolvedValue([]),
   createCompany: vi.fn(),
   updateCompany: vi.fn(),
   archiveCompany: vi.fn(),

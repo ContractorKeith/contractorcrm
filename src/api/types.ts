@@ -17,6 +17,7 @@ export interface HealthReport {
 }
 
 export type SearchEntityType = "contact" | "company" | "opportunity" | "activity";
+export type NavigationEntityType = Exclude<SearchEntityType, "activity">;
 
 // Lightweight FTS hit; fetch the canonical record separately when needed.
 export interface SearchResult {

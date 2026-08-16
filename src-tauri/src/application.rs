@@ -142,6 +142,19 @@ pub struct SearchResult {
     pub parent_id: Option<String>,
 }
 
+/// Ordered app-settings entry for a record the user successfully opened from
+/// global search. Activities are intentionally excluded: the UI resolves
+/// those to their canonical parent before recording a recent.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentRecord {
+    entity_type: String,
+    entity_id: String,
+}
+
+const NAVIGATION_RECENTS_KEY: &str = "navigation.recents.v1";
+const MAX_NAVIGATION_RECENTS: usize = 12;
+
 /// Search local CRM content. Empty/punctuation-only input intentionally has no
 /// results; FTS syntax is never passed through from the caller.
 pub fn search_records(
@@ -220,6 +233,100 @@ pub fn search_records(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into);
     results
+}
+
+/// Load the ordered global-search recents projection. Invalid, missing, and
+/// archived records are not surfaced; the stored setting remains a durable
+/// ordered history and is compacted the next time a recent is recorded.
+pub fn list_recent_records(storage: &Storage) -> Result<Vec<SearchResult>, ApplicationError> {
+    let entries = read_navigation_recents(storage.connection())?;
+    entries
+        .into_iter()
+        .filter_map(
+            |entry| match active_navigation_result(storage.connection(), &entry) {
+                Ok(Some(result)) => Some(Ok(result)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            },
+        )
+        .collect()
+}
+
+/// Persist a canonical record as the most-recent global-search destination.
+/// The target must still be active, which prevents callers from creating a
+/// stale navigation projection even if they accidentally record too early.
+pub fn record_recent(
+    storage: &mut Storage,
+    entity_type: String,
+    entity_id: String,
+) -> Result<(), ApplicationError> {
+    let entry = RecentRecord {
+        entity_type,
+        entity_id,
+    };
+    if !matches!(
+        entry.entity_type.as_str(),
+        "contact" | "company" | "opportunity"
+    ) {
+        return Err(ApplicationError::InvalidInput {
+            field: "entityType".into(),
+            message: "must be contact, company, or opportunity".into(),
+        });
+    }
+    if entry.entity_id.trim().is_empty() {
+        return Err(ApplicationError::InvalidInput {
+            field: "entityId".into(),
+            message: "must not be empty".into(),
+        });
+    }
+
+    let transaction = immediate(storage)?;
+    if active_navigation_result(&transaction, &entry)?.is_none() {
+        return Err(ApplicationError::NotFound {
+            resource: navigation_resource(&entry.entity_type),
+            id: entry.entity_id,
+        });
+    }
+    let entries = read_navigation_recents(&transaction)?;
+    let mut active_entries = Vec::with_capacity(entries.len() + 1);
+    for existing in entries {
+        if existing != entry
+            && !active_entries.iter().any(|record| record == &existing)
+            && active_navigation_result(&transaction, &existing)?.is_some()
+        {
+            active_entries.push(existing);
+        }
+    }
+    active_entries.insert(0, entry);
+    active_entries.truncate(MAX_NAVIGATION_RECENTS);
+    let value = serde_json::to_string(&active_entries)
+        .map_err(|error| ApplicationError::InvalidStoredData(error.to_string()))?;
+    transaction.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)\n         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![NAVIGATION_RECENTS_KEY, value],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Existing favorite contacts provide the second empty-search projection.
+/// Favorites are deliberately contact-only in v1.
+pub fn list_favorite_contacts(storage: &Storage) -> Result<Vec<SearchResult>, ApplicationError> {
+    let mut statement = storage.connection().prepare(
+        "SELECT id, display_name FROM contacts\n         WHERE favorite = 1 AND archived_at IS NULL\n         ORDER BY display_name, id",
+    )?;
+    let contacts = statement
+        .query_map([], |row| {
+            Ok(SearchResult {
+                entity_type: "contact".into(),
+                entity_id: row.get(0)?,
+                title: row.get(1)?,
+                parent_type: None,
+                parent_id: None,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(contacts)
 }
 
 // ---------------------------------------------------------------------------
@@ -2479,6 +2586,92 @@ fn read_setting(
             |row| row.get(0),
         )
         .optional()?)
+}
+
+fn read_navigation_recents(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<RecentRecord>, ApplicationError> {
+    let Some(value) = read_setting(connection, NAVIGATION_RECENTS_KEY)? else {
+        return Ok(Vec::new());
+    };
+    let entries = serde_json::from_str::<Vec<RecentRecord>>(&value).map_err(|error| {
+        ApplicationError::InvalidStoredData(format!(
+            "app_settings {NAVIGATION_RECENTS_KEY} holds invalid JSON: {error}"
+        ))
+    })?;
+    if entries.len() > MAX_NAVIGATION_RECENTS {
+        return Err(ApplicationError::InvalidStoredData(format!(
+            "app_settings {NAVIGATION_RECENTS_KEY} has more than {MAX_NAVIGATION_RECENTS} entries"
+        )));
+    }
+    for entry in &entries {
+        validate_recent_record(entry)?;
+    }
+    Ok(entries)
+}
+
+fn validate_recent_record(entry: &RecentRecord) -> Result<(), ApplicationError> {
+    if !matches!(
+        entry.entity_type.as_str(),
+        "contact" | "company" | "opportunity"
+    ) {
+        return Err(ApplicationError::InvalidStoredData(format!(
+            "app_settings {NAVIGATION_RECENTS_KEY} contains unsupported entity type {:?}",
+            entry.entity_type
+        )));
+    }
+    if entry.entity_id.trim().is_empty() {
+        return Err(ApplicationError::InvalidStoredData(format!(
+            "app_settings {NAVIGATION_RECENTS_KEY} contains an empty entity id"
+        )));
+    }
+    Ok(())
+}
+
+fn navigation_resource(entity_type: &str) -> &'static str {
+    match entity_type {
+        "contact" => "contact",
+        "company" => "company",
+        "opportunity" => "opportunity",
+        _ => "record",
+    }
+}
+
+fn active_navigation_result(
+    connection: &rusqlite::Connection,
+    entry: &RecentRecord,
+) -> Result<Option<SearchResult>, ApplicationError> {
+    let title = match entry.entity_type.as_str() {
+        "contact" => connection
+            .query_row(
+                "SELECT display_name FROM contacts WHERE id = ?1 AND archived_at IS NULL",
+                [&entry.entity_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        "company" => connection
+            .query_row(
+                "SELECT name FROM companies WHERE id = ?1 AND archived_at IS NULL",
+                [&entry.entity_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        "opportunity" => connection
+            .query_row(
+                "SELECT name FROM opportunities WHERE id = ?1 AND archived_at IS NULL",
+                [&entry.entity_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        _ => return Ok(None),
+    };
+    Ok(title.map(|title| SearchResult {
+        entity_type: entry.entity_type.clone(),
+        entity_id: entry.entity_id.clone(),
+        title,
+        parent_type: None,
+        parent_id: None,
+    }))
 }
 
 /// Read a stored day count; absent means the default, garbage is an error.

@@ -5,6 +5,9 @@
   "commands": [
     {"name":"health","mode":"read","input":[],"output":"HealthReport"},
     {"name":"search_records","mode":"read","input":[{"name":"query","type":"string","required":true},{"name":"entityTypes","type":"SearchEntityType[]","required":false},{"name":"limit","type":"integer","required":false}],"output":"SearchResult[]"},
+    {"name":"list_recent_records","mode":"read","input":[],"output":"SearchResult[]"},
+    {"name":"record_recent","mode":"write","input":[{"name":"entityType","type":"NavigationEntityType","required":true},{"name":"entityId","type":"string","required":true}],"output":"null"},
+    {"name":"list_favorite_contacts","mode":"read","input":[],"output":"SearchResult[]"},
     {"name":"create_company","mode":"write","input":[{"name":"request","type":"CreateCompanyRequest","required":true}],"output":"Company"},
     {"name":"update_company","mode":"write","input":[{"name":"request","type":"UpdateCompanyRequest","required":true}],"output":"Company"},
     {"name":"archive_company","mode":"write","input":[{"name":"request","type":"ArchiveRequest","required":true}],"output":"Company"},
@@ -52,6 +55,7 @@
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
+    "NavigationEntityType": {"enum":["contact","company","opportunity"]},
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",

@@ -320,3 +320,20 @@ fn search_result_v1_matches_the_published_wire_schema() {
     assert_eq!(serialized["parentType"], "contact");
     assert_eq!(serialized["parentId"], "contact-1");
 }
+
+#[test]
+fn navigation_commands_are_additive_v1_contract_entries() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    let names = commands
+        .iter()
+        .map(|command| command["name"].as_str().expect("command name"))
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"list_recent_records"));
+    assert!(names.contains(&"record_recent"));
+    assert!(names.contains(&"list_favorite_contacts"));
+    assert_eq!(
+        string_array(&schema["wireTypes"]["NavigationEntityType"], "enum"),
+        ["contact", "company", "opportunity"]
+    );
+}

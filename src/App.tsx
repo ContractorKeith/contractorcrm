@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { tauriCoreClient, type CoreClient } from "./api/client";
-import type { HealthReport } from "./api/types";
+import type { HealthReport, NavigationEntityType, SearchResult } from "./api/types";
 import { BrandMark } from "./components/BrandMark";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { loadThemePreference, watchTheme, type ThemePreference } from "./theme";
 import { AttentionView } from "./views/attention";
 import { CompaniesView, CompanyDetailView, CompanyFormView } from "./views/companies";
@@ -70,6 +71,39 @@ export function App({ client = tauriCoreClient }: AppProps) {
           ? view.name
           : "contacts";
 
+  const openSearchResult = async (result: SearchResult): Promise<boolean> => {
+    const entityType: NavigationEntityType | null =
+      result.entityType === "activity" ? result.parentType : result.entityType;
+    const entityId = result.entityType === "activity" ? result.parentId : result.entityId;
+    if (!entityType || !entityId) return false;
+
+    try {
+      const record =
+        entityType === "contact"
+          ? await client.getContact(entityId)
+          : entityType === "company"
+            ? await client.getCompany(entityId)
+            : await client.getOpportunity(entityId);
+      if (record.archivedAt) return false;
+
+      setView(
+        entityType === "contact"
+          ? { name: "contactDetail", id: entityId }
+          : entityType === "company"
+            ? { name: "companyDetail", id: entityId }
+            : { name: "opportunityDetail", id: entityId },
+      );
+      try {
+        await client.recordRecent(entityType, entityId);
+      } catch {
+        // Navigation remains successful if the replaceable recents projection fails.
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -80,6 +114,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
           </span>
         </a>
         <div className="header-controls">
+          <GlobalSearch client={client} onOpenResult={openSearchResult} />
           <label className="theme-control">
             <span>Theme</span>
             <select

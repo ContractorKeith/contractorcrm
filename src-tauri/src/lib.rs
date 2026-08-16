@@ -31,6 +31,9 @@ macro_rules! with_local_api_v1_commands {
         $callback! {
             health,
             search_records,
+            list_recent_records,
+            record_recent,
+            list_favorite_contacts,
             create_company,
             update_company,
             archive_company,
@@ -204,6 +207,32 @@ fn search_records(
 ) -> Result<Vec<SearchResult>, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::search_records(&storage, query, entity_types, limit).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_recent_records(
+    storage: State<'_, SharedStorage>,
+) -> Result<Vec<SearchResult>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_recent_records(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn record_recent(
+    storage: State<'_, SharedStorage>,
+    entity_type: String,
+    entity_id: String,
+) -> Result<(), CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::record_recent(&mut storage, entity_type, entity_id).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_favorite_contacts(
+    storage: State<'_, SharedStorage>,
+) -> Result<Vec<SearchResult>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_favorite_contacts(&storage).map_err(Into::into)
 }
 
 // Thin Tauri commands — lock the shared storage, delegate to the application
