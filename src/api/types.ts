@@ -28,6 +28,50 @@ export interface SearchResult {
   parentId: string | null;
 }
 
+// A named, persisted list state. The definition is deliberately finite: it
+// contains no SQL, column names, or operators supplied by callers.
+export type SavedViewEntityType = "contact" | "company" | "opportunity";
+export type SavedViewSortDirection = "ascending" | "descending";
+export type SavedViewSortField = "displayName" | "name" | "stage" | "value" | "expectedClose";
+
+export interface SavedViewDefinition {
+  schemaVersion: 1;
+  filter: { includeArchived: boolean };
+  sort: { field: SavedViewSortField; direction: SavedViewSortDirection };
+}
+
+export interface SavedView {
+  id: string;
+  name: string;
+  entityType: SavedViewEntityType;
+  definition: SavedViewDefinition;
+  sortKey: number;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface CreateSavedViewRequest {
+  actor?: Actor;
+  name: string;
+  entityType: SavedViewEntityType;
+  definition: SavedViewDefinition;
+}
+
+export interface UpdateSavedViewRequest {
+  actor?: Actor;
+  savedViewId: string;
+  expectedVersion: number;
+  name: string;
+  definition: SavedViewDefinition;
+}
+
+export interface DeleteSavedViewRequest {
+  actor?: Actor;
+  savedViewId: string;
+  expectedVersion: number;
+}
+
 // A company — client, sub, vendor, or supplier grouping contacts.
 export interface Company {
   id: string;

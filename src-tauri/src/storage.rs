@@ -299,6 +299,26 @@ WHERE (a.parent_type = 'contact' AND EXISTS (
        ));
 ";
 
+/// v7 saved views. Definitions are opaque JSON at rest so unsupported future
+/// versions remain untouched; the application layer validates and migrates
+/// known definitions in memory before returning them to a caller.
+const MIGRATION_007: &str = "\
+CREATE TABLE saved_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('contact', 'company', 'opportunity')),
+    definition_json TEXT NOT NULL,
+    sort_key INTEGER NOT NULL DEFAULT 0 CHECK (sort_key >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)
+);
+CREATE UNIQUE INDEX saved_views_entity_name_unique
+    ON saved_views(entity_type, name COLLATE NOCASE);
+CREATE INDEX saved_views_entity_sort
+    ON saved_views(entity_type, sort_key, id);
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -324,6 +344,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 6,
         sql: MIGRATION_006,
+    },
+    Migration {
+        version: 7,
+        sql: MIGRATION_007,
     },
 ];
 

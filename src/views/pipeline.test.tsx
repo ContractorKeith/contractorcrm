@@ -128,6 +128,87 @@ describe("pipeline table", () => {
     await user.click(screen.getByLabelText("Show archived"));
     expect(await screen.findByText("Old deal")).toBeVisible();
   });
+
+  it("restores a saved pipeline filter and sort definition", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listSavedViews: vi.fn().mockImplementation((entityType) =>
+        Promise.resolve(
+          entityType === "opportunity"
+            ? [{
+                id: "view-pipeline",
+                name: "Largest opportunities",
+                entityType: "opportunity",
+                definition: { schemaVersion: 1, filter: { includeArchived: true }, sort: { field: "value", direction: "descending" } },
+                sortKey: 0,
+                createdAt: "2026-08-16T20:00:00Z",
+                updatedAt: "2026-08-16T20:00:00Z",
+                version: 1,
+              }]
+            : [],
+        ),
+      ),
+      listOpportunities: vi.fn().mockResolvedValue([
+        makeOpportunity({ id: "small", name: "Small", value: { valueMinor: 100, currencyCode: "USD" } }),
+        makeOpportunity({ id: "big", name: "Big", value: { valueMinor: 900, currencyCode: "USD" }, archivedAt: "2026-08-01T00:00:00Z" }),
+      ]),
+    });
+
+    render(<App client={client} />);
+    await openPipeline(user);
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Saved pipeline view" }),
+      "view-pipeline",
+    );
+    expect(client.listOpportunities).toHaveBeenLastCalledWith(true);
+    const table = await screen.findByRole("table", { name: "Pipeline list" });
+    expect(within(table).getByRole("columnheader", { name: "Value" })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]!).getByText("Big")).toBeVisible();
+    expect(within(rows[2]!).getByText("Small")).toBeVisible();
+  });
+
+  it("keeps saved list definitions out of the read-only board mode", async () => {
+    const user = userEvent.setup();
+    const pipelineView = {
+      id: "view-pipeline",
+      name: "Largest opportunities",
+      entityType: "opportunity" as const,
+      definition: {
+        schemaVersion: 1 as const,
+        filter: { includeArchived: true },
+        sort: { field: "value" as const, direction: "descending" as const },
+      },
+      sortKey: 0,
+      createdAt: "2026-08-16T20:00:00Z",
+      updatedAt: "2026-08-16T20:00:00Z",
+      version: 1,
+    };
+    render(
+      <App client={stubClient({
+        listSavedViews: vi.fn().mockImplementation((entityType) =>
+          Promise.resolve(entityType === "opportunity" ? [pipelineView] : []),
+        ),
+        listOpportunities: vi.fn().mockResolvedValue([makeOpportunity()]),
+      })} />,
+    );
+    await openPipeline(user);
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Saved pipeline view" }),
+      "view-pipeline",
+    );
+    await user.click(screen.getByRole("button", { name: "Board" }));
+    expect(screen.queryByRole("combobox", { name: "Saved pipeline view" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Pipeline board" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "List" }));
+    expect(await screen.findByRole("combobox", { name: "Saved pipeline view" })).toHaveValue(
+      "view-pipeline",
+    );
+    expect(screen.getByRole("button", { name: "Update" })).toBeVisible();
+  });
 });
 
 describe("opportunity form", () => {

@@ -14,10 +14,12 @@ import {
   type OpportunityListItem,
   type OpportunityPatch,
   type OpportunitySource,
+  type SavedViewDefinition,
   type Stage,
   type StageKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { SavedViews } from "../components/SavedViews";
 import { formatLocalDateTime } from "./date-format";
 import {
   ConflictBanner,
@@ -173,6 +175,7 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [showArchived, setShowArchived] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [sort, setSort] = useState<SortState | null>(null);
+  const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [mode, setModeState] = useState<PipelineMode>(loadPipelineMode);
 
   // Persist the List | Board choice across sessions.
@@ -232,10 +235,21 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const rows = opportunities
     ? sort
       ? [...opportunities].sort(
-          (a, b) => compare(a, b, sort.key) * (sort.direction === "ascending" ? 1 : -1),
+          (a, b) =>
+            (compare(a, b, sort.key) || a.id.localeCompare(b.id)) *
+            (sort.direction === "ascending" ? 1 : -1),
         )
       : opportunities
     : null;
+
+  const definition: SavedViewDefinition = {
+    schemaVersion: 1,
+    filter: { includeArchived: showArchived },
+    sort: {
+      field: (sort?.key ?? "name") as SavedViewDefinition["sort"]["field"],
+      direction: sort?.direction ?? "ascending",
+    },
+  };
 
   const columns: ColumnDef<OpportunityListItem>[] = [
     {
@@ -294,6 +308,18 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
       <div className="section-rule">
         <h2>Pipeline</h2>
         <div className="list-tools">
+          <div hidden={mode !== "list"}>
+            <SavedViews
+              client={client}
+              entityType="opportunity"
+              definition={definition}
+              onApply={(next) => {
+                setShowArchived(next.filter.includeArchived);
+                setSort({ key: next.sort.field, direction: next.sort.direction });
+              }}
+              onSelectionChange={setSavedViewApplied}
+            />
+          </div>
           <div className="mode-switch" role="group" aria-label="Pipeline view">
             <button type="button" aria-pressed={mode === "list"} onClick={() => setMode("list")}>
               List
@@ -327,10 +353,11 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
         <div className="empty-state">
           <span className="registration-mark" aria-hidden="true" />
           <p className="eyebrow">Ready when you are</p>
-          <h2>No opportunities yet</h2>
+          <h2>{savedViewApplied ? "No opportunities match this view" : "No opportunities yet"}</h2>
           <p>
-            Track a lead from first call to won job. Everything stays in this app&apos;s local
-            database on this machine.
+            {savedViewApplied
+              ? "Change the current filters or choose another saved view."
+              : "Track a lead from first call to won job. Everything stays in this app's local database on this machine."}
           </p>
         </div>
       ) : null}

@@ -129,6 +129,269 @@ pub struct ArchiveRequest {
     pub expected_version: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Saved views (versioned filter definitions)
+// ---------------------------------------------------------------------------
+
+/// A saved view applies only to one of the list surfaces implemented in v1.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SavedViewEntityType {
+    Contact,
+    Company,
+    Opportunity,
+}
+
+impl SavedViewEntityType {
+    fn as_database_value(&self) -> &'static str {
+        match self {
+            Self::Contact => "contact",
+            Self::Company => "company",
+            Self::Opportunity => "opportunity",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ApplicationError> {
+        match value {
+            "contact" => Ok(Self::Contact),
+            "company" => Ok(Self::Company),
+            "opportunity" => Ok(Self::Opportunity),
+            _ => Err(ApplicationError::InvalidStoredData(format!(
+                "saved view has unsupported entity type {value:?}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SavedViewSortDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewFilter {
+    pub include_archived: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewSort {
+    pub field: String,
+    pub direction: SavedViewSortDirection,
+}
+
+/// Persisted filter/sort definition. `schemaVersion` is deliberately stored
+/// inside the JSON so future schema changes can be rejected without changing
+/// the saved-view table or losing the original bytes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewDefinition {
+    pub schema_version: i64,
+    pub filter: SavedViewFilter,
+    pub sort: SavedViewSort,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedView {
+    pub id: String,
+    pub name: String,
+    pub entity_type: SavedViewEntityType,
+    pub definition: SavedViewDefinition,
+    pub sort_key: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSavedViewRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub name: String,
+    pub entity_type: SavedViewEntityType,
+    pub definition: SavedViewDefinition,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSavedViewRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub saved_view_id: String,
+    pub expected_version: i64,
+    pub name: String,
+    pub definition: SavedViewDefinition,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSavedViewRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub saved_view_id: String,
+    pub expected_version: i64,
+}
+
+const SAVED_VIEW_SCHEMA_VERSION: i64 = 1;
+const MAX_SAVED_VIEWS_PER_SURFACE: i64 = 50;
+
+/// Return views for one list surface in their durable, deterministic order.
+/// Invalid stored definitions are reported, never rewritten or skipped.
+pub fn list_saved_views(
+    storage: &Storage,
+    entity_type: SavedViewEntityType,
+) -> Result<Vec<SavedView>, ApplicationError> {
+    let mut statement = storage.connection().prepare(
+        "SELECT id, name, entity_type, definition_json, sort_key, created_at, updated_at, version
+         FROM saved_views WHERE entity_type = ?1 ORDER BY sort_key, id",
+    )?;
+    let saved_views = statement
+        .query_map([entity_type.as_database_value()], saved_view_raw_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    saved_views.into_iter().map(finish_saved_view).collect()
+}
+
+/// Create a bounded, typed saved definition and append it to its surface.
+pub fn create_saved_view(
+    storage: &mut Storage,
+    request: CreateSavedViewRequest,
+) -> Result<SavedView, ApplicationError> {
+    let name = validate_saved_view_name(request.name)?;
+    let definition =
+        validate_saved_view_definition(request.entity_type.clone(), request.definition)?;
+    let definition_json = serde_json::to_string(&definition)
+        .map_err(|error| ApplicationError::InvalidStoredData(error.to_string()))?;
+    let id = new_id();
+    let now = now_utc();
+    let transaction = immediate(storage)?;
+    let count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM saved_views WHERE entity_type = ?1",
+        [request.entity_type.as_database_value()],
+        |row| row.get(0),
+    )?;
+    if count >= MAX_SAVED_VIEWS_PER_SURFACE {
+        return Err(ApplicationError::ValidationFailed {
+            code: "saved_view_limit_reached",
+            field: "name".into(),
+            message: format!(
+                "a list surface may have at most {MAX_SAVED_VIEWS_PER_SURFACE} saved views"
+            ),
+        });
+    }
+    require_saved_view_name_available(
+        &transaction,
+        request.entity_type.as_database_value(),
+        &name,
+        None,
+    )?;
+    let sort_key: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sort_key), -1) + 1 FROM saved_views WHERE entity_type = ?1",
+        [request.entity_type.as_database_value()],
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "INSERT INTO saved_views
+         (id, name, entity_type, definition_json, sort_key, created_at, updated_at, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1)",
+        params![
+            id,
+            name,
+            request.entity_type.as_database_value(),
+            definition_json,
+            sort_key,
+            now
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "saved_view",
+        &id,
+        "created saved view",
+    )?;
+    let saved_view = require_saved_view(&transaction, &id)?;
+    transaction.commit()?;
+    Ok(saved_view)
+}
+
+/// Replace a view definition/name after an optimistic-version check.
+pub fn update_saved_view(
+    storage: &mut Storage,
+    request: UpdateSavedViewRequest,
+) -> Result<SavedView, ApplicationError> {
+    let name = validate_saved_view_name(request.name)?;
+    let transaction = immediate(storage)?;
+    let existing = require_saved_view(&transaction, &request.saved_view_id)?;
+    check_version(
+        "saved_view",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    let definition =
+        validate_saved_view_definition(existing.entity_type.clone(), request.definition)?;
+    let definition_json = serde_json::to_string(&definition)
+        .map_err(|error| ApplicationError::InvalidStoredData(error.to_string()))?;
+    require_saved_view_name_available(
+        &transaction,
+        existing.entity_type.as_database_value(),
+        &name,
+        Some(&existing.id),
+    )?;
+    transaction.execute(
+        "UPDATE saved_views SET name = ?2, definition_json = ?3, updated_at = ?4, version = ?5
+         WHERE id = ?1",
+        params![
+            existing.id,
+            name,
+            definition_json,
+            now_utc(),
+            existing.version + 1
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "saved_view",
+        &existing.id,
+        "updated saved view",
+    )?;
+    let saved_view = require_saved_view(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(saved_view)
+}
+
+/// Delete a saved view after an optimistic-version check. This is a deliberate
+/// permanent deletion of configuration, unlike archiving canonical CRM data.
+pub fn delete_saved_view(
+    storage: &mut Storage,
+    request: DeleteSavedViewRequest,
+) -> Result<(), ApplicationError> {
+    let transaction = immediate(storage)?;
+    let existing = require_saved_view(&transaction, &request.saved_view_id)?;
+    check_version(
+        "saved_view",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    transaction.execute("DELETE FROM saved_views WHERE id = ?1", [&existing.id])?;
+    log_command(
+        &transaction,
+        request.actor,
+        "saved_view",
+        &existing.id,
+        "deleted saved view",
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 /// One bounded FTS result. `entity_type` is one of contact, company,
 /// opportunity, or activity; the canonical record is loaded separately when
 /// callers need its full shape.
@@ -3208,6 +3471,169 @@ fn required_text(
 fn optional_text(value: Option<String>) -> Option<String> {
     let value = value?.trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+fn validate_saved_view_name(value: String) -> Result<String, ApplicationError> {
+    required_text("name", value, 120)
+}
+
+fn validate_saved_view_definition(
+    entity_type: SavedViewEntityType,
+    definition: SavedViewDefinition,
+) -> Result<SavedViewDefinition, ApplicationError> {
+    if definition.schema_version != SAVED_VIEW_SCHEMA_VERSION {
+        return Err(ApplicationError::ValidationFailed {
+            code: "unsupported_saved_view_schema_version",
+            field: "definition.schemaVersion".into(),
+            message: format!("must be saved-view schema version {SAVED_VIEW_SCHEMA_VERSION}"),
+        });
+    }
+    let allowed = match entity_type {
+        SavedViewEntityType::Contact => ["displayName"].as_slice(),
+        SavedViewEntityType::Company => ["name"].as_slice(),
+        SavedViewEntityType::Opportunity => ["name", "stage", "value", "expectedClose"].as_slice(),
+    };
+    if !allowed.contains(&definition.sort.field.as_str()) {
+        return Err(ApplicationError::ValidationFailed {
+            code: "invalid_saved_view_sort",
+            field: "definition.sort.field".into(),
+            message: format!(
+                "is not supported for {} saved views",
+                entity_type.as_database_value()
+            ),
+        });
+    }
+    Ok(definition)
+}
+
+type SavedViewRow = (String, String, String, String, i64, String, String, i64);
+
+fn saved_view_raw_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedViewRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn finish_saved_view(row: SavedViewRow) -> Result<SavedView, ApplicationError> {
+    let (id, name, entity_type_text, definition_json, sort_key, created_at, updated_at, version) =
+        row;
+    let entity_type = SavedViewEntityType::parse(&entity_type_text)?;
+    let definition = parse_saved_view_definition(&entity_type, &definition_json)?;
+    Ok(SavedView {
+        id,
+        name,
+        entity_type,
+        definition,
+        sort_key,
+        created_at,
+        updated_at,
+        version,
+    })
+}
+
+/// Decode v1 or the one known pre-versioned legacy shape. This intentionally
+/// does not write to SQLite: unreadable future records stay recoverable and
+/// callers can choose a deliberate repair instead of losing data on read.
+fn parse_saved_view_definition(
+    entity_type: &SavedViewEntityType,
+    definition_json: &str,
+) -> Result<SavedViewDefinition, ApplicationError> {
+    let value: serde_json::Value = serde_json::from_str(definition_json).map_err(|error| {
+        ApplicationError::InvalidStoredData(format!("saved view definition is not JSON: {error}"))
+    })?;
+    let definition = match value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_i64)
+    {
+        Some(version) if version > SAVED_VIEW_SCHEMA_VERSION => {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "saved view definition schema version {version} is newer than supported version {SAVED_VIEW_SCHEMA_VERSION}"
+            )));
+        }
+        Some(SAVED_VIEW_SCHEMA_VERSION) => serde_json::from_value(value).map_err(|error| {
+            ApplicationError::InvalidStoredData(format!("invalid saved view definition: {error}"))
+        })?,
+        Some(version) if version < 0 => {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "saved view definition has invalid schema version {version}"
+            )));
+        }
+        Some(version) => {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "saved view definition schema version {version} is not migratable"
+            )));
+        }
+        None => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct LegacyDefinitionV0 {
+                filter: SavedViewFilter,
+                sort: SavedViewSort,
+            }
+            let legacy: LegacyDefinitionV0 = serde_json::from_value(value).map_err(|error| {
+                ApplicationError::InvalidStoredData(format!(
+                    "invalid saved view definition: {error}"
+                ))
+            })?;
+            SavedViewDefinition {
+                schema_version: SAVED_VIEW_SCHEMA_VERSION,
+                filter: legacy.filter,
+                sort: legacy.sort,
+            }
+        }
+    };
+    validate_saved_view_definition(entity_type.clone(), definition).map_err(|error| {
+        ApplicationError::InvalidStoredData(format!("invalid saved view definition: {error}"))
+    })
+}
+
+fn require_saved_view_name_available(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+    name: &str,
+    excluded_id: Option<&str>,
+) -> Result<(), ApplicationError> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM saved_views
+         WHERE entity_type = ?1 AND name = ?2 COLLATE NOCASE
+           AND (?3 IS NULL OR id != ?3))",
+        params![entity_type, name, excluded_id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Err(ApplicationError::ValidationFailed {
+            code: "saved_view_name_taken",
+            field: "name".into(),
+            message: "a saved view with this name already exists for this list".into(),
+        });
+    }
+    Ok(())
+}
+
+fn require_saved_view(
+    connection: &rusqlite::Connection,
+    saved_view_id: &str,
+) -> Result<SavedView, ApplicationError> {
+    let row = connection
+        .query_row(
+            "SELECT id, name, entity_type, definition_json, sort_key, created_at, updated_at, version
+             FROM saved_views WHERE id = ?1",
+            [saved_view_id],
+            saved_view_raw_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "saved_view",
+            id: saved_view_id.into(),
+        })?;
+    finish_saved_view(row)
 }
 
 // ---------------------------------------------------------------------------

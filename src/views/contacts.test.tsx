@@ -122,6 +122,47 @@ describe("contact list and detail", () => {
     expect(await screen.findByText("Old Sub")).toBeVisible();
   });
 
+  it("applies a saved archive filter and deterministic contact sort", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listSavedViews: vi.fn().mockResolvedValue([
+        {
+          id: "view-contacts",
+          name: "All contacts Z-A",
+          entityType: "contact",
+          definition: {
+            schemaVersion: 1,
+            filter: { includeArchived: true },
+            sort: { field: "displayName", direction: "descending" },
+          },
+          sortKey: 0,
+          createdAt: "2026-08-16T20:00:00Z",
+          updatedAt: "2026-08-16T20:00:00Z",
+          version: 1,
+        },
+      ]),
+      listContacts: vi.fn().mockResolvedValue([
+        makeContact({ id: "a", displayName: "Alpha" }),
+        makeContact({ id: "z", displayName: "Zulu", archivedAt: "2026-08-01T00:00:00Z" }),
+      ]),
+    });
+
+    render(<App client={client} />);
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Saved contact view" }),
+      "view-contacts",
+    );
+    expect(client.listContacts).toHaveBeenLastCalledWith(true);
+    const table = await screen.findByRole("table", { name: "Contact list" });
+    expect(within(table).getByRole("columnheader", { name: "Name" })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]!).getByText("Zulu")).toBeVisible();
+    expect(within(rows[2]!).getByText("Alpha")).toBeVisible();
+  });
+
   it("submits the create payload through the client", async () => {
     const user = userEvent.setup();
     const created = makeContact({ id: "new-1", displayName: "Sam Ortega" });
