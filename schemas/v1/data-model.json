@@ -1,0 +1,33 @@
+{
+  "contract": "contractorcrm-data-model",
+  "schemaVersion": 1,
+  "databaseMigrationVersion": 5,
+  "migrations": [
+    { "version": 1, "name": "companies_contacts" },
+    { "version": 2, "name": "pipeline" },
+    { "version": 3, "name": "handoff_references" },
+    { "version": 4, "name": "activities" },
+    { "version": 5, "name": "tasks" }
+  ],
+  "tables": [
+    "activities",
+    "app_settings",
+    "command_log",
+    "companies",
+    "contact_channels",
+    "contacts",
+    "lost_reasons",
+    "opportunities",
+    "pipelines",
+    "schema_migrations",
+    "stage_history",
+    "stages",
+    "tasks"
+  ],
+  "recordVersions": {
+    "initial": 1,
+    "strategy": "positive_integer_incremented_by_version_checked_writes"
+  },
+  "timestamps": "utc_iso_8601_text",
+  "money": "integer_minor_units_with_iso_currency_code"
+}

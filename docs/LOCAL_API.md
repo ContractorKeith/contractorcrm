@@ -1,7 +1,12 @@
 # Local agent API
 
-Status: proposed v1 contract
-Updated: 2026-08-14
+Status: v1 application command contract implemented; MCP adapter planned
+Updated: 2026-08-16
+
+The implemented command registry and stable error kinds are published in
+`schemas/v1/local-api.json` and verified by
+`src-tauri/tests/schema_contracts.rs`. Tools described below that do not yet
+appear in that manifest remain planned work.
 
 ## Interface
 

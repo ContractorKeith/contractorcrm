@@ -22,6 +22,72 @@ use serde::Serialize;
 use storage::Storage;
 use tauri::{Manager, State};
 
+/// Major version of the application command contract shared by the desktop
+/// UI and future local-agent adapters.
+pub const LOCAL_API_VERSION: u64 = 1;
+
+macro_rules! with_local_api_v1_commands {
+    ($callback:ident) => {
+        $callback! {
+            health,
+            create_company,
+            update_company,
+            archive_company,
+            unarchive_company,
+            list_companies,
+            get_company,
+            create_contact,
+            update_contact,
+            archive_contact,
+            unarchive_contact,
+            list_contacts,
+            get_contact,
+            list_stages,
+            update_stage,
+            list_lost_reasons,
+            create_opportunity,
+            update_opportunity,
+            archive_opportunity,
+            unarchive_opportunity,
+            list_opportunities,
+            get_opportunity,
+            move_opportunity_stage,
+            log_activity,
+            update_activity,
+            delete_activity,
+            get_timeline,
+            create_task,
+            update_task,
+            complete_task,
+            reopen_task,
+            drop_task,
+            delete_task,
+            list_tasks,
+            link_quote,
+            unlink_quote,
+            link_job,
+            unlink_job,
+            export_handoff_envelope,
+            get_attention_flags,
+            get_attention_thresholds,
+            set_attention_thresholds,
+            backup_database,
+            restore_database,
+            get_database_info,
+        }
+    };
+}
+
+macro_rules! declare_command_names {
+    ($($command:ident),* $(,)?) => {
+        /// Exact v1 command names registered with Tauri. The checked-in local
+        /// API schema is tested against this single source of truth.
+        pub const LOCAL_API_V1_COMMANDS: &[&str] = &[$(stringify!($command)),*];
+    };
+}
+
+with_local_api_v1_commands!(declare_command_names);
+
 /// Managed application state — one storage handle behind a mutex because the
 /// SQLite connection is Send but not Sync.
 type SharedStorage = Mutex<Storage>;
@@ -541,6 +607,12 @@ fn get_database_info(storage: State<'_, SharedStorage>) -> Result<DatabaseInfo, 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    macro_rules! command_handler {
+        ($($command:ident),* $(,)?) => {
+            tauri::generate_handler![$($command),*]
+        };
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             // Open and migrate the database in the Tauri app data dir; commands
@@ -550,53 +622,7 @@ pub fn run() {
             app.manage(Mutex::new(storage));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            health,
-            create_company,
-            update_company,
-            archive_company,
-            unarchive_company,
-            list_companies,
-            get_company,
-            create_contact,
-            update_contact,
-            archive_contact,
-            unarchive_contact,
-            list_contacts,
-            get_contact,
-            list_stages,
-            update_stage,
-            list_lost_reasons,
-            create_opportunity,
-            update_opportunity,
-            archive_opportunity,
-            unarchive_opportunity,
-            list_opportunities,
-            get_opportunity,
-            move_opportunity_stage,
-            log_activity,
-            update_activity,
-            delete_activity,
-            get_timeline,
-            create_task,
-            update_task,
-            complete_task,
-            reopen_task,
-            drop_task,
-            delete_task,
-            list_tasks,
-            link_quote,
-            unlink_quote,
-            link_job,
-            unlink_job,
-            export_handoff_envelope,
-            get_attention_flags,
-            get_attention_thresholds,
-            set_attention_thresholds,
-            backup_database,
-            restore_database,
-            get_database_info
-        ])
+        .invoke_handler(with_local_api_v1_commands!(command_handler))
         .run(tauri::generate_context!())
         .expect("error while running ContractorCRM");
 }

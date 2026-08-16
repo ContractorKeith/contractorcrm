@@ -14,7 +14,11 @@ local agent API, and a clean opportunity → quote → ContractorProject job han
 
 ## Status
 
-v0.1 planning — last touched 2026-08-14. No code yet; docs-first. Planning docs complete.
+Core ready — v0.1.0 development. MVP slices 0–3 are implemented and verified:
+native contacts/companies, durable SQLite storage and backup/restore, pipeline and
+won-opportunity hand-off, activities, tasks, and needs-attention workflows. Slice 4
+(search, views, and data portability) is active through GitHub issues #15–#21;
+issue #22 tracks the remaining slice-3 GUI cleanup.
 
 ## Planning baseline
 

@@ -1,7 +1,11 @@
-# Initial data model
+# Data model
 
-Status: planning baseline
-Updated: 2026-08-14
+Status: implemented through database migration 005
+Updated: 2026-08-16
+
+The machine-readable v1 contract is `schemas/v1/data-model.json`. Forward-only
+SQLite migrations remain the executable source of truth and are verified
+against that manifest by `src-tauri/tests/schema_contracts.rs`.
 
 ## Domain language
 
