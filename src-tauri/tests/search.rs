@@ -23,6 +23,17 @@ fn hits(storage: &Storage, query: &str) -> Vec<SearchResult> {
     search_records(storage, query.into(), None, None).expect("search")
 }
 
+fn projection_count(storage: &Storage, entity_type: &str, entity_id: &str) -> i64 {
+    storage
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM search_index WHERE entity_type = ?1 AND entity_id = ?2",
+            [entity_type, entity_id],
+            |row| row.get(0),
+        )
+        .expect("count search projection")
+}
+
 #[test]
 fn migration_backfills_a_populated_v5_database() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -94,7 +105,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert!(hits(&storage, "summit").is_empty());
-    let _company = unarchive_company(
+    let company = unarchive_company(
         &mut storage,
         ArchiveRequest {
             actor: Actor::User,
@@ -104,6 +115,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert_eq!(hits(&storage, "summit")[0].entity_type, "company");
+    assert_eq!(projection_count(&storage, "company", &company.id), 1);
 
     let contact = create_contact(
         &mut storage,
@@ -159,6 +171,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert_eq!(hits(&storage, "morgan")[0].entity_type, "contact");
+    assert_eq!(projection_count(&storage, "contact", &contact.id), 1);
 
     let opportunity = create_opportunity(
         &mut storage,
@@ -201,7 +214,7 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert!(hits(&storage, "steps").is_empty());
-    let _opportunity = unarchive_opportunity(
+    let opportunity = unarchive_opportunity(
         &mut storage,
         ArchiveRequest {
             actor: Actor::User,
@@ -211,6 +224,10 @@ fn projections_follow_every_indexed_record_lifecycle() {
     )
     .unwrap();
     assert_eq!(hits(&storage, "steps")[0].entity_type, "opportunity");
+    assert_eq!(
+        projection_count(&storage, "opportunity", &opportunity.id),
+        1
+    );
 
     let activity = log_activity(
         &mut storage,
@@ -248,12 +265,13 @@ fn projections_follow_every_indexed_record_lifecycle() {
         &mut storage,
         DeleteActivityRequest {
             actor: Actor::User,
-            activity_id: activity.id,
+            activity_id: activity.id.clone(),
             expected_version: activity.version,
         },
     )
     .unwrap();
     assert!(hits(&storage, "riser").is_empty());
+    assert_eq!(projection_count(&storage, "activity", &activity.id), 0);
 }
 
 #[test]
@@ -335,12 +353,22 @@ fn failed_write_rolls_back_the_projection() {
         },
     )
     .unwrap();
+    storage
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER force_command_log_failure
+             BEFORE INSERT ON command_log
+             BEGIN
+               SELECT RAISE(ABORT, 'forced command log failure');
+             END;",
+        )
+        .expect("install failure trigger");
     let result = update_contact(
         &mut storage,
         UpdateContactRequest {
             actor: Actor::User,
-            contact_id: contact.id,
-            expected_version: 99,
+            contact_id: contact.id.clone(),
+            expected_version: 1,
             patch: ContactPatch {
                 display_name: Some("Wrong Result".into()),
                 kind: "lead".into(),
@@ -351,4 +379,14 @@ fn failed_write_rolls_back_the_projection() {
     assert!(result.is_err());
     assert_eq!(hits(&storage, "rollback")[0].title, "Rollback Robin");
     assert!(hits(&storage, "wrong").is_empty());
+    assert_eq!(projection_count(&storage, "contact", &contact.id), 1);
+    let stored_name: String = storage
+        .connection()
+        .query_row(
+            "SELECT display_name FROM contacts WHERE id = ?1",
+            [&contact.id],
+            |row| row.get(0),
+        )
+        .expect("load rolled-back contact");
+    assert_eq!(stored_name, "Rollback Robin");
 }
