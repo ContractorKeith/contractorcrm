@@ -371,6 +371,24 @@ fn task_completion_activity_and_safe_filters_are_searchable() {
         .len(),
         1
     );
+    assert_eq!(
+        search_records(
+            &storage,
+            "casey".into(),
+            Some(vec!["contact".into(), "contact".into()]),
+            None,
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(search_records(
+        &storage,
+        "casey".into(),
+        Some(vec!["contact".into(); 5]),
+        None,
+    )
+    .is_err());
     assert!(search_records(&storage, "casey".into(), Some(vec!["bad".into()]), None).is_err());
 }
 

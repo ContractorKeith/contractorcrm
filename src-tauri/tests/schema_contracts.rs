@@ -124,6 +124,55 @@ fn data_model_v1_matches_the_live_database_schema() {
             "primary key for {table_name}"
         );
 
+        let mut foreign_key_statement = storage
+            .connection()
+            .prepare(&format!("PRAGMA foreign_key_list(\"{escaped}\")"))
+            .expect("prepare foreign key listing");
+        let mut actual_foreign_keys = foreign_key_statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .expect("query foreign keys")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect foreign keys");
+        actual_foreign_keys.sort();
+        let mut expected_foreign_keys = contract
+            .get("foreignKeys")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|foreign_key| {
+                (
+                    foreign_key["from"]
+                        .as_str()
+                        .expect("foreign key from")
+                        .to_owned(),
+                    foreign_key["table"]
+                        .as_str()
+                        .expect("foreign key table")
+                        .to_owned(),
+                    foreign_key["to"]
+                        .as_str()
+                        .expect("foreign key to")
+                        .to_owned(),
+                    foreign_key["onDelete"]
+                        .as_str()
+                        .expect("foreign key onDelete")
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        expected_foreign_keys.sort();
+        assert_eq!(
+            expected_foreign_keys, actual_foreign_keys,
+            "foreign keys for {table_name}"
+        );
+
         if let Some(checks) = contract.get("sqlChecks") {
             let create_sql: String = storage
                 .connection()

@@ -38,12 +38,14 @@
       "columns": {"id":"TEXT","contact_id":"TEXT","kind":"TEXT","label":"TEXT","value":"TEXT","preferred":"INTEGER","sort_key":"INTEGER"},
       "required": ["contact_id","kind","value","preferred","sort_key"],
       "primaryKey": ["id"],
+      "foreignKeys": [{"from":"contact_id","table":"contacts","to":"id","onDelete":"CASCADE"}],
       "sqlChecks": ["preferred IN (0, 1)", "sort_key >= 0"]
     },
     "contacts": {
       "columns": {"id":"TEXT","company_id":"TEXT","first_name":"TEXT","last_name":"TEXT","display_name":"TEXT","role":"TEXT","kind":"TEXT","preferred_contact_method":"TEXT","address_line1":"TEXT","address_line2":"TEXT","city":"TEXT","state":"TEXT","postal_code":"TEXT","property_type":"TEXT","notes":"TEXT","favorite":"INTEGER","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
       "required": ["display_name","kind","favorite","created_at","updated_at","version"],
       "primaryKey": ["id"],
+      "foreignKeys": [{"from":"company_id","table":"companies","to":"id","onDelete":"RESTRICT"}],
       "sqlChecks": ["favorite IN (0, 1)", "version > 0"]
     },
     "lost_reasons": {
@@ -56,6 +58,7 @@
       "columns": {"id":"TEXT","name":"TEXT","contact_id":"TEXT","company_id":"TEXT","stage_id":"TEXT","value_minor":"INTEGER","currency_code":"TEXT","probability_percent":"INTEGER","expected_close_date":"TEXT","source":"TEXT","source_label":"TEXT","lost_reason_id":"TEXT","notes":"TEXT","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER","quote_tool":"TEXT","quote_external_id":"TEXT","quote_label":"TEXT","quote_linked_at":"TEXT","job_tool":"TEXT","job_external_id":"TEXT","job_label":"TEXT","job_linked_at":"TEXT"},
       "required": ["name","stage_id","value_minor","currency_code","created_at","updated_at","version"],
       "primaryKey": ["id"],
+      "foreignKeys": [{"from":"company_id","table":"companies","to":"id","onDelete":"RESTRICT"},{"from":"contact_id","table":"contacts","to":"id","onDelete":"RESTRICT"},{"from":"lost_reason_id","table":"lost_reasons","to":"id","onDelete":"RESTRICT"},{"from":"stage_id","table":"stages","to":"id","onDelete":"RESTRICT"}],
       "sqlChecks": ["value_minor >= 0", "probability_percent BETWEEN 0 AND 100", "version > 0"]
     },
     "pipelines": {
@@ -78,12 +81,14 @@
       "columns": {"id":"TEXT","opportunity_id":"TEXT","from_stage_id":"TEXT","to_stage_id":"TEXT","actor":"TEXT","lost_reason_id":"TEXT","created_at":"TEXT"},
       "required": ["opportunity_id","to_stage_id","actor","created_at"],
       "primaryKey": ["id"],
+      "foreignKeys": [{"from":"lost_reason_id","table":"lost_reasons","to":"id","onDelete":"RESTRICT"},{"from":"opportunity_id","table":"opportunities","to":"id","onDelete":"CASCADE"},{"from":"to_stage_id","table":"stages","to":"id","onDelete":"RESTRICT"}],
       "sqlChecks": ["actor IN ('user', 'agent', 'import')"]
     },
     "stages": {
       "columns": {"id":"TEXT","pipeline_id":"TEXT","name":"TEXT","sort_key":"INTEGER","kind":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
       "required": ["pipeline_id","name","sort_key","kind","created_at","updated_at","version"],
       "primaryKey": ["id"],
+      "foreignKeys": [{"from":"pipeline_id","table":"pipelines","to":"id","onDelete":"RESTRICT"}],
       "sqlChecks": ["sort_key >= 0", "kind IN ('open', 'won', 'lost')", "version > 0"]
     },
     "tasks": {

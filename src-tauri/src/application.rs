@@ -165,7 +165,14 @@ pub fn search_records(
     if entity_types.is_empty() {
         return Ok(Vec::new());
     }
-    for entity_type in &entity_types {
+    if entity_types.len() > 4 {
+        return Err(ApplicationError::InvalidInput {
+            field: "entityTypes".into(),
+            message: "must contain at most four values".into(),
+        });
+    }
+    let mut unique_entity_types = Vec::with_capacity(entity_types.len());
+    for entity_type in entity_types {
         if !matches!(
             entity_type.as_str(),
             "contact" | "company" | "opportunity" | "activity"
@@ -175,7 +182,11 @@ pub fn search_records(
                 message: "must contain only contact, company, opportunity, or activity".into(),
             });
         }
+        if !unique_entity_types.contains(&entity_type) {
+            unique_entity_types.push(entity_type);
+        }
     }
+    let entity_types = unique_entity_types;
     let limit = limit.unwrap_or(25).clamp(1, 50) as i64;
     let placeholders = (1..=entity_types.len())
         .map(|index| format!("?{}", index + 1))
