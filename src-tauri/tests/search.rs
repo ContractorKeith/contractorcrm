@@ -3,13 +3,14 @@
 
 use contractorcrm_lib::application::{
     archive_company, archive_contact, archive_opportunity, complete_task, create_company,
-    create_contact, create_opportunity, create_task, delete_activity, log_activity, search_records,
-    unarchive_company, unarchive_contact, unarchive_opportunity, update_activity, update_company,
-    update_contact, update_opportunity, ActivityPatch, ArchiveRequest, CompanyPatch,
-    CompleteTaskRequest, ContactPatch, CreateCompanyRequest, CreateContactRequest,
-    CreateOpportunityRequest, CreateTaskRequest, DeleteActivityRequest, LogActivityRequest,
-    OpportunityPatch, SearchResult, TaskPatch, UpdateActivityRequest, UpdateCompanyRequest,
-    UpdateContactRequest, UpdateOpportunityRequest,
+    create_contact, create_opportunity, create_task, delete_activity, list_favorite_contacts,
+    list_recent_records, log_activity, record_recent, search_records, unarchive_company,
+    unarchive_contact, unarchive_opportunity, update_activity, update_company, update_contact,
+    update_opportunity, ActivityPatch, ArchiveRequest, CompanyPatch, CompleteTaskRequest,
+    ContactPatch, CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest,
+    CreateTaskRequest, DeleteActivityRequest, LogActivityRequest, OpportunityPatch, SearchResult,
+    TaskPatch, UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest,
+    UpdateOpportunityRequest,
 };
 use contractorcrm_lib::domain::Actor;
 use contractorcrm_lib::storage::Storage;
@@ -444,4 +445,153 @@ fn failed_write_rolls_back_the_projection() {
         )
         .expect("load rolled-back contact");
     assert_eq!(stored_name, "Rollback Robin");
+}
+
+#[test]
+fn navigation_recents_are_persisted_deduplicated_capped_and_skip_inactive_records() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut storage = storage(&temp);
+    assert!(list_recent_records(&storage).unwrap().is_empty());
+    storage
+        .connection()
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+            [
+                "navigation.recents.v1",
+                r#"[{"entityType":"contact","entityId":"missing-contact"}]"#,
+            ],
+        )
+        .expect("seed stale recent");
+    assert!(list_recent_records(&storage).unwrap().is_empty());
+    let contact = create_contact(
+        &mut storage,
+        CreateContactRequest {
+            actor: Actor::User,
+            contact: ContactPatch {
+                display_name: Some("Recent Robin".into()),
+                kind: "lead".into(),
+                ..ContactPatch::default()
+            },
+        },
+    )
+    .unwrap();
+    let company = create_company(
+        &mut storage,
+        CreateCompanyRequest {
+            actor: Actor::User,
+            company: CompanyPatch {
+                name: "Recent Company".into(),
+                kind: "client".into(),
+                ..CompanyPatch::default()
+            },
+        },
+    )
+    .unwrap();
+
+    record_recent(&mut storage, "contact".into(), contact.id.clone()).unwrap();
+    record_recent(&mut storage, "company".into(), company.id.clone()).unwrap();
+    record_recent(&mut storage, "contact".into(), contact.id.clone()).unwrap();
+    assert_eq!(
+        list_recent_records(&storage).unwrap(),
+        vec![
+            SearchResult {
+                entity_type: "contact".into(),
+                entity_id: contact.id.clone(),
+                title: "Recent Robin".into(),
+                parent_type: None,
+                parent_id: None,
+            },
+            SearchResult {
+                entity_type: "company".into(),
+                entity_id: company.id.clone(),
+                title: "Recent Company".into(),
+                parent_type: None,
+                parent_id: None,
+            },
+        ]
+    );
+
+    for index in 0..12 {
+        let company = create_company(
+            &mut storage,
+            CreateCompanyRequest {
+                actor: Actor::User,
+                company: CompanyPatch {
+                    name: format!("Cap Company {index}"),
+                    kind: "client".into(),
+                    ..CompanyPatch::default()
+                },
+            },
+        )
+        .unwrap();
+        record_recent(&mut storage, "company".into(), company.id).unwrap();
+    }
+    let capped = list_recent_records(&storage).unwrap();
+    assert_eq!(capped.len(), 12);
+    assert_eq!(capped[0].title, "Cap Company 11");
+    assert_eq!(capped[11].title, "Cap Company 0");
+
+    let archived = archive_company(
+        &mut storage,
+        ArchiveRequest {
+            actor: Actor::User,
+            id: capped[0].entity_id.clone(),
+            expected_version: 1,
+        },
+    )
+    .unwrap();
+    assert!(archived.archived_at.is_some());
+    assert_eq!(list_recent_records(&storage).unwrap().len(), 11);
+    assert!(record_recent(&mut storage, "activity".into(), "activity-id".into()).is_err());
+
+    drop(storage);
+    let reopened = Storage::open_in_app_data(temp.path()).expect("reopen storage");
+    let reopened_recents = list_recent_records(&reopened).unwrap();
+    assert_eq!(reopened_recents.len(), 11);
+    assert_eq!(reopened_recents[0].title, "Cap Company 10");
+}
+
+#[test]
+fn favorite_contact_projection_excludes_archived_contacts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut storage = storage(&temp);
+    let favorite = create_contact(
+        &mut storage,
+        CreateContactRequest {
+            actor: Actor::User,
+            contact: ContactPatch {
+                display_name: Some("Favorite Fern".into()),
+                kind: "lead".into(),
+                favorite: true,
+                ..ContactPatch::default()
+            },
+        },
+    )
+    .unwrap();
+    create_contact(
+        &mut storage,
+        CreateContactRequest {
+            actor: Actor::User,
+            contact: ContactPatch {
+                display_name: Some("Not Favorite".into()),
+                kind: "lead".into(),
+                ..ContactPatch::default()
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        list_favorite_contacts(&storage).unwrap()[0].title,
+        "Favorite Fern"
+    );
+    archive_contact(
+        &mut storage,
+        ArchiveRequest {
+            actor: Actor::User,
+            id: favorite.id,
+            expected_version: favorite.version,
+        },
+    )
+    .unwrap();
+    assert!(list_favorite_contacts(&storage).unwrap().is_empty());
 }

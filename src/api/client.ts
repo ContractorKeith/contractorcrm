@@ -18,6 +18,7 @@ import type {
   HealthReport,
   SearchEntityType,
   SearchResult,
+  NavigationEntityType,
   LinkJobRequest,
   LinkQuoteRequest,
   ListTasksRequest,
@@ -46,6 +47,9 @@ import type {
 export interface CoreClient {
   health(): Promise<HealthReport>;
   searchRecords(query: string, entityTypes?: SearchEntityType[], limit?: number): Promise<SearchResult[]>;
+  listRecentRecords(): Promise<SearchResult[]>;
+  recordRecent(entityType: NavigationEntityType, entityId: string): Promise<void>;
+  listFavoriteContacts(): Promise<SearchResult[]>;
   createCompany(request: CreateCompanyRequest): Promise<Company>;
   updateCompany(request: UpdateCompanyRequest): Promise<Company>;
   archiveCompany(request: ArchiveRequest): Promise<Company>;
@@ -98,6 +102,9 @@ export const tauriCoreClient: CoreClient = {
   health: () => invoke("health"),
   searchRecords: (query, entityTypes, limit) =>
     invoke("search_records", { query, entityTypes, limit }),
+  listRecentRecords: () => invoke("list_recent_records"),
+  recordRecent: (entityType, entityId) => invoke("record_recent", { entityType, entityId }),
+  listFavoriteContacts: () => invoke("list_favorite_contacts"),
   createCompany: (request) => invoke("create_company", { request }),
   updateCompany: (request) => invoke("update_company", { request }),
   archiveCompany: (request) => invoke("archive_company", { request }),

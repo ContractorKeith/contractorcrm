@@ -1,7 +1,7 @@
 # Global search implementation brief
 
-Issue: #16  
-Status: ready after #15  
+Issue: #16
+Status: implemented; macOS acceptance complete
 Updated: 2026-08-16
 
 ## Boundary
@@ -85,3 +85,15 @@ Real-app acceptance:
   stale recent targets rather than surfacing archived or missing records.
 - `app_settings` makes recents a replaceable local projection, so no database
   migration is required for #16.
+
+## Verification status
+
+- Rust integration and schema-contract coverage proves recents persistence,
+  deduplication, ordering, bounds, stale/archive filtering, and favorite-contact
+  projection.
+- Frontend coverage proves platform shortcuts, editable-control protection,
+  modal focus containment/restoration, keyboard and pointer parity, live ARIA
+  state, and activity-to-parent navigation.
+- Packaged macOS acceptance passed against an isolated application-data namespace,
+  including restart persistence and VoiceOver inspection.
+- Control-K and NVDA remain an explicit Windows release-hardening gate.
