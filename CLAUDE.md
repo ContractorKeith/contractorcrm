@@ -1,5 +1,10 @@
 # ContractorCRM
 
+## Runtime routing
+
+- Claude Code main sessions read `../dotfiles/claude/ORCHESTRATION.md`.
+- Other runtimes must not apply Claude's model assignments.
+
 ContractorCRM is a local-first, AI-native CRM for contractors — contacts, opportunities,
 and history that live on the user's machine and connect cleanly to jobs and quotes. It is a
 module in the OpenContractorOS suite alongside ContractorProject (sibling repo at
