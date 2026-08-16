@@ -58,7 +58,7 @@ describe("tasks view", () => {
     expect(client.listTasks).toHaveBeenCalledWith({});
   });
 
-  it("keeps a new task's Due input empty and sends null unless it is edited", async () => {
+  it("shows no date control and sends null until the user opts into a due date", async () => {
     const user = userEvent.setup();
     const client = stubClient({
       listContacts: vi.fn().mockResolvedValue([makeContact()]),
@@ -69,7 +69,9 @@ describe("tasks view", () => {
     await openTasks(user);
     await user.click(screen.getByRole("button", { name: "New task" }));
 
-    expect(screen.getByLabelText("Due")).toHaveValue("");
+    expect(document.querySelector('input[type="datetime-local"]')).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set due date" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Set reminder" })).toBeVisible();
 
     await user.type(screen.getByLabelText("Title"), "Call inspector");
     await user.selectOptions(await screen.findByLabelText("Linked to"), "contact:contact-1");
@@ -85,6 +87,20 @@ describe("tasks view", () => {
       remindAt: null,
       priority: "high",
     });
+  });
+
+  it("shows and clears a due-date control only after the user requests it", async () => {
+    const user = userEvent.setup();
+    const client = stubClient();
+
+    render(<App client={client} />);
+    await openTasks(user);
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.click(screen.getByRole("button", { name: "Set due date" }));
+
+    expect(document.querySelector('input[type="datetime-local"]')).not.toHaveValue("");
+    await user.click(screen.getByRole("button", { name: "Clear due date" }));
+    expect(document.querySelector('input[type="datetime-local"]')).not.toBeInTheDocument();
   });
 
   it("completes a task with logActivity when the log checkbox is on", async () => {

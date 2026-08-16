@@ -283,18 +283,60 @@ export function TasksView({ client }: TasksViewProps) {
               </select>
             </Field>
             <Field label="Due" error={error.fields.dueAt}>
-              <input
-                type="datetime-local"
-                value={draft.dueAt}
-                onChange={(event) => set("dueAt", event.target.value)}
-              />
+              {draft.dueAt === "" ? (
+                <button
+                  type="button"
+                  className="button"
+                  aria-label="Set due date"
+                  onClick={() => set("dueAt", isoToLocalInput(new Date().toISOString()))}
+                >
+                  Set due date
+                </button>
+              ) : (
+                <>
+                  <input
+                    type="datetime-local"
+                    value={draft.dueAt}
+                    onChange={(event) => set("dueAt", event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label="Clear due date"
+                    onClick={() => set("dueAt", "")}
+                  >
+                    Clear due date
+                  </button>
+                </>
+              )}
             </Field>
             <Field label="Remind" error={error.fields.remindAt}>
-              <input
-                type="datetime-local"
-                value={draft.remindAt}
-                onChange={(event) => set("remindAt", event.target.value)}
-              />
+              {draft.remindAt === "" ? (
+                <button
+                  type="button"
+                  className="button"
+                  aria-label="Set reminder"
+                  onClick={() => set("remindAt", isoToLocalInput(new Date().toISOString()))}
+                >
+                  Set reminder
+                </button>
+              ) : (
+                <>
+                  <input
+                    type="datetime-local"
+                    value={draft.remindAt}
+                    onChange={(event) => set("remindAt", event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label="Clear reminder"
+                    onClick={() => set("remindAt", "")}
+                  >
+                    Clear reminder
+                  </button>
+                </>
+              )}
             </Field>
             <Field label="Priority" error={error.fields.priority}>
               <select
