@@ -45,6 +45,16 @@ import type {
   UpdateSavedViewRequest,
   UpdateStageRequest,
   UpdateTaskRequest,
+  Tag,
+  CreateTagRequest,
+  UpdateTagRequest,
+  TagLifecycleRequest,
+  CustomFieldDefinition,
+  CreateCustomFieldDefinitionRequest,
+  UpdateCustomFieldDefinitionRequest,
+  CustomFieldDefinitionLifecycleRequest,
+  RecordMetadata,
+  SetRecordMetadataRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -59,6 +69,19 @@ export interface CoreClient {
   createSavedView(request: CreateSavedViewRequest): Promise<SavedView>;
   updateSavedView(request: UpdateSavedViewRequest): Promise<SavedView>;
   deleteSavedView(request: DeleteSavedViewRequest): Promise<void>;
+  listTags(includeArchived: boolean): Promise<Tag[]>;
+  createTag(request: CreateTagRequest): Promise<Tag>;
+  updateTag(request: UpdateTagRequest): Promise<Tag>;
+  archiveTag(request: TagLifecycleRequest): Promise<Tag>;
+  unarchiveTag(request: TagLifecycleRequest): Promise<Tag>;
+  listCustomFieldDefs(entityType: SavedViewEntityType, includeArchived: boolean): Promise<CustomFieldDefinition[]>;
+  createCustomFieldDef(request: CreateCustomFieldDefinitionRequest): Promise<CustomFieldDefinition>;
+  updateCustomFieldDef(request: UpdateCustomFieldDefinitionRequest): Promise<CustomFieldDefinition>;
+  archiveCustomFieldDef(request: CustomFieldDefinitionLifecycleRequest): Promise<CustomFieldDefinition>;
+  unarchiveCustomFieldDef(request: CustomFieldDefinitionLifecycleRequest): Promise<CustomFieldDefinition>;
+  getRecordMetadata(entityType: SavedViewEntityType, recordId: string): Promise<RecordMetadata>;
+  setRecordMetadata(request: SetRecordMetadataRequest): Promise<RecordMetadata>;
+  matchSavedView(entityType: SavedViewEntityType, definition: import("./types").SavedViewDefinition): Promise<string[]>;
   createCompany(request: CreateCompanyRequest): Promise<Company>;
   updateCompany(request: UpdateCompanyRequest): Promise<Company>;
   archiveCompany(request: ArchiveRequest): Promise<Company>;
@@ -118,6 +141,19 @@ export const tauriCoreClient: CoreClient = {
   createSavedView: (request) => invoke("create_saved_view", { request }),
   updateSavedView: (request) => invoke("update_saved_view", { request }),
   deleteSavedView: (request) => invoke("delete_saved_view", { request }),
+  listTags: (includeArchived) => invoke("list_tags", { includeArchived }),
+  createTag: (request) => invoke("create_tag", { request }),
+  updateTag: (request) => invoke("update_tag", { request }),
+  archiveTag: (request) => invoke("archive_tag", { request }),
+  unarchiveTag: (request) => invoke("unarchive_tag", { request }),
+  listCustomFieldDefs: (entityType, includeArchived) => invoke("list_custom_field_defs", { entityType, includeArchived }),
+  createCustomFieldDef: (request) => invoke("create_custom_field_def", { request }),
+  updateCustomFieldDef: (request) => invoke("update_custom_field_def", { request }),
+  archiveCustomFieldDef: (request) => invoke("archive_custom_field_def", { request }),
+  unarchiveCustomFieldDef: (request) => invoke("unarchive_custom_field_def", { request }),
+  getRecordMetadata: (entityType, recordId) => invoke("get_record_metadata", { entityType, recordId }),
+  setRecordMetadata: (request) => invoke("set_record_metadata", { request }),
+  matchSavedView: (entityType, definition) => invoke("match_saved_view", { entityType, definition }),
   createCompany: (request) => invoke("create_company", { request }),
   updateCompany: (request) => invoke("update_company", { request }),
   archiveCompany: (request) => invoke("archive_company", { request }),

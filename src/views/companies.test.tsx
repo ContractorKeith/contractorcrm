@@ -74,6 +74,21 @@ describe("company list and form", () => {
     expect(within(rows[2]!).getByText("Alpha")).toBeVisible();
   });
 
+  it("routes typed filters through the company saved-view matcher", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listCustomFieldDefs: vi.fn().mockResolvedValue([{ id: "field-date", entityType: "company", label: "Renewal", fieldType: "date", sortKey: 0, archivedAt: null, createdAt: "", updatedAt: "", version: 1, options: [] }]),
+      listCompanies: vi.fn().mockResolvedValue([makeCompany({ id: "kept" }), makeCompany({ id: "hidden", name: "Hidden Co" })]),
+      matchSavedView: vi.fn().mockResolvedValue(["kept"]),
+    });
+    render(<App client={client} />);
+    await user.click(screen.getByRole("button", { name: "Companies" }));
+    await user.type(await screen.findByLabelText("Renewal filter"), "2026-10-01");
+    expect(await screen.findByText("Coastal Fence Co")).toBeVisible();
+    expect(screen.queryByText("Hidden Co")).not.toBeInTheDocument();
+    expect(client.matchSavedView).toHaveBeenCalledWith("company", expect.objectContaining({ filter: expect.objectContaining({ customFields: [expect.objectContaining({ definitionId: "field-date", fieldType: "date" })] }) }));
+  });
+
   it("creates a company through the client and lands on its detail", async () => {
     const user = userEvent.setup();
     const created = makeCompany({ id: "co-new", name: "Gulf Gates LLC", kind: "vendor" });
@@ -95,6 +110,8 @@ describe("company list and form", () => {
       expect.objectContaining({ name: "Gulf Gates LLC", kind: "vendor", serviceArea: "Tampa Bay" }),
     );
     expect(await screen.findByRole("heading", { name: /Gulf Gates LLC/ })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Tags and custom fields" })).toBeVisible();
+    expect(client.getRecordMetadata).toHaveBeenCalledWith("company", "co-new");
   });
 
   it("shows the archive validation message when a company still has active contacts", async () => {

@@ -7,8 +7,8 @@ import { stubClient } from "../test/stub-client";
 import { SavedViews } from "./SavedViews";
 
 const definition: SavedViewDefinition = {
-  schemaVersion: 1,
-  filter: { includeArchived: true },
+  schemaVersion: 2,
+  filter: { includeArchived: true, tagIdsAll: [], customFields: [] },
   sort: { field: "name", direction: "descending" },
 };
 
@@ -62,7 +62,7 @@ describe("SavedViews", () => {
         entityType="company"
         definition={{
           ...definition,
-          filter: { includeArchived: false },
+          filter: { includeArchived: false, tagIdsAll: [], customFields: [] },
         }}
         onApply={vi.fn()}
       />,

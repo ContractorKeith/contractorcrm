@@ -10,9 +10,11 @@ use rusqlite::params;
 
 fn definition(field: &str) -> SavedViewDefinition {
     SavedViewDefinition {
-        schema_version: 1,
+        schema_version: 2,
         filter: SavedViewFilter {
             include_archived: false,
+            tag_ids_all: vec![],
+            custom_fields: vec![],
         },
         sort: SavedViewSort {
             field: field.into(),
@@ -64,9 +66,11 @@ fn saved_views_create_update_delete_reopen_and_keep_surface_order() {
             expected_version: 1,
             name: "Archived contacts".into(),
             definition: SavedViewDefinition {
-                schema_version: 1,
+                schema_version: 2,
                 filter: SavedViewFilter {
                     include_archived: true,
+                    tag_ids_all: vec![],
+                    custom_fields: vec![],
                 },
                 sort: SavedViewSort {
                     field: "displayName".into(),
@@ -237,7 +241,7 @@ fn stored_legacy_malformed_and_future_definitions_never_rewrite() {
     let legacy = r#"{"filter":{"includeArchived":false},"sort":{"field":"displayName","direction":"ascending"}}"#;
     storage.connection().execute("INSERT INTO saved_views (id,name,entity_type,definition_json,sort_key,created_at,updated_at,version) VALUES ('legacy','Legacy','contact',?1,0,?2,?2,1)", params![legacy, now]).expect("insert legacy");
     let listed = list_saved_views(&storage, SavedViewEntityType::Contact).expect("read legacy");
-    assert_eq!(listed[0].definition.schema_version, 1);
+    assert_eq!(listed[0].definition.schema_version, 2);
     let stored: String = storage
         .connection()
         .query_row(
@@ -247,7 +251,43 @@ fn stored_legacy_malformed_and_future_definitions_never_rewrite() {
         )
         .expect("stored bytes");
     assert_eq!(stored, legacy);
-    storage.connection().execute("INSERT INTO saved_views (id,name,entity_type,definition_json,sort_key,created_at,updated_at,version) VALUES ('future','Future','company','{\"schemaVersion\":2,\"filter\":{\"includeArchived\":false},\"sort\":{\"field\":\"name\",\"direction\":\"ascending\"}}',0,?1,?1,1)", [&now]).expect("insert future");
+    let v1 = r#"{"schemaVersion":1,"filter":{"includeArchived":true},"sort":{"field":"displayName","direction":"descending"}}"#;
+    storage.connection().execute("INSERT INTO saved_views (id,name,entity_type,definition_json,sort_key,created_at,updated_at,version) VALUES ('v1','Version one','contact',?1,1,?2,?2,1)", params![v1, now]).expect("insert v1");
+    let v1_view = list_saved_views(&storage, SavedViewEntityType::Contact)
+        .expect("read v1")
+        .into_iter()
+        .find(|view| view.id == "v1")
+        .expect("v1 view");
+    assert_eq!(v1_view.definition.schema_version, 2);
+    assert!(v1_view.definition.filter.include_archived);
+    let stored_v1: String = storage
+        .connection()
+        .query_row(
+            "SELECT definition_json FROM saved_views WHERE id='v1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stored v1 bytes");
+    assert_eq!(stored_v1, v1);
+    let incomplete_v2 = r#"{"schemaVersion":2,"filter":{"includeArchived":false},"sort":{"field":"name","direction":"ascending"}}"#;
+    storage.connection().execute("INSERT INTO saved_views (id,name,entity_type,definition_json,sort_key,created_at,updated_at,version) VALUES ('incomplete-v2','Incomplete v2','company',?1,0,?2,?2,1)", params![incomplete_v2, now]).expect("insert incomplete v2");
+    let incomplete = list_saved_views(&storage, SavedViewEntityType::Company)
+        .expect_err("incomplete v2 rejected");
+    assert_eq!(incomplete.kind(), "invalid_stored_data");
+    let incomplete_stored: String = storage
+        .connection()
+        .query_row(
+            "SELECT definition_json FROM saved_views WHERE id = 'incomplete-v2'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("incomplete v2 stored bytes");
+    assert_eq!(incomplete_stored, incomplete_v2);
+    storage
+        .connection()
+        .execute("DELETE FROM saved_views WHERE id = 'incomplete-v2'", [])
+        .expect("remove incomplete v2 fixture");
+    storage.connection().execute("INSERT INTO saved_views (id,name,entity_type,definition_json,sort_key,created_at,updated_at,version) VALUES ('future','Future','company','{\"schemaVersion\":3,\"filter\":{\"includeArchived\":false},\"sort\":{\"field\":\"name\",\"direction\":\"ascending\"}}',0,?1,?1,1)", [&now]).expect("insert future");
     let future =
         list_saved_views(&storage, SavedViewEntityType::Company).expect_err("future rejected");
     assert_eq!(future.kind(), "invalid_stored_data");
@@ -259,7 +299,7 @@ fn stored_legacy_malformed_and_future_definitions_never_rewrite() {
             |row| row.get(0),
         )
         .expect("future stored bytes");
-    assert!(future_stored.contains("\"schemaVersion\":2"));
+    assert!(future_stored.contains("\"schemaVersion\":3"));
     storage
         .connection()
         .execute("DELETE FROM saved_views WHERE id = 'future'", [])

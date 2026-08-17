@@ -1,7 +1,8 @@
 use contractorcrm_lib::{
     application::{
-        SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter, SavedViewSort,
-        SavedViewSortDirection, SearchResult,
+        CreateTagRequest, CustomFieldValueInput, SavedView, SavedViewDefinition,
+        SavedViewEntityType, SavedViewFilter, SavedViewSort, SavedViewSortDirection, SearchResult,
+        SetRecordMetadataRequest,
     },
     error::ApplicationError,
     storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
@@ -177,6 +178,44 @@ fn data_model_v1_matches_the_live_database_schema() {
             "foreign keys for {table_name}"
         );
 
+        if let Some(indexes) = contract.get("indexes").and_then(Value::as_array) {
+            let mut index_list = storage
+                .connection()
+                .prepare(&format!("PRAGMA index_list(\"{escaped}\")"))
+                .expect("prepare index listing");
+            let actual_indexes = index_list
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? == 1))
+                })
+                .expect("query indexes")
+                .collect::<rusqlite::Result<BTreeMap<_, _>>>()
+                .expect("collect indexes");
+            for index in indexes {
+                let name = index["name"].as_str().expect("index name");
+                let unique = index["unique"].as_bool().expect("index unique flag");
+                assert_eq!(
+                    actual_indexes.get(name),
+                    Some(&unique),
+                    "index uniqueness for {name}"
+                );
+                let escaped_index = name.replace('"', "\"\"");
+                let mut info = storage
+                    .connection()
+                    .prepare(&format!("PRAGMA index_info(\"{escaped_index}\")"))
+                    .expect("prepare index columns");
+                let columns = info
+                    .query_map([], |row| row.get::<_, String>(2))
+                    .expect("query index columns")
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .expect("collect index columns");
+                assert_eq!(
+                    columns,
+                    string_array(index, "columns"),
+                    "index columns for {name}"
+                );
+            }
+        }
+
         if let Some(checks) = contract.get("sqlChecks") {
             let create_sql: String = storage
                 .connection()
@@ -186,10 +225,12 @@ fn data_model_v1_matches_the_live_database_schema() {
                     |row| row.get(0),
                 )
                 .expect("load create SQL");
+            let normalized_create_sql = create_sql.split_whitespace().collect::<Vec<_>>().join(" ");
             for check in checks.as_array().expect("sqlChecks must be an array") {
                 let check = check.as_str().expect("sqlChecks entries must be text");
+                let normalized_check = check.split_whitespace().collect::<Vec<_>>().join(" ");
                 assert!(
-                    create_sql.contains(check),
+                    normalized_create_sql.contains(&normalized_check),
                     "{table_name} must retain constraint: {check}"
                 );
             }
@@ -206,6 +247,18 @@ fn data_model_v1_matches_the_live_database_schema() {
         migration_versions,
         (1..=storage::latest_migration_version()).collect::<Vec<_>>()
     );
+    let mut actual_triggers = storage
+        .connection()
+        .prepare("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
+        .expect("prepare triggers")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query triggers")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect triggers");
+    let mut expected_triggers = string_array(&schema, "triggers");
+    actual_triggers.sort();
+    expected_triggers.sort();
+    assert_eq!(actual_triggers, expected_triggers);
 }
 
 #[test]
@@ -350,9 +403,11 @@ fn saved_view_v1_matches_the_published_wire_schema() {
         name: "Active prospects".into(),
         entity_type: SavedViewEntityType::Opportunity,
         definition: SavedViewDefinition {
-            schema_version: 1,
+            schema_version: 2,
             filter: SavedViewFilter {
                 include_archived: false,
+                tag_ids_all: vec![],
+                custom_fields: vec![],
             },
             sort: SavedViewSort {
                 field: "expectedClose".into(),
@@ -376,7 +431,7 @@ fn saved_view_v1_matches_the_published_wire_schema() {
     expected_fields.sort();
     assert_eq!(actual_fields, expected_fields);
     assert_eq!(serialized["entityType"], "opportunity");
-    assert_eq!(serialized["definition"]["schemaVersion"], 1);
+    assert_eq!(serialized["definition"]["schemaVersion"], 2);
     assert_eq!(serialized["definition"]["sort"]["direction"], "ascending");
     for strict_type in ["SavedViewFilter", "SavedViewSort", "SavedViewDefinition"] {
         assert_eq!(
@@ -387,5 +442,87 @@ fn saved_view_v1_matches_the_published_wire_schema() {
     assert_eq!(
         string_array(&schema["wireTypes"]["SavedViewSortField"], "enum"),
         ["displayName", "name", "stage", "value", "expectedClose"]
+    );
+}
+
+#[test]
+fn tags_and_custom_fields_publish_strict_bounded_wire_types() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for name in [
+        "list_tags",
+        "create_tag",
+        "update_tag",
+        "archive_tag",
+        "unarchive_tag",
+        "list_custom_field_defs",
+        "create_custom_field_def",
+        "update_custom_field_def",
+        "archive_custom_field_def",
+        "unarchive_custom_field_def",
+        "get_record_metadata",
+        "set_record_metadata",
+        "match_saved_view",
+    ] {
+        assert!(
+            commands.iter().any(|command| command["name"] == name),
+            "missing {name}"
+        );
+    }
+    for strict_type in [
+        "Tag",
+        "CreateTagRequest",
+        "UpdateTagRequest",
+        "TagLifecycleRequest",
+        "CustomFieldOption",
+        "CustomFieldOptionInput",
+        "CustomFieldDefinition",
+        "CreateCustomFieldDefinitionRequest",
+        "UpdateCustomFieldDefinitionRequest",
+        "CustomFieldDefinitionLifecycleRequest",
+        "RecordCustomFieldValue",
+        "CustomFieldValueInput",
+        "RecordMetadata",
+        "SetRecordMetadataRequest",
+        "SavedViewCustomFieldPredicate",
+    ] {
+        assert_eq!(
+            schema["wireTypes"][strict_type]["additionalProperties"], false,
+            "{strict_type} must reject unknown fields"
+        );
+    }
+    assert_eq!(
+        string_array(&schema["wireTypes"]["TagColorRole"], "enum"),
+        ["neutral", "accent", "attention"]
+    );
+    assert_eq!(
+        string_array(&schema["wireTypes"]["CustomFieldType"], "enum"),
+        ["text", "number", "date", "select"]
+    );
+
+    assert!(
+        serde_json::from_value::<CreateTagRequest>(serde_json::json!({
+            "label": "Priority", "colorRole": "accent", "rawSql": "DROP TABLE tags"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SetRecordMetadataRequest>(serde_json::json!({
+            "entityType": "company", "recordId": "company-1", "expectedVersion": 1,
+            "tagIds": [], "values": [], "unexpected": true
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SetRecordMetadataRequest>(serde_json::json!({
+            "entityType": "company", "recordId": "company-1", "expectedVersion": 1
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<CustomFieldValueInput>(serde_json::json!({
+            "definitionId": "field-1", "textValue": "value"
+        }))
+        .is_err()
     );
 }

@@ -12,6 +12,19 @@
     {"name":"create_saved_view","mode":"write","input":[{"name":"request","type":"CreateSavedViewRequest","required":true}],"output":"SavedView"},
     {"name":"update_saved_view","mode":"write","input":[{"name":"request","type":"UpdateSavedViewRequest","required":true}],"output":"SavedView"},
     {"name":"delete_saved_view","mode":"write","input":[{"name":"request","type":"DeleteSavedViewRequest","required":true}],"output":"null"},
+    {"name":"list_tags","mode":"read","input":[{"name":"includeArchived","type":"boolean","required":true}],"output":"Tag[]"},
+    {"name":"create_tag","mode":"write","input":[{"name":"request","type":"CreateTagRequest","required":true}],"output":"Tag"},
+    {"name":"update_tag","mode":"write","input":[{"name":"request","type":"UpdateTagRequest","required":true}],"output":"Tag"},
+    {"name":"archive_tag","mode":"write","input":[{"name":"request","type":"TagLifecycleRequest","required":true}],"output":"Tag"},
+    {"name":"unarchive_tag","mode":"write","input":[{"name":"request","type":"TagLifecycleRequest","required":true}],"output":"Tag"},
+    {"name":"list_custom_field_defs","mode":"read","input":[{"name":"entityType","type":"SavedViewEntityType","required":true},{"name":"includeArchived","type":"boolean","required":true}],"output":"CustomFieldDefinition[]"},
+    {"name":"create_custom_field_def","mode":"write","input":[{"name":"request","type":"CreateCustomFieldDefinitionRequest","required":true}],"output":"CustomFieldDefinition"},
+    {"name":"update_custom_field_def","mode":"write","input":[{"name":"request","type":"UpdateCustomFieldDefinitionRequest","required":true}],"output":"CustomFieldDefinition"},
+    {"name":"archive_custom_field_def","mode":"write","input":[{"name":"request","type":"CustomFieldDefinitionLifecycleRequest","required":true}],"output":"CustomFieldDefinition"},
+    {"name":"unarchive_custom_field_def","mode":"write","input":[{"name":"request","type":"CustomFieldDefinitionLifecycleRequest","required":true}],"output":"CustomFieldDefinition"},
+    {"name":"get_record_metadata","mode":"read","input":[{"name":"entityType","type":"SavedViewEntityType","required":true},{"name":"recordId","type":"string","required":true}],"output":"RecordMetadata"},
+    {"name":"set_record_metadata","mode":"write","input":[{"name":"request","type":"SetRecordMetadataRequest","required":true}],"output":"RecordMetadata"},
+    {"name":"match_saved_view","mode":"read","input":[{"name":"entityType","type":"SavedViewEntityType","required":true},{"name":"definition","type":"SavedViewDefinition","required":true}],"output":"string[]"},
     {"name":"create_company","mode":"write","input":[{"name":"request","type":"CreateCompanyRequest","required":true}],"output":"Company"},
     {"name":"update_company","mode":"write","input":[{"name":"request","type":"UpdateCompanyRequest","required":true}],"output":"Company"},
     {"name":"archive_company","mode":"write","input":[{"name":"request","type":"ArchiveRequest","required":true}],"output":"Company"},
@@ -66,8 +79,8 @@
     "SavedViewFilter": {
       "type":"object",
       "additionalProperties":false,
-      "required":["includeArchived"],
-      "properties":{"includeArchived":{"type":"boolean"}}
+      "required":["includeArchived","tagIdsAll","customFields"],
+      "properties":{"includeArchived":{"type":"boolean"},"tagIdsAll":{"type":"string[]"},"customFields":{"type":"SavedViewCustomFieldPredicate[]"}}
     },
     "SavedViewSort": {
       "type":"object",
@@ -79,7 +92,7 @@
       "type":"object",
       "additionalProperties":false,
       "required":["schemaVersion","filter","sort"],
-      "properties":{"schemaVersion":{"type":"integer","const":1},"filter":{"type":"SavedViewFilter"},"sort":{"type":"SavedViewSort"}}
+      "properties":{"schemaVersion":{"type":"integer","const":2},"filter":{"type":"SavedViewFilter"},"sort":{"type":"SavedViewSort"}}
     },
     "SavedView": {
       "type":"object",
@@ -101,6 +114,23 @@
       "required":["savedViewId","expectedVersion"],
       "properties":{"actor":{"type":"Actor"},"savedViewId":{"type":"string"},"expectedVersion":{"type":"integer"}}
     },
+    "TagColorRole": {"enum":["neutral","accent","attention"]},
+    "CustomFieldType": {"enum":["text","number","date","select"]},
+    "Tag": {"type":"object","additionalProperties":false,"required":["id","label","colorRole","archivedAt","createdAt","updatedAt","version"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"colorRole":{"type":["TagColorRole","null"]},"archivedAt":{"type":["string","null"]},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"version":{"type":"integer"}}},
+    "CreateTagRequest": {"type":"object","additionalProperties":false,"required":["label"],"properties":{"actor":{"type":"Actor"},"label":{"type":"string"},"colorRole":{"type":["TagColorRole","null"]}}},
+    "UpdateTagRequest": {"type":"object","additionalProperties":false,"required":["tagId","expectedVersion","label"],"properties":{"actor":{"type":"Actor"},"tagId":{"type":"string"},"expectedVersion":{"type":"integer"},"label":{"type":"string"},"colorRole":{"type":["TagColorRole","null"]}}},
+    "TagLifecycleRequest": {"type":"object","additionalProperties":false,"required":["tagId","expectedVersion"],"properties":{"actor":{"type":"Actor"},"tagId":{"type":"string"},"expectedVersion":{"type":"integer"}}},
+    "CustomFieldOption": {"type":"object","additionalProperties":false,"required":["id","definitionId","label","sortKey"],"properties":{"id":{"type":"string"},"definitionId":{"type":"string"},"label":{"type":"string"},"sortKey":{"type":"integer"}}},
+    "CustomFieldOptionInput": {"type":"object","additionalProperties":false,"required":["label"],"properties":{"id":{"type":"string"},"label":{"type":"string"}}},
+    "CustomFieldDefinition": {"type":"object","additionalProperties":false,"required":["id","entityType","label","fieldType","sortKey","archivedAt","createdAt","updatedAt","version","options"],"properties":{"id":{"type":"string"},"entityType":{"type":"SavedViewEntityType"},"label":{"type":"string"},"fieldType":{"type":"CustomFieldType"},"sortKey":{"type":"integer"},"archivedAt":{"type":["string","null"]},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"version":{"type":"integer"},"options":{"type":"CustomFieldOption[]"}}},
+    "CreateCustomFieldDefinitionRequest": {"type":"object","additionalProperties":false,"required":["entityType","label","fieldType"],"properties":{"actor":{"type":"Actor"},"entityType":{"type":"SavedViewEntityType"},"label":{"type":"string"},"fieldType":{"type":"CustomFieldType"},"options":{"type":"CustomFieldOptionInput[]"}}},
+    "UpdateCustomFieldDefinitionRequest": {"type":"object","additionalProperties":false,"required":["definitionId","expectedVersion","label","sortKey","options"],"properties":{"actor":{"type":"Actor"},"definitionId":{"type":"string"},"expectedVersion":{"type":"integer"},"label":{"type":"string"},"sortKey":{"type":"integer"},"options":{"type":"CustomFieldOptionInput[]"}}},
+    "CustomFieldDefinitionLifecycleRequest": {"type":"object","additionalProperties":false,"required":["definitionId","expectedVersion"],"properties":{"actor":{"type":"Actor"},"definitionId":{"type":"string"},"expectedVersion":{"type":"integer"}}},
+    "RecordCustomFieldValue": {"type":"object","additionalProperties":false,"required":["id","definitionId","entityType","recordId","textValue","numberValue","dateValue","optionId","createdAt","updatedAt"],"properties":{"id":{"type":"string"},"definitionId":{"type":"string"},"entityType":{"type":"SavedViewEntityType"},"recordId":{"type":"string"},"textValue":{"type":["string","null"]},"numberValue":{"type":["number","null"]},"dateValue":{"type":["string","null"]},"optionId":{"type":["string","null"]},"createdAt":{"type":"string"},"updatedAt":{"type":"string"}}},
+    "CustomFieldValueInput": {"type":"object","additionalProperties":false,"required":["definitionId","textValue","numberValue","dateValue","optionId"],"properties":{"definitionId":{"type":"string"},"textValue":{"type":["string","null"]},"numberValue":{"type":["number","null"]},"dateValue":{"type":["string","null"]},"optionId":{"type":["string","null"]}}},
+    "RecordMetadata": {"type":"object","additionalProperties":false,"required":["tagIds","values"],"properties":{"tagIds":{"type":"string[]"},"values":{"type":"RecordCustomFieldValue[]"}}},
+    "SetRecordMetadataRequest": {"type":"object","additionalProperties":false,"required":["entityType","recordId","expectedVersion","tagIds","values"],"properties":{"actor":{"type":"Actor"},"entityType":{"type":"SavedViewEntityType"},"recordId":{"type":"string"},"expectedVersion":{"type":"integer"},"tagIds":{"type":"string[]"},"values":{"type":"CustomFieldValueInput[]"}}},
+    "SavedViewCustomFieldPredicate": {"type":"taggedUnion","additionalProperties":false,"tag":"fieldType","variants":{"text":{"operators":["contains","equals"],"valueType":"string"},"number":{"operators":["equals","greaterThanOrEqual","lessThanOrEqual"],"valueType":"number"},"date":{"operators":["on","before","after"],"valueType":"string"},"select":{"operators":["is"],"valueType":"string"}}},
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",

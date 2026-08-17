@@ -15,10 +15,15 @@ import {
   type OpportunityPatch,
   type OpportunitySource,
   type SavedViewDefinition,
+  type SavedViewCustomFieldPredicate,
+  type Tag,
+  type CustomFieldDefinition,
   type Stage,
   type StageKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { RecordMetadata } from "../components/RecordMetadata";
+import { SavedViewFilters } from "../components/SavedViewFilters";
 import { SavedViews } from "../components/SavedViews";
 import { formatLocalDateTime } from "./date-format";
 import {
@@ -177,6 +182,12 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [sort, setSort] = useState<SortState | null>(null);
   const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [mode, setModeState] = useState<PipelineMode>(loadPipelineMode);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [fieldDefinitions, setFieldDefinitions] = useState<CustomFieldDefinition[]>([]);
+  const [tagIdsAll, setTagIdsAll] = useState<string[]>([]);
+  const [customFields, setCustomFields] = useState<SavedViewCustomFieldPredicate[]>([]);
+  const [matchingIds, setMatchingIds] = useState<string[] | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
 
   // Persist the List | Board choice across sessions.
   const setMode = (next: PipelineMode) => {
@@ -200,6 +211,7 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
       active = false;
     };
   }, [client, showArchived]);
+  useEffect(() => { void Promise.all([client.listTags(true), client.listCustomFieldDefs("opportunity", true)]).then(([nextTags, nextDefinitions]) => { setTags(nextTags); setFieldDefinitions(nextDefinitions); }).catch(() => setFilterError("Tags and custom-field filters could not be loaded.")); }, [client]);
 
   // Toggle direction on the active column, ascending on a new one.
   const handleSort = (key: string) =>
@@ -234,22 +246,23 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
 
   const rows = opportunities
     ? sort
-      ? [...opportunities].sort(
+      ? opportunities.filter((opportunity) => mode === "board" || matchingIds === null || matchingIds.includes(opportunity.id)).sort(
           (a, b) =>
             (compare(a, b, sort.key) || a.id.localeCompare(b.id)) *
             (sort.direction === "ascending" ? 1 : -1),
         )
-      : opportunities
+      : opportunities.filter((opportunity) => mode === "board" || matchingIds === null || matchingIds.includes(opportunity.id))
     : null;
 
   const definition: SavedViewDefinition = {
-    schemaVersion: 1,
-    filter: { includeArchived: showArchived },
+    schemaVersion: 2,
+    filter: { includeArchived: showArchived, tagIdsAll, customFields },
     sort: {
       field: (sort?.key ?? "name") as SavedViewDefinition["sort"]["field"],
       direction: sort?.direction ?? "ascending",
     },
   };
+  useEffect(() => { if (tagIdsAll.length === 0 && customFields.length === 0) { setMatchingIds(null); setFilterError(null); return; } if (mode === "list") void client.matchSavedView("opportunity", definition).then((ids) => { setMatchingIds(ids); setFilterError(null); }).catch(() => { setMatchingIds([]); setFilterError("This filter references missing or invalid metadata and could not be applied."); }); }, [client, mode, definition.filter.includeArchived, tagIdsAll, customFields]);
 
   const columns: ColumnDef<OpportunityListItem>[] = [
     {
@@ -315,10 +328,14 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
               definition={definition}
               onApply={(next) => {
                 setShowArchived(next.filter.includeArchived);
+                setTagIdsAll(next.filter.tagIdsAll ?? []);
+                setCustomFields(next.filter.customFields ?? []);
                 setSort({ key: next.sort.field, direction: next.sort.direction });
               }}
               onSelectionChange={setSavedViewApplied}
             />
+            <SavedViewFilters entityType="opportunity" tags={tags} definitions={fieldDefinitions} definition={definition} onChange={(next) => { setShowArchived(next.filter.includeArchived); setTagIdsAll(next.filter.tagIdsAll); setCustomFields(next.filter.customFields); setSort({ key: next.sort.field, direction: next.sort.direction }); }} />
+            {filterError ? <span role="alert" className="saved-views__error">{filterError}</span> : null}
           </div>
           <div className="mode-switch" role="group" aria-label="Pipeline view">
             <button type="button" aria-pressed={mode === "list"} onClick={() => setMode("list")}>
@@ -787,6 +804,7 @@ export function OpportunityDetailView({
         stageKind={stageById(detail.stageId)?.kind ?? null}
         onChanged={load}
       />
+      <RecordMetadata client={client} entityType="opportunity" recordId={detail.id} expectedVersion={detail.version} onSaved={load} />
 
       <h3 className="detail-subhead">Move stage</h3>
       <div className="stage-move">
@@ -1119,6 +1137,7 @@ export function OpportunityFormView({
             <input value={draft.notes} onChange={(event) => set("notes", event.target.value)} />
           </Field>
         </div>
+        {opportunityId ? <RecordMetadata client={client} entityType="opportunity" recordId={opportunityId} expectedVersion={expectedVersion} onSaved={load} /> : null}
 
         <div className="form-actions">
           <button type="button" className="button" onClick={onCancel}>

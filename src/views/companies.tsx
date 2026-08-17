@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { CoreClient } from "../api/client";
-import type { Company, CompanyPatch, PartyKind, SavedViewDefinition } from "../api/types";
+import type { Company, CompanyPatch, CustomFieldDefinition, PartyKind, SavedViewCustomFieldPredicate, SavedViewDefinition, Tag } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { RecordMetadata } from "../components/RecordMetadata";
+import { SavedViewFilters } from "../components/SavedViewFilters";
 import { SavedViews } from "../components/SavedViews";
 import {
   ConflictBanner,
@@ -32,6 +34,12 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
   const [sort, setSort] = useState<SortState>({ key: "name", direction: "ascending" });
   const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [fieldDefinitions, setFieldDefinitions] = useState<CustomFieldDefinition[]>([]);
+  const [tagIdsAll, setTagIdsAll] = useState<string[]>([]);
+  const [customFields, setCustomFields] = useState<SavedViewCustomFieldPredicate[]>([]);
+  const [matchingIds, setMatchingIds] = useState<string[] | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -49,18 +57,20 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
       active = false;
     };
   }, [client, showArchived]);
+  useEffect(() => { void Promise.all([client.listTags(true), client.listCustomFieldDefs("company", true)]).then(([nextTags, nextDefinitions]) => { setTags(nextTags); setFieldDefinitions(nextDefinitions); }).catch(() => setFilterError("Tags and custom-field filters could not be loaded.")); }, [client]);
 
   const definition: SavedViewDefinition = {
-    schemaVersion: 1,
-    filter: { includeArchived: showArchived },
+    schemaVersion: 2,
+    filter: { includeArchived: showArchived, tagIdsAll, customFields },
     sort: { field: "name", direction: sort.direction },
   };
   const rows = companies
-    ? [...companies].sort((a, b) => {
+    ? companies.filter((company) => matchingIds === null || matchingIds.includes(company.id)).sort((a, b) => {
         const compared = a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
         return compared * (sort.direction === "ascending" ? 1 : -1);
       })
     : null;
+  useEffect(() => { if (tagIdsAll.length === 0 && customFields.length === 0) { setMatchingIds(null); setFilterError(null); return; } void client.matchSavedView("company", definition).then((ids) => { setMatchingIds(ids); setFilterError(null); }).catch(() => { setMatchingIds([]); setFilterError("This filter references missing or invalid metadata and could not be applied."); }); }, [client, definition.filter.includeArchived, tagIdsAll, customFields]);
 
   const columns: ColumnDef<Company>[] = [
     {
@@ -95,10 +105,14 @@ export function CompaniesView({ client, onOpen, onCreate }: CompaniesViewProps) 
             definition={definition}
             onApply={(next) => {
               setShowArchived(next.filter.includeArchived);
+              setTagIdsAll(next.filter.tagIdsAll ?? []);
+              setCustomFields(next.filter.customFields ?? []);
               setSort({ key: "name", direction: next.sort.direction });
             }}
             onSelectionChange={setSavedViewApplied}
           />
+          <SavedViewFilters entityType="company" tags={tags} definitions={fieldDefinitions} definition={definition} onChange={(next) => { setShowArchived(next.filter.includeArchived); setTagIdsAll(next.filter.tagIdsAll); setCustomFields(next.filter.customFields); setSort({ key: "name", direction: next.sort.direction }); }} />
+          {filterError ? <span role="alert" className="saved-views__error">{filterError}</span> : null}
           <label className="toggle">
             <input
               type="checkbox"
@@ -243,6 +257,7 @@ export function CompanyDetailView({ client, companyId, onBack, onEdit }: Company
           </div>
         ))}
       </dl>
+      <RecordMetadata client={client} entityType="company" recordId={company.id} expectedVersion={company.version} onSaved={load} />
 
       <ActivityTimeline client={client} parentType="company" parentId={company.id} />
     </section>
@@ -426,6 +441,7 @@ export function CompanyFormView({ client, companyId, onSaved, onCancel }: Compan
             </Field>
           ))}
         </div>
+        {companyId ? <RecordMetadata client={client} entityType="company" recordId={companyId} expectedVersion={expectedVersion} onSaved={load} /> : null}
 
         <div className="form-actions">
           <button type="button" className="button" onClick={onCancel}>

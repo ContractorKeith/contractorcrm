@@ -8,13 +8,16 @@ use std::sync::Mutex;
 
 use application::{
     ArchiveRequest, CompleteTaskRequest, ContactListItem, CreateCompanyRequest,
-    CreateContactRequest, CreateOpportunityRequest, CreateSavedViewRequest, CreateTaskRequest,
-    DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest, EnvelopeExportReport,
-    LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
-    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RestoreReport, SavedView,
-    SavedViewEntityType, SearchResult, SetAttentionThresholdsRequest, TaskActionRequest,
-    UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest,
-    UpdateOpportunityRequest, UpdateSavedViewRequest, UpdateStageRequest, UpdateTaskRequest,
+    CreateContactRequest, CreateCustomFieldDefRequest, CreateOpportunityRequest,
+    CreateSavedViewRequest, CreateTagRequest, CreateTaskRequest, CustomFieldDef,
+    CustomFieldDefArchiveRequest, DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest,
+    EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
+    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RecordMetadata,
+    RestoreReport, SavedView, SavedViewEntityType, SearchResult, SetAttentionThresholdsRequest,
+    SetRecordMetadataRequest, Tag, TagArchiveRequest, TaskActionRequest, UnlinkHandoffRequest,
+    UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest, UpdateCustomFieldDefRequest,
+    UpdateOpportunityRequest, UpdateSavedViewRequest, UpdateStageRequest, UpdateTagRequest,
+    UpdateTaskRequest,
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
@@ -39,6 +42,19 @@ macro_rules! with_local_api_v1_commands {
             create_saved_view,
             update_saved_view,
             delete_saved_view,
+            list_tags,
+            create_tag,
+            update_tag,
+            archive_tag,
+            unarchive_tag,
+            list_custom_field_defs,
+            create_custom_field_def,
+            update_custom_field_def,
+            archive_custom_field_def,
+            unarchive_custom_field_def,
+            get_record_metadata,
+            set_record_metadata,
+            match_saved_view,
             create_company,
             update_company,
             archive_company,
@@ -274,6 +290,114 @@ fn delete_saved_view(
 ) -> Result<(), CommandError> {
     let mut storage = storage.lock().expect("storage mutex poisoned");
     application::delete_saved_view(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_tags(
+    storage: State<'_, SharedStorage>,
+    include_archived: bool,
+) -> Result<Vec<Tag>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_tags(&storage, include_archived).map_err(Into::into)
+}
+#[tauri::command]
+fn create_tag(
+    storage: State<'_, SharedStorage>,
+    request: CreateTagRequest,
+) -> Result<Tag, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::create_tag(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn update_tag(
+    storage: State<'_, SharedStorage>,
+    request: UpdateTagRequest,
+) -> Result<Tag, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_tag(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn archive_tag(
+    storage: State<'_, SharedStorage>,
+    request: TagArchiveRequest,
+) -> Result<Tag, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::archive_tag(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn unarchive_tag(
+    storage: State<'_, SharedStorage>,
+    request: TagArchiveRequest,
+) -> Result<Tag, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::unarchive_tag(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn list_custom_field_defs(
+    storage: State<'_, SharedStorage>,
+    entity_type: SavedViewEntityType,
+    include_archived: bool,
+) -> Result<Vec<CustomFieldDef>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::list_custom_field_defs(&storage, entity_type, include_archived).map_err(Into::into)
+}
+#[tauri::command]
+fn create_custom_field_def(
+    storage: State<'_, SharedStorage>,
+    request: CreateCustomFieldDefRequest,
+) -> Result<CustomFieldDef, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::create_custom_field_def(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn update_custom_field_def(
+    storage: State<'_, SharedStorage>,
+    request: UpdateCustomFieldDefRequest,
+) -> Result<CustomFieldDef, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::update_custom_field_def(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn archive_custom_field_def(
+    storage: State<'_, SharedStorage>,
+    request: CustomFieldDefArchiveRequest,
+) -> Result<CustomFieldDef, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::archive_custom_field_def(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn unarchive_custom_field_def(
+    storage: State<'_, SharedStorage>,
+    request: CustomFieldDefArchiveRequest,
+) -> Result<CustomFieldDef, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::unarchive_custom_field_def(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn get_record_metadata(
+    storage: State<'_, SharedStorage>,
+    entity_type: SavedViewEntityType,
+    record_id: String,
+) -> Result<RecordMetadata, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_record_metadata(&storage, entity_type, &record_id).map_err(Into::into)
+}
+#[tauri::command]
+fn set_record_metadata(
+    storage: State<'_, SharedStorage>,
+    request: SetRecordMetadataRequest,
+) -> Result<RecordMetadata, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::set_record_metadata(&mut storage, request).map_err(Into::into)
+}
+#[tauri::command]
+fn match_saved_view(
+    storage: State<'_, SharedStorage>,
+    entity_type: SavedViewEntityType,
+    definition: application::SavedViewDefinition,
+) -> Result<Vec<String>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::match_saved_view(&storage, entity_type, definition).map_err(Into::into)
 }
 
 // Thin Tauri commands — lock the shared storage, delegate to the application

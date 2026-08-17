@@ -33,10 +33,94 @@ export interface SearchResult {
 export type SavedViewEntityType = "contact" | "company" | "opportunity";
 export type SavedViewSortDirection = "ascending" | "descending";
 export type SavedViewSortField = "displayName" | "name" | "stage" | "value" | "expectedClose";
+export type TagColorRole = "neutral" | "accent" | "attention";
+export type CustomFieldType = "text" | "number" | "date" | "select";
+
+export interface Tag {
+  id: string;
+  label: string;
+  colorRole: TagColorRole | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface CustomFieldOption {
+  id: string;
+  definitionId: string;
+  label: string;
+  sortKey: number;
+}
+
+export interface CustomFieldDefinition {
+  id: string;
+  entityType: SavedViewEntityType;
+  label: string;
+  fieldType: CustomFieldType;
+  sortKey: number;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+  options: CustomFieldOption[];
+}
+
+export interface RecordCustomFieldValue {
+  id?: string;
+  definitionId: string;
+  entityType?: SavedViewEntityType;
+  recordId?: string;
+  textValue: string | null;
+  numberValue: number | null;
+  dateValue: string | null;
+  optionId: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RecordMetadata {
+  tagIds: string[];
+  values: RecordCustomFieldValue[];
+}
+
+export interface CustomFieldValueInput {
+  definitionId: string;
+  textValue: string | null;
+  numberValue: number | null;
+  dateValue: string | null;
+  optionId: string | null;
+}
+
+export interface CreateTagRequest { actor?: Actor; label: string; colorRole?: TagColorRole | null; }
+export interface UpdateTagRequest { actor?: Actor; tagId: string; expectedVersion: number; label: string; colorRole?: TagColorRole | null; }
+export interface TagLifecycleRequest { actor?: Actor; tagId: string; expectedVersion: number; }
+export interface CustomFieldOptionInput { id?: string; label: string; }
+export interface CreateCustomFieldDefinitionRequest {
+  actor?: Actor; entityType: SavedViewEntityType; label: string; fieldType: CustomFieldType; options?: CustomFieldOptionInput[];
+}
+export interface UpdateCustomFieldDefinitionRequest {
+  actor?: Actor; definitionId: string; expectedVersion: number; label: string; sortKey: number; options: CustomFieldOptionInput[];
+}
+export interface CustomFieldDefinitionLifecycleRequest { actor?: Actor; definitionId: string; expectedVersion: number; }
+export interface SetRecordMetadataRequest {
+  actor?: Actor; entityType: SavedViewEntityType; recordId: string; expectedVersion: number;
+  tagIds: string[]; values: CustomFieldValueInput[];
+}
+
+export type SavedViewCustomFieldPredicate =
+  | { definitionId: string; fieldType: "text"; operator: "contains" | "equals"; value: string }
+  | { definitionId: string; fieldType: "number"; operator: "equals" | "greaterThanOrEqual" | "lessThanOrEqual"; value: number }
+  | { definitionId: string; fieldType: "date"; operator: "on" | "before" | "after"; value: string }
+  | { definitionId: string; fieldType: "select"; operator: "is"; value: string };
 
 export interface SavedViewDefinition {
-  schemaVersion: 1;
-  filter: { includeArchived: boolean };
+  schemaVersion: 2;
+  filter: {
+    includeArchived: boolean;
+    tagIdsAll: string[];
+    customFields: SavedViewCustomFieldPredicate[];
+  };
   sort: { field: SavedViewSortField; direction: SavedViewSortDirection };
 }
 

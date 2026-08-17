@@ -1,7 +1,7 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 7,
+  "databaseMigrationVersion": 8,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
@@ -9,7 +9,8 @@
     { "version": 4, "name": "activities" },
     { "version": 5, "name": "tasks" },
     { "version": 6, "name": "fts5_search_projection" },
-    { "version": 7, "name": "saved_views" }
+    { "version": 7, "name": "saved_views" },
+    { "version": 8, "name": "tags_custom_fields" }
   ],
   "tables": {
     "activities": {
@@ -103,8 +104,14 @@
       "required": ["title","priority","status","created_at","updated_at","version"],
       "primaryKey": ["id"],
       "sqlChecks": ["parent_type IN ('contact', 'company', 'opportunity')", "priority IN ('low', 'normal', 'high')", "status IN ('open', 'done', 'dropped')", "(parent_type IS NULL) = (parent_id IS NULL)", "version > 0"]
-    }
+    },
+    "tags": {"columns":{"id":"TEXT","label":"TEXT","color_role":"TEXT","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},"required":["label","created_at","updated_at","version"],"primaryKey":["id"],"indexes":[{"name":"tags_label_unique","unique":true,"columns":["label"]}],"sqlChecks":["length(trim(label)) BETWEEN 1 AND 80","color_role IN ('neutral', 'accent', 'attention')","version > 0"]},
+    "record_tags": {"columns":{"tag_id":"TEXT","entity_type":"TEXT","record_id":"TEXT","created_at":"TEXT"},"required":["tag_id","entity_type","record_id","created_at"],"primaryKey":["tag_id","entity_type","record_id"],"foreignKeys":[{"from":"tag_id","table":"tags","to":"id","onDelete":"RESTRICT"}],"indexes":[{"name":"record_tags_record","unique":false,"columns":["entity_type","record_id"]},{"name":"record_tags_tag","unique":false,"columns":["tag_id","entity_type","record_id"]}],"sqlChecks":["entity_type IN ('contact', 'company', 'opportunity')"]},
+    "custom_field_defs": {"columns":{"id":"TEXT","entity_type":"TEXT","label":"TEXT","field_type":"TEXT","sort_key":"INTEGER","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},"required":["entity_type","label","field_type","sort_key","created_at","updated_at","version"],"primaryKey":["id"],"indexes":[{"name":"custom_field_defs_entity_label_unique","unique":true,"columns":["entity_type","label"]},{"name":"custom_field_defs_entity_sort","unique":false,"columns":["entity_type","sort_key","id"]}],"sqlChecks":["length(trim(label)) BETWEEN 1 AND 120","entity_type IN ('contact', 'company', 'opportunity')","field_type IN ('text', 'number', 'date', 'select')","sort_key >= 0","version > 0"]},
+    "custom_field_options": {"columns":{"id":"TEXT","definition_id":"TEXT","label":"TEXT","sort_key":"INTEGER"},"required":["definition_id","label","sort_key"],"primaryKey":["id"],"foreignKeys":[{"from":"definition_id","table":"custom_field_defs","to":"id","onDelete":"RESTRICT"}],"indexes":[{"name":"custom_field_options_definition_label_unique","unique":true,"columns":["definition_id","label"]},{"name":"custom_field_options_definition_sort","unique":false,"columns":["definition_id","sort_key","id"]}],"sqlChecks":["length(trim(label)) BETWEEN 1 AND 120","sort_key >= 0"]},
+    "custom_field_values": {"columns":{"id":"TEXT","definition_id":"TEXT","entity_type":"TEXT","record_id":"TEXT","text_value":"TEXT","number_value":"REAL","date_value":"TEXT","option_id":"TEXT","created_at":"TEXT","updated_at":"TEXT"},"required":["definition_id","entity_type","record_id","created_at","updated_at"],"primaryKey":["id"],"foreignKeys":[{"from":"definition_id","table":"custom_field_defs","to":"id","onDelete":"RESTRICT"},{"from":"option_id","table":"custom_field_options","to":"id","onDelete":"RESTRICT"}],"indexes":[{"name":"custom_field_values_definition_record_unique","unique":true,"columns":["definition_id","entity_type","record_id"]},{"name":"custom_field_values_record","unique":false,"columns":["entity_type","record_id"]},{"name":"custom_field_values_definition_text","unique":false,"columns":["definition_id","text_value"]},{"name":"custom_field_values_definition_number","unique":false,"columns":["definition_id","number_value"]},{"name":"custom_field_values_definition_date","unique":false,"columns":["definition_id","date_value"]},{"name":"custom_field_values_definition_option","unique":false,"columns":["definition_id","option_id"]}],"sqlChecks":["entity_type IN ('contact', 'company', 'opportunity')","(text_value IS NOT NULL) + (number_value IS NOT NULL) + (date_value IS NOT NULL) + (option_id IS NOT NULL) = 1"]}
   },
+  "triggers": ["record_tags_owner_insert","record_tags_owner_update","custom_field_values_valid_insert","custom_field_values_valid_update","contacts_metadata_delete","companies_metadata_delete","opportunities_metadata_delete"],
   "recordVersions": {
     "initial": 1,
     "strategy": "positive_integer_incremented_by_version_checked_writes"
