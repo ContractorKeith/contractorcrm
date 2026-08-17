@@ -319,6 +319,126 @@ CREATE INDEX saved_views_entity_sort
     ON saved_views(entity_type, sort_key, id);
 ";
 
+/// v8 flat tags and typed custom fields.  The polymorphic owner checks live in
+/// triggers because SQLite cannot express a foreign key selected by a column.
+const MIGRATION_008: &str = "\
+CREATE TABLE tags (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL CHECK (length(trim(label)) BETWEEN 1 AND 80),
+    color_role TEXT CHECK (color_role IN ('neutral', 'accent', 'attention')),
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)
+);
+CREATE UNIQUE INDEX tags_label_unique ON tags(label COLLATE NOCASE);
+
+CREATE TABLE record_tags (
+    tag_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('contact', 'company', 'opportunity')),
+    record_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (tag_id, entity_type, record_id),
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE RESTRICT
+);
+CREATE INDEX record_tags_record ON record_tags(entity_type, record_id);
+CREATE INDEX record_tags_tag ON record_tags(tag_id, entity_type, record_id);
+
+CREATE TABLE custom_field_defs (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('contact', 'company', 'opportunity')),
+    label TEXT NOT NULL CHECK (length(trim(label)) BETWEEN 1 AND 120),
+    field_type TEXT NOT NULL CHECK (field_type IN ('text', 'number', 'date', 'select')),
+    sort_key INTEGER NOT NULL DEFAULT 0 CHECK (sort_key >= 0),
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)
+);
+CREATE UNIQUE INDEX custom_field_defs_entity_label_unique
+    ON custom_field_defs(entity_type, label COLLATE NOCASE);
+CREATE INDEX custom_field_defs_entity_sort ON custom_field_defs(entity_type, sort_key, id);
+
+CREATE TABLE custom_field_options (
+    id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (length(trim(label)) BETWEEN 1 AND 120),
+    sort_key INTEGER NOT NULL DEFAULT 0 CHECK (sort_key >= 0),
+    FOREIGN KEY (definition_id) REFERENCES custom_field_defs(id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX custom_field_options_definition_label_unique
+    ON custom_field_options(definition_id, label COLLATE NOCASE);
+CREATE INDEX custom_field_options_definition_sort
+    ON custom_field_options(definition_id, sort_key, id);
+
+CREATE TABLE custom_field_values (
+    id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('contact', 'company', 'opportunity')),
+    record_id TEXT NOT NULL,
+    text_value TEXT,
+    number_value REAL,
+    date_value TEXT,
+    option_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((text_value IS NOT NULL) + (number_value IS NOT NULL) +
+           (date_value IS NOT NULL) + (option_id IS NOT NULL) = 1),
+    FOREIGN KEY (definition_id) REFERENCES custom_field_defs(id) ON DELETE RESTRICT,
+    FOREIGN KEY (option_id) REFERENCES custom_field_options(id) ON DELETE RESTRICT
+);
+CREATE INDEX custom_field_values_record ON custom_field_values(entity_type, record_id);
+CREATE UNIQUE INDEX custom_field_values_definition_record_unique
+    ON custom_field_values(definition_id, entity_type, record_id);
+CREATE INDEX custom_field_values_definition_text ON custom_field_values(definition_id, text_value);
+CREATE INDEX custom_field_values_definition_number ON custom_field_values(definition_id, number_value);
+CREATE INDEX custom_field_values_definition_date ON custom_field_values(definition_id, date_value);
+CREATE INDEX custom_field_values_definition_option ON custom_field_values(definition_id, option_id);
+
+CREATE TRIGGER record_tags_owner_insert BEFORE INSERT ON record_tags BEGIN
+ SELECT CASE WHEN NEW.entity_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record')
+ WHEN NEW.entity_type = 'company' AND NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record')
+ WHEN NEW.entity_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record') END;
+END;
+CREATE TRIGGER record_tags_owner_update BEFORE UPDATE ON record_tags BEGIN
+ SELECT CASE WHEN NEW.entity_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record')
+ WHEN NEW.entity_type = 'company' AND NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record')
+ WHEN NEW.entity_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing tag record') END;
+END;
+CREATE TRIGGER custom_field_values_valid_insert BEFORE INSERT ON custom_field_values BEGIN
+ SELECT CASE WHEN NEW.entity_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NEW.entity_type = 'company' AND NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NEW.entity_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.entity_type = NEW.entity_type) THEN RAISE(ABORT, 'custom field definition mismatch')
+ WHEN NEW.text_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'text') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.number_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'number') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.date_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'date') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.option_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d JOIN custom_field_options o ON o.definition_id = d.id WHERE d.id = NEW.definition_id AND d.field_type = 'select' AND o.id = NEW.option_id) THEN RAISE(ABORT, 'custom field option mismatch') END;
+END;
+CREATE TRIGGER custom_field_values_valid_update BEFORE UPDATE ON custom_field_values BEGIN
+ SELECT CASE WHEN NEW.entity_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NEW.entity_type = 'company' AND NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NEW.entity_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.record_id) THEN RAISE(ABORT, 'missing custom field record')
+ WHEN NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.entity_type = NEW.entity_type) THEN RAISE(ABORT, 'custom field definition mismatch')
+ WHEN NEW.text_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'text') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.number_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'number') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.date_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.id = NEW.definition_id AND d.field_type = 'date') THEN RAISE(ABORT, 'custom field type mismatch')
+ WHEN NEW.option_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM custom_field_defs d JOIN custom_field_options o ON o.definition_id = d.id WHERE d.id = NEW.definition_id AND d.field_type = 'select' AND o.id = NEW.option_id) THEN RAISE(ABORT, 'custom field option mismatch') END;
+END;
+CREATE TRIGGER contacts_metadata_delete BEFORE DELETE ON contacts
+WHEN EXISTS (SELECT 1 FROM record_tags WHERE entity_type='contact' AND record_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM custom_field_values WHERE entity_type='contact' AND record_id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'contact metadata must be removed first'); END;
+CREATE TRIGGER companies_metadata_delete BEFORE DELETE ON companies
+WHEN EXISTS (SELECT 1 FROM record_tags WHERE entity_type='company' AND record_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM custom_field_values WHERE entity_type='company' AND record_id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'company metadata must be removed first'); END;
+CREATE TRIGGER opportunities_metadata_delete BEFORE DELETE ON opportunities
+WHEN EXISTS (SELECT 1 FROM record_tags WHERE entity_type='opportunity' AND record_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM custom_field_values WHERE entity_type='opportunity' AND record_id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'opportunity metadata must be removed first'); END;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -348,6 +468,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 7,
         sql: MIGRATION_007,
+    },
+    Migration {
+        version: 8,
+        sql: MIGRATION_008,
     },
 ];
 

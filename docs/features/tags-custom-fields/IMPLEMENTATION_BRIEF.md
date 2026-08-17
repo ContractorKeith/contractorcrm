@@ -1,7 +1,7 @@
 # Tags and typed custom fields implementation brief
 
 Issue: #18
-Status: contract frozen; implementation in progress
+Status: implemented
 Updated: 2026-08-17
 
 ## Boundary

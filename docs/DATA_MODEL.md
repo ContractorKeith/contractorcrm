@@ -1,7 +1,7 @@
 # Data model
 
-Status: implemented through database migration 007
-Updated: 2026-08-16
+Status: implemented through database migration 008
+Updated: 2026-08-17
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`, including
 each implemented table's columns, required fields, primary key, foreign keys,
@@ -57,11 +57,11 @@ Derived, not stored as truth: `last_contacted_at` and next open task come from a
 
 ### `tags` and `record_tags`
 
-Tags have an id, label, and optional color role. `record_tags` joins a tag to a contact, company, or opportunity by entity type + id. Tags are flat in v1 — no hierarchies.
+Tags have a unique case-insensitive 1–80 character label, optional `neutral`, `accent`, or `attention` color role, archive timestamp, timestamps, and a version. `record_tags` joins a tag to a contact, company, or opportunity by entity type + id. Tags are flat and archived rather than purged.
 
 ### `custom_field_defs` and `custom_field_values`
 
-User-defined fields per entity type (`text`, `number`, `date`, `select`) with ordered options for selects. Values join a definition to a record. Keep v1 simple: no formulas, no required-field enforcement.
+User-defined fields per entity type (`text`, `number`, `date`, `select`) have stable ids, archive timestamps, versions, and ordered stable select options. Values join one definition to one record using exactly one typed column. Polymorphic-record and definition/type/option invariants are SQLite triggers; referenced select options cannot be removed. No formulas or required fields.
 
 ### `pipelines` and `stages`
 
@@ -127,17 +127,18 @@ Metadata plus a managed relative path under the app assets directory: parent typ
 
 `id`, `name`, `entity_type`, `definition_json`, `sort_key`, timestamps, and optimistic `version`.
 
-The v1 definition is strict JSON with `schemaVersion: 1`,
-`filter.includeArchived`, and `sort` (`field` plus `ascending` or
-`descending`). Views currently apply only to contact, company, and opportunity
+The current definition is strict JSON with `schemaVersion: 2`,
+`filter.includeArchived`, bounded `filter.tagIdsAll`, finite typed
+`filter.customFields` predicates, and `sort` (`field` plus `ascending` or
+`descending`). Tag and custom-field predicates use AND semantics; allowed
+operators are defined by field type and never accept caller-defined SQL,
+columns, or operators. Views apply only to contact, company, and opportunity
 lists. Sort fields are bounded by surface: `displayName`; `name`; or
-`name`/`stage`/`value`/`expectedClose` respectively. Definitions never contain
-SQL or query operators. A known unversioned v0 definition is migrated in
-memory on read; unsupported future or malformed JSON is rejected without
-rewriting the stored bytes. Names are unique case-insensitively per surface;
-each surface is capped at 50 views and ordered by `sort_key`, then id.
-Future tag and custom-field filters extend this envelope through a deliberate
-schema-version migration; v1 does not reserve arbitrary keys or operators.
+`name`/`stage`/`value`/`expectedClose` respectively. Known unversioned v0 and
+v1 definitions migrate to v2 in memory on read without rewriting stored bytes;
+unsupported future or malformed JSON is rejected. Names are unique
+case-insensitively per surface; each surface is capped at 50 views and ordered
+by `sort_key`, then id.
 
 ### `recents` and needs-attention
 

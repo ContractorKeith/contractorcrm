@@ -2,9 +2,9 @@
 //! one immediate transaction, checks the expected record version, bumps the
 //! version, and writes a command_log row before committing.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::attention::{
     self, AttentionFlag, AttentionInputs, ContactFacts, OpportunityFacts, TaskFacts, Thresholds,
@@ -174,6 +174,17 @@ pub enum SavedViewSortDirection {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SavedViewFilter {
     pub include_archived: bool,
+    pub tag_ids_all: Vec<String>,
+    pub custom_fields: Vec<SavedViewCustomFieldPredicate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewCustomFieldPredicate {
+    pub definition_id: String,
+    pub field_type: String,
+    pub operator: String,
+    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -237,8 +248,470 @@ pub struct DeleteSavedViewRequest {
     pub expected_version: i64,
 }
 
-const SAVED_VIEW_SCHEMA_VERSION: i64 = 1;
+const SAVED_VIEW_SCHEMA_VERSION: i64 = 2;
 const MAX_SAVED_VIEWS_PER_SURFACE: i64 = 50;
+const MAX_TAGS: i64 = 100;
+const MAX_FIELD_DEFS: i64 = 50;
+const MAX_FIELD_OPTIONS: i64 = 50;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: String,
+    pub label: String,
+    pub color_role: Option<String>,
+    pub archived_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateTagRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub label: String,
+    pub color_role: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateTagRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub tag_id: String,
+    pub expected_version: i64,
+    pub label: String,
+    pub color_role: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TagArchiveRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub tag_id: String,
+    pub expected_version: i64,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomFieldOptionInput {
+    pub id: Option<String>,
+    pub label: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFieldOption {
+    pub id: String,
+    pub definition_id: String,
+    pub label: String,
+    pub sort_key: i64,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFieldDef {
+    pub id: String,
+    pub entity_type: SavedViewEntityType,
+    pub label: String,
+    pub field_type: String,
+    pub sort_key: i64,
+    pub archived_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub version: i64,
+    pub options: Vec<CustomFieldOption>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateCustomFieldDefRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub entity_type: SavedViewEntityType,
+    pub label: String,
+    pub field_type: String,
+    #[serde(default)]
+    pub options: Vec<CustomFieldOptionInput>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateCustomFieldDefRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub definition_id: String,
+    pub expected_version: i64,
+    pub label: String,
+    pub sort_key: i64,
+    pub options: Vec<CustomFieldOptionInput>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomFieldDefArchiveRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub definition_id: String,
+    pub expected_version: i64,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomFieldValueInput {
+    pub definition_id: String,
+    #[serde(deserialize_with = "required_option")]
+    pub text_value: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    pub number_value: Option<f64>,
+    #[serde(deserialize_with = "required_option")]
+    pub date_value: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    pub option_id: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFieldValue {
+    pub id: String,
+    pub definition_id: String,
+    pub entity_type: SavedViewEntityType,
+    pub record_id: String,
+    pub text_value: Option<String>,
+    pub number_value: Option<f64>,
+    pub date_value: Option<String>,
+    pub option_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordMetadata {
+    pub tag_ids: Vec<String>,
+    pub values: Vec<CustomFieldValue>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetRecordMetadataRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub entity_type: SavedViewEntityType,
+    pub record_id: String,
+    pub expected_version: i64,
+    pub tag_ids: Vec<String>,
+    pub values: Vec<CustomFieldValueInput>,
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+pub fn list_tags(storage: &Storage, include_archived: bool) -> Result<Vec<Tag>, ApplicationError> {
+    let mut statement = storage.connection().prepare("SELECT id,label,color_role,archived_at,created_at,updated_at,version FROM tags WHERE ?1 OR archived_at IS NULL ORDER BY label COLLATE NOCASE,id")?;
+    let tags = statement
+        .query_map([include_archived], tag_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(ApplicationError::from)?;
+    Ok(tags)
+}
+pub fn create_tag(
+    storage: &mut Storage,
+    request: CreateTagRequest,
+) -> Result<Tag, ApplicationError> {
+    let label = required_text("label", request.label, 80)?;
+    validate_color_role(request.color_role.as_deref())?;
+    let transaction = immediate(storage)?;
+    let count: i64 = transaction.query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0))?;
+    if count >= MAX_TAGS {
+        return Err(limit_error("tag_limit_reached", "label", MAX_TAGS));
+    }
+    require_tag_label_available(&transaction, &label, None)?;
+    let id = new_id();
+    let now = now_utc();
+    transaction.execute("INSERT INTO tags (id,label,color_role,created_at,updated_at,version) VALUES (?1,?2,?3,?4,?4,1)", params![id,label,request.color_role,now])?;
+    log_command(&transaction, request.actor, "tag", &id, "created tag")?;
+    let tag = require_tag(&transaction, &id)?;
+    transaction.commit()?;
+    Ok(tag)
+}
+pub fn update_tag(
+    storage: &mut Storage,
+    request: UpdateTagRequest,
+) -> Result<Tag, ApplicationError> {
+    let label = required_text("label", request.label, 80)?;
+    validate_color_role(request.color_role.as_deref())?;
+    let transaction = immediate(storage)?;
+    let existing = require_tag(&transaction, &request.tag_id)?;
+    check_version(
+        "tag",
+        &request.tag_id,
+        request.expected_version,
+        existing.version,
+    )?;
+    require_tag_label_available(&transaction, &label, Some(&request.tag_id))?;
+    transaction.execute(
+        "UPDATE tags SET label=?2,color_role=?3,updated_at=?4,version=?5 WHERE id=?1",
+        params![
+            request.tag_id,
+            label,
+            request.color_role,
+            now_utc(),
+            existing.version + 1
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "tag",
+        &request.tag_id,
+        "updated tag",
+    )?;
+    let tag = require_tag(&transaction, &request.tag_id)?;
+    transaction.commit()?;
+    Ok(tag)
+}
+pub fn archive_tag(
+    storage: &mut Storage,
+    request: TagArchiveRequest,
+) -> Result<Tag, ApplicationError> {
+    set_tag_archive(storage, request, true)
+}
+pub fn unarchive_tag(
+    storage: &mut Storage,
+    request: TagArchiveRequest,
+) -> Result<Tag, ApplicationError> {
+    set_tag_archive(storage, request, false)
+}
+
+pub fn list_custom_field_defs(
+    storage: &Storage,
+    entity_type: SavedViewEntityType,
+    include_archived: bool,
+) -> Result<Vec<CustomFieldDef>, ApplicationError> {
+    let mut statement=storage.connection().prepare("SELECT id,entity_type,label,field_type,sort_key,archived_at,created_at,updated_at,version FROM custom_field_defs WHERE entity_type=?1 AND (?2 OR archived_at IS NULL) ORDER BY sort_key,id")?;
+    let rows = statement
+        .query_map(
+            params![entity_type.as_database_value(), include_archived],
+            custom_field_def_from_row,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|d| finish_custom_field_def(storage.connection(), d))
+        .collect()
+}
+pub fn create_custom_field_def(
+    storage: &mut Storage,
+    request: CreateCustomFieldDefRequest,
+) -> Result<CustomFieldDef, ApplicationError> {
+    let label = required_text("label", request.label, 120)?;
+    validate_field_type(&request.field_type)?;
+    validate_option_inputs(&request.field_type, &request.options)?;
+    let transaction = immediate(storage)?;
+    let count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM custom_field_defs WHERE entity_type=?1",
+        [request.entity_type.as_database_value()],
+        |r| r.get(0),
+    )?;
+    if count >= MAX_FIELD_DEFS {
+        return Err(limit_error(
+            "custom_field_def_limit_reached",
+            "label",
+            MAX_FIELD_DEFS,
+        ));
+    }
+    require_custom_field_label_available(&transaction, &request.entity_type, &label, None)?;
+    let sort_key: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sort_key),-1)+1 FROM custom_field_defs WHERE entity_type=?1",
+        [request.entity_type.as_database_value()],
+        |r| r.get(0),
+    )?;
+    let id = new_id();
+    let now = now_utc();
+    transaction.execute("INSERT INTO custom_field_defs (id,entity_type,label,field_type,sort_key,created_at,updated_at,version) VALUES (?1,?2,?3,?4,?5,?6,?6,1)",params![id,request.entity_type.as_database_value(),label,request.field_type,sort_key,now])?;
+    replace_options(&transaction, &id, &request.options)?;
+    log_command(
+        &transaction,
+        request.actor,
+        "custom_field_def",
+        &id,
+        "created custom field",
+    )?;
+    let def = require_custom_field_def(&transaction, &id)?;
+    transaction.commit()?;
+    Ok(def)
+}
+pub fn update_custom_field_def(
+    storage: &mut Storage,
+    request: UpdateCustomFieldDefRequest,
+) -> Result<CustomFieldDef, ApplicationError> {
+    let label = required_text("label", request.label, 120)?;
+    if request.sort_key < 0 {
+        return Err(ApplicationError::InvalidInput {
+            field: "sortKey".into(),
+            message: "must be zero or greater".into(),
+        });
+    }
+    let transaction = immediate(storage)?;
+    let existing = require_custom_field_def(&transaction, &request.definition_id)?;
+    check_version(
+        "custom_field_def",
+        &existing.id,
+        request.expected_version,
+        existing.version,
+    )?;
+    validate_option_inputs(&existing.field_type, &request.options)?;
+    require_custom_field_label_available(
+        &transaction,
+        &existing.entity_type,
+        &label,
+        Some(&existing.id),
+    )?;
+    replace_options(&transaction, &existing.id, &request.options)?;
+    transaction.execute(
+        "UPDATE custom_field_defs SET label=?2,sort_key=?3,updated_at=?4,version=?5 WHERE id=?1",
+        params![
+            existing.id,
+            label,
+            request.sort_key,
+            now_utc(),
+            existing.version + 1
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "custom_field_def",
+        &existing.id,
+        "updated custom field",
+    )?;
+    let def = require_custom_field_def(&transaction, &existing.id)?;
+    transaction.commit()?;
+    Ok(def)
+}
+pub fn archive_custom_field_def(
+    storage: &mut Storage,
+    request: CustomFieldDefArchiveRequest,
+) -> Result<CustomFieldDef, ApplicationError> {
+    set_def_archive(storage, request, true)
+}
+pub fn unarchive_custom_field_def(
+    storage: &mut Storage,
+    request: CustomFieldDefArchiveRequest,
+) -> Result<CustomFieldDef, ApplicationError> {
+    set_def_archive(storage, request, false)
+}
+
+pub fn get_record_metadata(
+    storage: &Storage,
+    entity_type: SavedViewEntityType,
+    record_id: &str,
+) -> Result<RecordMetadata, ApplicationError> {
+    ensure_owner(storage.connection(), &entity_type, record_id)?;
+    load_metadata(storage.connection(), &entity_type, record_id)
+}
+pub fn set_record_metadata(
+    storage: &mut Storage,
+    request: SetRecordMetadataRequest,
+) -> Result<RecordMetadata, ApplicationError> {
+    validate_metadata_request(&request)?;
+    let transaction = immediate(storage)?;
+    let current = owner_version(&transaction, &request.entity_type, &request.record_id)?;
+    check_version(
+        request.entity_type.as_database_value(),
+        &request.record_id,
+        request.expected_version,
+        current,
+    )?;
+    let existing = load_metadata(&transaction, &request.entity_type, &request.record_id)?;
+    validate_metadata_references(&transaction, &request, &existing)?;
+    if metadata_equal(&existing, &request) {
+        transaction.commit()?;
+        return Ok(existing);
+    }
+    transaction.execute(
+        "DELETE FROM record_tags WHERE entity_type=?1 AND record_id=?2",
+        params![request.entity_type.as_database_value(), request.record_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM custom_field_values WHERE entity_type=?1 AND record_id=?2",
+        params![request.entity_type.as_database_value(), request.record_id],
+    )?;
+    let now = now_utc();
+    for tag_id in &request.tag_ids {
+        transaction.execute("INSERT INTO record_tags (tag_id,entity_type,record_id,created_at) VALUES (?1,?2,?3,?4)",params![tag_id,request.entity_type.as_database_value(),request.record_id,now])?;
+    }
+    for value in &request.values {
+        transaction.execute("INSERT INTO custom_field_values (id,definition_id,entity_type,record_id,text_value,number_value,date_value,option_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",params![new_id(),value.definition_id,request.entity_type.as_database_value(),request.record_id,value.text_value,value.number_value,value.date_value,value.option_id,now])?;
+    }
+    bump_owner(
+        &transaction,
+        &request.entity_type,
+        &request.record_id,
+        current + 1,
+        &now,
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        request.entity_type.as_database_value(),
+        &request.record_id,
+        "updated record metadata",
+    )?;
+    let metadata = load_metadata(&transaction, &request.entity_type, &request.record_id)?;
+    transaction.commit()?;
+    Ok(metadata)
+}
+
+pub fn match_saved_view(
+    storage: &Storage,
+    entity_type: SavedViewEntityType,
+    definition: SavedViewDefinition,
+) -> Result<Vec<String>, ApplicationError> {
+    let definition = validate_saved_view_definition(entity_type.clone(), definition)?;
+    validate_saved_view_references(storage.connection(), &entity_type, &definition)?;
+    let table = entity_type.as_database_value();
+    let sql = format!(
+        "SELECT id FROM {} WHERE {} ORDER BY id",
+        match table {
+            "contact" => "contacts",
+            "company" => "companies",
+            _ => "opportunities",
+        },
+        if definition.filter.include_archived {
+            "1=1"
+        } else {
+            "archived_at IS NULL"
+        }
+    );
+    let ids = storage
+        .connection()
+        .prepare(&sql)?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    let mut matched = Vec::new();
+    for id in ids {
+        let mut keep = true;
+        for tag in &definition.filter.tag_ids_all {
+            let assigned: bool = storage.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM record_tags WHERE tag_id=?1 AND entity_type=?2 AND record_id=?3)",
+                params![tag, table, &id],
+                |row| row.get(0),
+            )?;
+            if !assigned {
+                keep = false;
+                break;
+            }
+        }
+        if keep {
+            for predicate in &definition.filter.custom_fields {
+                if !matches_predicate(storage.connection(), table, &id, predicate)? {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if keep {
+            matched.push(id);
+        }
+    }
+    Ok(matched)
+}
 
 /// Return views for one list surface in their durable, deterministic order.
 /// Invalid stored definitions are reported, never rewritten or skipped.
@@ -269,6 +742,7 @@ pub fn create_saved_view(
     let id = new_id();
     let now = now_utc();
     let transaction = immediate(storage)?;
+    validate_saved_view_references(&transaction, &request.entity_type, &definition)?;
     let count: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM saved_views WHERE entity_type = ?1",
         [request.entity_type.as_database_value()],
@@ -335,6 +809,7 @@ pub fn update_saved_view(
     )?;
     let definition =
         validate_saved_view_definition(existing.entity_type.clone(), request.definition)?;
+    validate_saved_view_references(&transaction, &existing.entity_type, &definition)?;
     let definition_json = serde_json::to_string(&definition)
         .map_err(|error| ApplicationError::InvalidStoredData(error.to_string()))?;
     require_saved_view_name_available(
@@ -3488,6 +3963,43 @@ fn validate_saved_view_definition(
             message: format!("must be saved-view schema version {SAVED_VIEW_SCHEMA_VERSION}"),
         });
     }
+    if definition.filter.tag_ids_all.len() > 20 || definition.filter.custom_fields.len() > 10 {
+        return Err(ApplicationError::ValidationFailed {
+            code: "saved_view_filter_limit",
+            field: "definition.filter".into(),
+            message: "contains too many predicates".into(),
+        });
+    }
+    if definition
+        .filter
+        .tag_ids_all
+        .iter()
+        .any(|id| id.trim().is_empty())
+        || definition
+            .filter
+            .tag_ids_all
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != definition.filter.tag_ids_all.len()
+    {
+        return Err(ApplicationError::ValidationFailed {
+            code: "invalid_saved_view_tags",
+            field: "definition.filter.tagIdsAll".into(),
+            message: "must contain unique non-empty ids".into(),
+        });
+    }
+    let mut custom_field_ids = std::collections::HashSet::new();
+    for (index, predicate) in definition.filter.custom_fields.iter().enumerate() {
+        if !custom_field_ids.insert(&predicate.definition_id) {
+            return Err(ApplicationError::ValidationFailed {
+                code: "invalid_saved_view_custom_field",
+                field: format!("definition.filter.customFields[{index}].definitionId"),
+                message: "must reference each definition at most once".into(),
+            });
+        }
+        validate_predicate(index, predicate)?;
+    }
     let allowed = match entity_type {
         SavedViewEntityType::Contact => ["displayName"].as_slice(),
         SavedViewEntityType::Company => ["name"].as_slice(),
@@ -3560,6 +4072,7 @@ fn parse_saved_view_definition(
         Some(SAVED_VIEW_SCHEMA_VERSION) => serde_json::from_value(value).map_err(|error| {
             ApplicationError::InvalidStoredData(format!("invalid saved view definition: {error}"))
         })?,
+        Some(1) => migrate_saved_view_v1(value)?,
         Some(version) if version < 0 => {
             return Err(ApplicationError::InvalidStoredData(format!(
                 "saved view definition has invalid schema version {version}"
@@ -3573,8 +4086,13 @@ fn parse_saved_view_definition(
         None => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct LegacyFilterV0 {
+                include_archived: bool,
+            }
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
             struct LegacyDefinitionV0 {
-                filter: SavedViewFilter,
+                filter: LegacyFilterV0,
                 sort: SavedViewSort,
             }
             let legacy: LegacyDefinitionV0 = serde_json::from_value(value).map_err(|error| {
@@ -3584,7 +4102,11 @@ fn parse_saved_view_definition(
             })?;
             SavedViewDefinition {
                 schema_version: SAVED_VIEW_SCHEMA_VERSION,
-                filter: legacy.filter,
+                filter: SavedViewFilter {
+                    include_archived: legacy.filter.include_archived,
+                    tag_ids_all: vec![],
+                    custom_fields: vec![],
+                },
                 sort: legacy.sort,
             }
         }
@@ -3592,6 +4114,724 @@ fn parse_saved_view_definition(
     validate_saved_view_definition(entity_type.clone(), definition).map_err(|error| {
         ApplicationError::InvalidStoredData(format!("invalid saved view definition: {error}"))
     })
+}
+
+fn migrate_saved_view_v1(
+    value: serde_json::Value,
+) -> Result<SavedViewDefinition, ApplicationError> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct V1 {
+        #[serde(rename = "schemaVersion")]
+        _schema_version: i64,
+        filter: LegacyFilter,
+        sort: SavedViewSort,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct LegacyFilter {
+        include_archived: bool,
+    }
+    let legacy: V1 = serde_json::from_value(value).map_err(|e| {
+        ApplicationError::InvalidStoredData(format!("invalid saved view definition: {e}"))
+    })?;
+    Ok(SavedViewDefinition {
+        schema_version: SAVED_VIEW_SCHEMA_VERSION,
+        filter: SavedViewFilter {
+            include_archived: legacy.filter.include_archived,
+            tag_ids_all: vec![],
+            custom_fields: vec![],
+        },
+        sort: legacy.sort,
+    })
+}
+
+fn tag_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tag> {
+    Ok(Tag {
+        id: row.get(0)?,
+        label: row.get(1)?,
+        color_role: row.get(2)?,
+        archived_at: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+        version: row.get(6)?,
+    })
+}
+fn option_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CustomFieldOption> {
+    Ok(CustomFieldOption {
+        id: row.get(0)?,
+        definition_id: row.get(1)?,
+        label: row.get(2)?,
+        sort_key: row.get(3)?,
+    })
+}
+type DefRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    String,
+    String,
+    i64,
+);
+fn custom_field_def_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DefRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+    ))
+}
+fn finish_custom_field_def(
+    connection: &rusqlite::Connection,
+    row: DefRow,
+) -> Result<CustomFieldDef, ApplicationError> {
+    let (
+        id,
+        entity_type,
+        label,
+        field_type,
+        sort_key,
+        archived_at,
+        created_at,
+        updated_at,
+        version,
+    ) = row;
+    let mut s=connection.prepare("SELECT id,definition_id,label,sort_key FROM custom_field_options WHERE definition_id=?1 ORDER BY sort_key,id")?;
+    let options = s
+        .query_map([&id], option_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(CustomFieldDef {
+        id,
+        entity_type: SavedViewEntityType::parse(&entity_type)?,
+        label,
+        field_type,
+        sort_key,
+        archived_at,
+        created_at,
+        updated_at,
+        version,
+        options,
+    })
+}
+fn require_tag(connection: &rusqlite::Connection, id: &str) -> Result<Tag, ApplicationError> {
+    connection.query_row("SELECT id,label,color_role,archived_at,created_at,updated_at,version FROM tags WHERE id=?1",[id],tag_from_row).optional()?.ok_or_else(||ApplicationError::NotFound{resource:"tag",id:id.into()})
+}
+fn require_tag_label_available(
+    connection: &rusqlite::Connection,
+    label: &str,
+    excluded_id: Option<&str>,
+) -> Result<(), ApplicationError> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tags WHERE label=?1 COLLATE NOCASE AND (?2 IS NULL OR id != ?2))",
+        params![label, excluded_id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Err(ApplicationError::ValidationFailed {
+            code: "tag_label_taken",
+            field: "label".into(),
+            message: "a tag with this label already exists".into(),
+        });
+    }
+    Ok(())
+}
+fn require_custom_field_label_available(
+    connection: &rusqlite::Connection,
+    entity_type: &SavedViewEntityType,
+    label: &str,
+    excluded_id: Option<&str>,
+) -> Result<(), ApplicationError> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM custom_field_defs WHERE entity_type=?1 AND label=?2 COLLATE NOCASE AND (?3 IS NULL OR id != ?3))",
+        params![entity_type.as_database_value(), label, excluded_id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Err(ApplicationError::ValidationFailed {
+            code: "custom_field_label_taken",
+            field: "label".into(),
+            message: "a custom field with this label already exists for this record type".into(),
+        });
+    }
+    Ok(())
+}
+fn require_custom_field_def(
+    connection: &rusqlite::Connection,
+    id: &str,
+) -> Result<CustomFieldDef, ApplicationError> {
+    let row=connection.query_row("SELECT id,entity_type,label,field_type,sort_key,archived_at,created_at,updated_at,version FROM custom_field_defs WHERE id=?1",[id],custom_field_def_from_row).optional()?.ok_or_else(||ApplicationError::NotFound{resource:"custom_field_def",id:id.into()})?;
+    finish_custom_field_def(connection, row)
+}
+fn validate_color_role(value: Option<&str>) -> Result<(), ApplicationError> {
+    if matches!(value,Some(v) if !matches!(v,"neutral"|"accent"|"attention")) {
+        return Err(ApplicationError::InvalidInput {
+            field: "colorRole".into(),
+            message: "must be neutral, accent, or attention".into(),
+        });
+    }
+    Ok(())
+}
+fn validate_field_type(value: &str) -> Result<(), ApplicationError> {
+    if !matches!(value, "text" | "number" | "date" | "select") {
+        return Err(ApplicationError::InvalidInput {
+            field: "fieldType".into(),
+            message: "must be text, number, date, or select".into(),
+        });
+    }
+    Ok(())
+}
+fn limit_error(code: &'static str, field: &str, max: i64) -> ApplicationError {
+    ApplicationError::ValidationFailed {
+        code,
+        field: field.into(),
+        message: format!("may contain at most {max} entries"),
+    }
+}
+fn validate_option_inputs(
+    field_type: &str,
+    options: &[CustomFieldOptionInput],
+) -> Result<(), ApplicationError> {
+    if field_type == "select" {
+        if options.is_empty() {
+            return Err(ApplicationError::InvalidInput {
+                field: "options".into(),
+                message: "is required for select fields".into(),
+            });
+        }
+        if options.len() as i64 > MAX_FIELD_OPTIONS {
+            return Err(limit_error(
+                "custom_field_option_limit_reached",
+                "options",
+                MAX_FIELD_OPTIONS,
+            ));
+        }
+    } else if !options.is_empty() {
+        return Err(ApplicationError::InvalidInput {
+            field: "options".into(),
+            message: "are only supported for select fields".into(),
+        });
+    }
+    let mut labels = std::collections::HashSet::new();
+    let mut ids = std::collections::HashSet::new();
+    for option in options {
+        let label = required_text("options.label", option.label.clone(), 120)?;
+        if !labels.insert(label.to_lowercase()) {
+            return Err(ApplicationError::ValidationFailed {
+                code: "duplicate_custom_field_option",
+                field: "options".into(),
+                message: "labels must be unique".into(),
+            });
+        }
+        if option.id.as_ref().is_some_and(|id| !ids.insert(id)) {
+            return Err(ApplicationError::ValidationFailed {
+                code: "duplicate_custom_field_option",
+                field: "options.id".into(),
+                message: "option ids must be unique".into(),
+            });
+        }
+    }
+    Ok(())
+}
+fn replace_options(
+    transaction: &Transaction<'_>,
+    definition_id: &str,
+    options: &[CustomFieldOptionInput],
+) -> Result<(), ApplicationError> {
+    let old = transaction
+        .prepare("SELECT id FROM custom_field_options WHERE definition_id=?1")?
+        .query_map([definition_id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let keep = options
+        .iter()
+        .filter_map(|o| o.id.as_deref())
+        .collect::<std::collections::HashSet<_>>();
+    for id in old {
+        if !keep.contains(id.as_str()) {
+            let used: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE option_id=?1)",
+                [&id],
+                |r| r.get(0),
+            )?;
+            if used {
+                return Err(ApplicationError::ValidationFailed {
+                    code: "custom_field_option_in_use",
+                    field: "options".into(),
+                    message: "referenced options cannot be removed".into(),
+                });
+            }
+            transaction.execute("DELETE FROM custom_field_options WHERE id=?1", [id])?;
+        }
+    }
+    for (sort_key, option) in options.iter().enumerate() {
+        let label = required_text("options.label", option.label.clone(), 120)?;
+        match &option.id {
+            Some(id) => {
+                let changed=transaction.execute("UPDATE custom_field_options SET label=?2,sort_key=?3 WHERE id=?1 AND definition_id=?4",params![id,label,sort_key as i64,definition_id])?;
+                if changed == 0 {
+                    return Err(ApplicationError::ValidationFailed {
+                        code: "invalid_custom_field_option",
+                        field: "options.id".into(),
+                        message: "does not belong to this definition".into(),
+                    });
+                }
+            }
+            None => {
+                transaction.execute("INSERT INTO custom_field_options (id,definition_id,label,sort_key) VALUES (?1,?2,?3,?4)",params![new_id(),definition_id,label,sort_key as i64])?;
+            }
+        }
+    }
+    Ok(())
+}
+fn set_tag_archive(
+    storage: &mut Storage,
+    request: TagArchiveRequest,
+    archive: bool,
+) -> Result<Tag, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let tag = require_tag(&transaction, &request.tag_id)?;
+    check_version("tag", &tag.id, request.expected_version, tag.version)?;
+    if archive == tag.archived_at.is_some() {
+        return Err(ApplicationError::ValidationFailed {
+            code: "invalid_tag_state_transition",
+            field: "tagId".into(),
+            message: if archive {
+                "tag is already archived"
+            } else {
+                "tag is already active"
+            }
+            .into(),
+        });
+    }
+    transaction.execute(
+        "UPDATE tags SET archived_at=?2,updated_at=?3,version=?4 WHERE id=?1",
+        params![
+            tag.id,
+            if archive { Some(now_utc()) } else { None },
+            now_utc(),
+            tag.version + 1
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "tag",
+        &tag.id,
+        if archive {
+            "archived tag"
+        } else {
+            "unarchived tag"
+        },
+    )?;
+    let tag = require_tag(&transaction, &tag.id)?;
+    transaction.commit()?;
+    Ok(tag)
+}
+fn set_def_archive(
+    storage: &mut Storage,
+    request: CustomFieldDefArchiveRequest,
+    archive: bool,
+) -> Result<CustomFieldDef, ApplicationError> {
+    let transaction = immediate(storage)?;
+    let def = require_custom_field_def(&transaction, &request.definition_id)?;
+    check_version(
+        "custom_field_def",
+        &def.id,
+        request.expected_version,
+        def.version,
+    )?;
+    if archive == def.archived_at.is_some() {
+        return Err(ApplicationError::ValidationFailed {
+            code: "invalid_custom_field_state_transition",
+            field: "definitionId".into(),
+            message: if archive {
+                "custom field is already archived"
+            } else {
+                "custom field is already active"
+            }
+            .into(),
+        });
+    }
+    transaction.execute(
+        "UPDATE custom_field_defs SET archived_at=?2,updated_at=?3,version=?4 WHERE id=?1",
+        params![
+            def.id,
+            if archive { Some(now_utc()) } else { None },
+            now_utc(),
+            def.version + 1
+        ],
+    )?;
+    log_command(
+        &transaction,
+        request.actor,
+        "custom_field_def",
+        &def.id,
+        if archive {
+            "archived custom field"
+        } else {
+            "unarchived custom field"
+        },
+    )?;
+    let def = require_custom_field_def(&transaction, &def.id)?;
+    transaction.commit()?;
+    Ok(def)
+}
+fn owner_table(entity_type: &SavedViewEntityType) -> &'static str {
+    match entity_type {
+        SavedViewEntityType::Contact => "contacts",
+        SavedViewEntityType::Company => "companies",
+        SavedViewEntityType::Opportunity => "opportunities",
+    }
+}
+fn owner_version(
+    connection: &rusqlite::Connection,
+    entity_type: &SavedViewEntityType,
+    id: &str,
+) -> Result<i64, ApplicationError> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT version FROM {} WHERE id=?1",
+                owner_table(entity_type)
+            ),
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: entity_type.as_database_value(),
+            id: id.into(),
+        })
+}
+fn ensure_owner(
+    connection: &rusqlite::Connection,
+    entity_type: &SavedViewEntityType,
+    id: &str,
+) -> Result<(), ApplicationError> {
+    owner_version(connection, entity_type, id).map(|_| ())
+}
+fn bump_owner(
+    transaction: &Transaction<'_>,
+    entity_type: &SavedViewEntityType,
+    id: &str,
+    version: i64,
+    now: &str,
+) -> Result<(), ApplicationError> {
+    transaction.execute(
+        &format!(
+            "UPDATE {} SET updated_at=?2,version=?3 WHERE id=?1",
+            owner_table(entity_type)
+        ),
+        params![id, now, version],
+    )?;
+    Ok(())
+}
+fn value_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CustomFieldValue> {
+    Ok(CustomFieldValue {
+        id: row.get(0)?,
+        definition_id: row.get(1)?,
+        entity_type: SavedViewEntityType::parse(&row.get::<_, String>(2)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        record_id: row.get(3)?,
+        text_value: row.get(4)?,
+        number_value: row.get(5)?,
+        date_value: row.get(6)?,
+        option_id: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+fn load_metadata(
+    connection: &rusqlite::Connection,
+    entity_type: &SavedViewEntityType,
+    record_id: &str,
+) -> Result<RecordMetadata, ApplicationError> {
+    let tag_ids = connection
+        .prepare(
+            "SELECT tag_id FROM record_tags WHERE entity_type=?1 AND record_id=?2 ORDER BY tag_id",
+        )?
+        .query_map(params![entity_type.as_database_value(), record_id], |r| {
+            r.get(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let values=connection.prepare("SELECT id,definition_id,entity_type,record_id,text_value,number_value,date_value,option_id,created_at,updated_at FROM custom_field_values WHERE entity_type=?1 AND record_id=?2 ORDER BY definition_id,id")?.query_map(params![entity_type.as_database_value(),record_id],value_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RecordMetadata { tag_ids, values })
+}
+fn validate_metadata_request(request: &SetRecordMetadataRequest) -> Result<(), ApplicationError> {
+    if request.tag_ids.len() > 20 {
+        return Err(limit_error("record_tag_limit_reached", "tagIds", 20));
+    }
+    if request.values.len() > 50 {
+        return Err(limit_error(
+            "record_custom_field_limit_reached",
+            "values",
+            50,
+        ));
+    }
+    let mut tags = std::collections::HashSet::new();
+    for tag in &request.tag_ids {
+        if tag.trim().is_empty() || !tags.insert(tag) {
+            return Err(ApplicationError::InvalidInput {
+                field: "tagIds".into(),
+                message: "must contain unique ids".into(),
+            });
+        }
+    }
+    let mut definitions = std::collections::HashSet::new();
+    for value in &request.values {
+        if !definitions.insert(&value.definition_id) {
+            return Err(ApplicationError::InvalidInput {
+                field: "values".into(),
+                message: "must contain one value per definition".into(),
+            });
+        }
+        validate_value_shape(value)?
+    }
+    Ok(())
+}
+fn validate_value_shape(value: &CustomFieldValueInput) -> Result<(), ApplicationError> {
+    let count = [
+        value.text_value.is_some(),
+        value.number_value.is_some(),
+        value.date_value.is_some(),
+        value.option_id.is_some(),
+    ]
+    .into_iter()
+    .filter(|x| *x)
+    .count();
+    if count != 1 {
+        return Err(ApplicationError::InvalidInput {
+            field: "values".into(),
+            message: "each value needs exactly one typed value".into(),
+        });
+    }
+    if let Some(text) = &value.text_value {
+        if text.chars().count() > 4000 {
+            return Err(ApplicationError::InvalidInput {
+                field: "values.textValue".into(),
+                message: "must be 4,000 characters or fewer".into(),
+            });
+        }
+    }
+    if let Some(number) = value.number_value {
+        if !number.is_finite() || number.abs() > 1_000_000_000_000_000.0 {
+            return Err(ApplicationError::InvalidInput {
+                field: "values.numberValue".into(),
+                message: "must be finite and within range".into(),
+            });
+        }
+    }
+    if let Some(date) = &value.date_value {
+        NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+            ApplicationError::InvalidInput {
+                field: "values.dateValue".into(),
+                message: "must be YYYY-MM-DD".into(),
+            }
+        })?;
+    }
+    Ok(())
+}
+fn validate_metadata_references(
+    connection: &rusqlite::Connection,
+    request: &SetRecordMetadataRequest,
+    existing: &RecordMetadata,
+) -> Result<(), ApplicationError> {
+    for tag in &request.tag_ids {
+        let stored = require_tag(connection, tag)?;
+        if stored.archived_at.is_some() && !existing.tag_ids.contains(tag) {
+            return Err(ApplicationError::ValidationFailed {
+                code: "invalid_tag",
+                field: "tagIds".into(),
+                message: "references an unavailable tag".into(),
+            });
+        }
+    }
+    for value in &request.values {
+        let def = require_custom_field_def(connection, &value.definition_id)?;
+        if def.entity_type != request.entity_type {
+            return Err(ApplicationError::ValidationFailed {
+                code: "invalid_custom_field_definition",
+                field: "values.definitionId".into(),
+                message: "does not apply to this record".into(),
+            });
+        }
+        if def.archived_at.is_some()
+            && !existing.values.iter().any(|stored| {
+                stored.definition_id == value.definition_id
+                    && stored.text_value == value.text_value
+                    && stored.number_value == value.number_value
+                    && stored.date_value == value.date_value
+                    && stored.option_id == value.option_id
+            })
+        {
+            return Err(ApplicationError::ValidationFailed {
+                code: "invalid_custom_field_definition",
+                field: "values.definitionId".into(),
+                message: "archived custom fields may only retain their existing value".into(),
+            });
+        }
+        match (def.field_type.as_str(), &value.option_id) {
+            ("text", None) if value.text_value.is_some() => (),
+            ("number", None) if value.number_value.is_some() => (),
+            ("date", None) if value.date_value.is_some() => (),
+            ("select", Some(option)) => {
+                if !def.options.iter().any(|o| &o.id == option) {
+                    return Err(ApplicationError::ValidationFailed {
+                        code: "invalid_custom_field_option",
+                        field: "values.optionId".into(),
+                        message: "does not belong to the definition".into(),
+                    });
+                }
+            }
+            _ => {
+                return Err(ApplicationError::ValidationFailed {
+                    code: "custom_field_type_mismatch",
+                    field: "values".into(),
+                    message: "does not match its definition type".into(),
+                })
+            }
+        }
+    }
+    Ok(())
+}
+fn metadata_equal(existing: &RecordMetadata, request: &SetRecordMetadataRequest) -> bool {
+    if existing.tag_ids.len() != request.tag_ids.len()
+        || !existing
+            .tag_ids
+            .iter()
+            .all(|id| request.tag_ids.contains(id))
+    {
+        return false;
+    }
+    if existing.values.len() != request.values.len() {
+        return false;
+    }
+    existing.values.iter().all(|existing_value| {
+        request
+            .values
+            .iter()
+            .find(|candidate| candidate.definition_id == existing_value.definition_id)
+            .is_some_and(|candidate| {
+                existing_value.text_value == candidate.text_value
+                    && existing_value.number_value == candidate.number_value
+                    && existing_value.date_value == candidate.date_value
+                    && existing_value.option_id == candidate.option_id
+            })
+    })
+}
+fn validate_predicate(
+    index: usize,
+    p: &SavedViewCustomFieldPredicate,
+) -> Result<(), ApplicationError> {
+    let valid = match p.field_type.as_str() {
+        "text" => {
+            matches!(p.operator.as_str(), "contains" | "equals")
+                && p.value
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty() && value.chars().count() <= 4_000)
+        }
+        "number" => {
+            matches!(
+                p.operator.as_str(),
+                "equals" | "greaterThanOrEqual" | "lessThanOrEqual"
+            ) && p
+                .value
+                .as_f64()
+                .is_some_and(|v| v.is_finite() && v.abs() <= 1_000_000_000_000_000.0)
+        }
+        "date" => {
+            matches!(p.operator.as_str(), "on" | "before" | "after")
+                && p.value
+                    .as_str()
+                    .is_some_and(|v| NaiveDate::parse_from_str(v, "%Y-%m-%d").is_ok())
+        }
+        "select" => p.operator == "is" && p.value.as_str().is_some_and(|v| !v.is_empty()),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ApplicationError::ValidationFailed {
+            code: "invalid_saved_view_custom_field",
+            field: format!("definition.filter.customFields[{index}]"),
+            message: "has an unsupported type, operator, or value".into(),
+        })
+    }
+}
+fn validate_saved_view_references(
+    connection: &rusqlite::Connection,
+    entity_type: &SavedViewEntityType,
+    definition: &SavedViewDefinition,
+) -> Result<(), ApplicationError> {
+    for tag in &definition.filter.tag_ids_all {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1 AND archived_at IS NULL)",
+            [tag],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(ApplicationError::ValidationFailed {
+                code: "stale_saved_view_reference",
+                field: "definition.filter.tagIdsAll".into(),
+                message: "references a missing tag".into(),
+            });
+        }
+    }
+    for p in &definition.filter.custom_fields {
+        let def = match require_custom_field_def(connection, &p.definition_id) {
+            Ok(definition) => definition,
+            Err(ApplicationError::NotFound { .. }) => {
+                return Err(ApplicationError::ValidationFailed {
+                    code: "stale_saved_view_reference",
+                    field: "definition.filter.customFields".into(),
+                    message: "references a missing custom field".into(),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        if &def.entity_type != entity_type
+            || def.field_type != p.field_type
+            || def.archived_at.is_some()
+        {
+            return Err(ApplicationError::ValidationFailed {
+                code: "stale_saved_view_reference",
+                field: "definition.filter.customFields".into(),
+                message: "references an incompatible custom field".into(),
+            });
+        }
+        if let Some(option) = p.value.as_str().filter(|_| p.field_type == "select") {
+            if !def.options.iter().any(|o| o.id == option) {
+                return Err(ApplicationError::ValidationFailed {
+                    code: "stale_saved_view_reference",
+                    field: "definition.filter.customFields".into(),
+                    message: "references a missing option".into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+fn matches_predicate(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+    record_id: &str,
+    p: &SavedViewCustomFieldPredicate,
+) -> Result<bool, ApplicationError> {
+    let (sql,value):(&str,rusqlite::types::Value)=match (p.field_type.as_str(),p.operator.as_str()){("text","contains")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND instr(text_value,?4)>0)",p.value.as_str().unwrap().to_owned().into()),("text","equals")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND text_value=?4)",p.value.as_str().unwrap().to_owned().into()),("number","equals")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND number_value=?4)",p.value.as_f64().unwrap().into()),("number","greaterThanOrEqual")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND number_value>=?4)",p.value.as_f64().unwrap().into()),("number","lessThanOrEqual")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND number_value<=?4)",p.value.as_f64().unwrap().into()),("date","on")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND date_value=?4)",p.value.as_str().unwrap().to_owned().into()),("date","before")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND date_value<?4)",p.value.as_str().unwrap().to_owned().into()),("date","after")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND date_value>?4)",p.value.as_str().unwrap().to_owned().into()),("select","is")=>("SELECT EXISTS(SELECT 1 FROM custom_field_values WHERE definition_id=?1 AND entity_type=?2 AND record_id=?3 AND option_id=?4)",p.value.as_str().unwrap().to_owned().into()),_=>return Ok(false)};
+    connection
+        .query_row(
+            sql,
+            params![p.definition_id, entity_type, record_id, value],
+            |r| r.get(0),
+        )
+        .map_err(Into::into)
 }
 
 fn require_saved_view_name_available(

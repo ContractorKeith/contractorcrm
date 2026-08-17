@@ -17,14 +17,16 @@ local agent API, and a clean opportunity → quote → ContractorProject job han
 Core ready — v0.1.0 development. MVP slices 0–3 are implemented and verified:
 native contacts/companies, durable SQLite storage and backup/restore, pipeline and
 won-opportunity hand-off, activities, tasks, and needs-attention workflows. The
-Slice 4 foundation is implemented through migration 007: tested versioned data/API
+Slice 4 foundation is implemented through migration 008: tested versioned data/API
 contracts and a transactionally maintained FTS5 search seam across contacts,
 companies, opportunities, and activities. Keyboard-first global search is implemented
 with persistent recents, favorite contacts, parent navigation for activity hits, and
 accessible macOS dialog behavior. Slice-3 UX cleanup is complete; saved views
 with versioned filter/sort definitions are implemented for Contacts, Companies,
-and Pipeline. Tags/custom fields, data portability, and attachments remain
-planned in issues #18–#21.
+and Pipeline. Flat tags and typed text, number, date, and single-select custom
+fields are implemented across those same record surfaces, including saved-view
+schema v2 metadata filters. CSV, portable archives, and attachments remain
+planned in issues #19–#21.
 
 ## Planning baseline
 

@@ -9,9 +9,14 @@ import type {
   ContactPatch,
   ContactRole,
   PartyKind,
+  SavedViewCustomFieldPredicate,
   SavedViewDefinition,
+  Tag,
+  CustomFieldDefinition,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { RecordMetadata } from "../components/RecordMetadata";
+import { SavedViewFilters } from "../components/SavedViewFilters";
 import { SavedViews } from "../components/SavedViews";
 import { formatLocalDateTime } from "./date-format";
 import { ActivityTimeline } from "./timeline";
@@ -51,6 +56,12 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const [sort, setSort] = useState<SortState>({ key: "displayName", direction: "ascending" });
   const [savedViewApplied, setSavedViewApplied] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [fieldDefinitions, setFieldDefinitions] = useState<CustomFieldDefinition[]>([]);
+  const [tagIdsAll, setTagIdsAll] = useState<string[]>([]);
+  const [customFields, setCustomFields] = useState<SavedViewCustomFieldPredicate[]>([]);
+  const [matchingIds, setMatchingIds] = useState<string[] | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -69,24 +80,39 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     };
   }, [client, showArchived]);
 
+  useEffect(() => {
+    void Promise.all([client.listTags(true), client.listCustomFieldDefs("contact", true)])
+      .then(([nextTags, nextDefinitions]) => { setTags(nextTags); setFieldDefinitions(nextDefinitions); })
+      .catch(() => setFilterError("Tags and custom-field filters could not be loaded."));
+  }, [client]);
+
   const companyName = (companyId: string | null) =>
     companies.find((company) => company.id === companyId)?.name ?? "—";
 
   const definition: SavedViewDefinition = {
-    schemaVersion: 1,
-    filter: { includeArchived: showArchived },
+    schemaVersion: 2,
+    filter: { includeArchived: showArchived, tagIdsAll, customFields },
     sort: { field: "displayName", direction: sort.direction },
   };
   const applyDefinition = (next: SavedViewDefinition) => {
     setShowArchived(next.filter.includeArchived);
+    setTagIdsAll(next.filter.tagIdsAll ?? []);
+    setCustomFields(next.filter.customFields ?? []);
     setSort({ key: "displayName", direction: next.sort.direction });
   };
   const rows = contacts
-    ? [...contacts].sort((a, b) => {
+    ? contacts.filter((contact) => matchingIds === null || matchingIds.includes(contact.id)).sort((a, b) => {
         const compared = a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id);
         return compared * (sort.direction === "ascending" ? 1 : -1);
       })
     : null;
+
+  useEffect(() => {
+    if (tagIdsAll.length === 0 && customFields.length === 0) { setMatchingIds(null); setFilterError(null); return; }
+    void client.matchSavedView("contact", definition)
+      .then((ids) => { setMatchingIds(ids); setFilterError(null); })
+      .catch(() => { setMatchingIds([]); setFilterError("This filter references missing or invalid metadata and could not be applied."); });
+  }, [client, definition.filter.includeArchived, tagIdsAll, customFields]);
 
   const columns: ColumnDef<ContactListItem>[] = [
     {
@@ -135,6 +161,14 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
             onApply={applyDefinition}
             onSelectionChange={setSavedViewApplied}
           />
+          <SavedViewFilters
+            entityType="contact"
+            tags={tags}
+            definitions={fieldDefinitions}
+            definition={definition}
+            onChange={applyDefinition}
+          />
+          {filterError ? <span role="alert" className="saved-views__error">{filterError}</span> : null}
           <label className="toggle">
             <input
               type="checkbox"
@@ -283,6 +317,8 @@ export function ContactDetailView({ client, contactId, onBack, onEdit }: Contact
           </div>
         ))}
       </dl>
+
+      <RecordMetadata client={client} entityType="contact" recordId={contact.id} expectedVersion={contact.version} onSaved={load} />
 
       <h3 className="detail-subhead">Phone &amp; email</h3>
       {contact.channels.length === 0 ? (
@@ -597,6 +633,7 @@ export function ContactFormView({ client, contactId, onSaved, onCancel }: Contac
             <span>Favorite</span>
           </label>
         </div>
+        {contactId ? <RecordMetadata client={client} entityType="contact" recordId={contactId} expectedVersion={expectedVersion} onSaved={load} /> : null}
 
         <h3 className="detail-subhead">Phone &amp; email</h3>
         {draft.channels.map((channel, index) => (

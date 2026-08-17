@@ -209,6 +209,26 @@ describe("pipeline table", () => {
     );
     expect(screen.getByRole("button", { name: "Update" })).toBeVisible();
   });
+
+  it("keeps core-matched typed filters out of Board controls", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listCustomFieldDefs: vi.fn().mockResolvedValue([{ id: "field-number", entityType: "opportunity", label: "Crew size", fieldType: "number", sortKey: 0, archivedAt: null, createdAt: "", updatedAt: "", version: 1, options: [] }]),
+      listOpportunities: vi.fn().mockResolvedValue([
+        makeOpportunity({ id: "kept", name: "Matched job" }),
+        makeOpportunity({ id: "board-only", name: "Board summary job" }),
+      ]),
+      matchSavedView: vi.fn().mockResolvedValue(["kept"]),
+    });
+    render(<App client={client} />);
+    await openPipeline(user);
+    await user.type(await screen.findByLabelText("Crew size filter"), "4");
+    expect(client.matchSavedView).toHaveBeenCalledWith("opportunity", expect.objectContaining({ filter: expect.objectContaining({ customFields: [expect.objectContaining({ fieldType: "number", value: 4 })] }) }));
+    expect(screen.queryByText("Board summary job")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Board" }));
+    expect(screen.getByLabelText("Crew size filter")).not.toBeVisible();
+    expect(screen.getByText("Board summary job")).toBeVisible();
+  });
 });
 
 describe("opportunity form", () => {
@@ -317,6 +337,8 @@ describe("opportunity detail and stage moves", () => {
 
     render(<App client={client} />);
     await openDetail(user);
+    expect(await screen.findByRole("heading", { name: "Tags and custom fields" })).toBeVisible();
+    expect(client.getRecordMetadata).toHaveBeenCalledWith("opportunity", "opp-1");
 
     await user.selectOptions(screen.getByLabelText("Move to stage"), "stage-estimating");
     await user.click(screen.getByRole("button", { name: "Move" }));

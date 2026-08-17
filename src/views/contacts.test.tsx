@@ -95,6 +95,8 @@ describe("contact list and detail", () => {
     await user.keyboard("{Enter}");
     expect(client.getContact).toHaveBeenCalledWith("c2");
     expect(await screen.findByRole("heading", { name: /Marco Bell/ })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Tags and custom fields" })).toBeVisible();
+    expect(client.getRecordMetadata).toHaveBeenCalledWith("contact", "c2");
   });
 
   it("hides archived contacts by default and shows them with the toggle", async () => {
@@ -161,6 +163,20 @@ describe("contact list and detail", () => {
     const rows = within(table).getAllByRole("row");
     expect(within(rows[1]!).getByText("Zulu")).toBeVisible();
     expect(within(rows[2]!).getByText("Alpha")).toBeVisible();
+  });
+
+  it("uses the core matcher for an active tag filter", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      listTags: vi.fn().mockResolvedValue([{ id: "tag-client", label: "Client", colorRole: null, archivedAt: null, createdAt: "", updatedAt: "", version: 1 }]),
+      listContacts: vi.fn().mockResolvedValue([makeContact({ id: "kept" }), makeContact({ id: "hidden", displayName: "Hidden" })]),
+      matchSavedView: vi.fn().mockResolvedValue(["kept"]),
+    });
+    render(<App client={client} />);
+    await user.selectOptions(await screen.findByLabelText("Tags (all must match)"), "tag-client");
+    expect(await screen.findByText("Dana Ruiz")).toBeVisible();
+    expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
+    expect(client.matchSavedView).toHaveBeenCalledWith("contact", expect.objectContaining({ schemaVersion: 2, filter: expect.objectContaining({ tagIdsAll: ["tag-client"] }) }));
   });
 
   it("submits the create payload through the client", async () => {
