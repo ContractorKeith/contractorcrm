@@ -55,3 +55,7 @@ Portable archives and attachments remain planned in issues #20–#21.
 
 - Marketing automation, email campaigns, lead scoring, full email client, heavy reporting
   dashboards, forced cloud sync, mobile apps, enterprise permissions, multi-tenant.
+
+<!-- kodade:kodmem-project:v1:start -->
+Follow the managed KödMem project-context rule in `AGENTS.md`.
+<!-- kodade:kodmem-project:v1:end -->
