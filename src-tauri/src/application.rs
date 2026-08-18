@@ -6253,12 +6253,20 @@ fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
         message: format!("cannot open \"{path}\": {error}"),
     })?;
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(file);
-    let headers = reader
+    let mut headers = reader
         .headers()
         .map_err(|error| csv_parse_error(&path, error))?
         .iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    // A hand-edited "Name,Email," keeps a trailing empty column; drop those
+    // (and the cells under them) rather than refusing the file.
+    while headers
+        .last()
+        .is_some_and(|header| header.trim().is_empty())
+    {
+        headers.pop();
+    }
     validate_csv_headers(&headers)?;
     let mut records = Vec::new();
     for record in reader.records() {
@@ -6273,8 +6281,9 @@ fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
     Ok((headers, records))
 }
 
-/// Headers must be present and unique: mapping by name silently loses data
-/// otherwise, because only the first column of a repeated name is ever read.
+/// Headers must be present and unique once trailing empty columns are dropped:
+/// mapping by name silently loses data otherwise, because only the first
+/// column of a repeated name is ever read.
 fn validate_csv_headers(headers: &[String]) -> Result<(), ApplicationError> {
     if headers.is_empty() {
         return Err(ApplicationError::InvalidInput {
@@ -6354,15 +6363,33 @@ fn mapping_indexes(
     Ok(indexes)
 }
 
-/// Trimmed cell for a mapped target, or None when unmapped or blank.
+/// Trimmed cell for a mapped target, or None when unmapped or blank. The
+/// export formula guard is undone here so our own files round-trip byte for
+/// byte instead of storing "\'+1 555 0100".
 fn mapped_cell(
     record: &csv::StringRecord,
     indexes: &MappingIndexes,
     target: &str,
 ) -> Option<String> {
     let index = *indexes.get(target)?;
-    let value = record.get(index)?.trim();
+    let value = unescape_formula_guard(record.get(index)?).trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Strip exactly one leading quote that only exists to defuse a formula.
+fn unescape_formula_guard(value: &str) -> &str {
+    let mut characters = value.chars();
+    if characters.next() != Some('\'') {
+        return value;
+    }
+    match characters.next() {
+        Some(next) if is_formula_trigger(next) => &value[1..],
+        _ => value,
+    }
+}
+
+fn is_formula_trigger(character: char) -> bool {
+    FORMULA_PREFIXES.contains(&character) || character == '\r'
 }
 
 /// Validate one CSV row into contact fields, reusing the shared contact
@@ -6625,11 +6652,14 @@ fn merge_import_patch(
         .last_name
         .clone()
         .or_else(|| existing.last_name.clone());
-    // A name column in the file re-derives the display name from the merged
-    // parts; a file without any name column leaves the stored one alone.
+    // A name column re-derives the display name only when the stored one was
+    // itself derived from the stored name parts; a curated display name is
+    // never overwritten by a first/last-name column.
+    let stored_was_derived = derive_display_name(None, &existing.first_name, &existing.last_name)
+        .is_ok_and(|derived| derived == existing.display_name);
     let display_name = match &patch.display_name {
         Some(value) => value.clone(),
-        None if patch.first_name.is_some() || patch.last_name.is_some() => {
+        None if stored_was_derived && (patch.first_name.is_some() || patch.last_name.is_some()) => {
             derive_display_name(None, &first_name, &last_name)
                 .unwrap_or_else(|_| existing.display_name.clone())
         }
@@ -6893,9 +6923,7 @@ fn log_export(
 /// prefixed with a single quote so Excel and Sheets treat it as text.
 fn sanitize_export_cell(value: &str) -> String {
     match value.chars().next() {
-        Some(first) if FORMULA_PREFIXES.contains(&first) || first == '\r' => {
-            format!("'{value}")
-        }
+        Some(first) if is_formula_trigger(first) => format!("'{value}"),
         _ => value.to_owned(),
     }
 }

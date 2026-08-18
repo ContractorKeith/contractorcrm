@@ -697,7 +697,7 @@ fn import_skips_rows_matching_archived_contacts() {
 }
 
 #[test]
-fn duplicate_and_empty_headers_are_rejected() {
+fn duplicate_and_interior_empty_headers_are_rejected() {
     let (temp, mut storage) = fixture();
     let duplicate = write_csv(
         &temp,
@@ -726,6 +726,135 @@ fn duplicate_and_empty_headers_are_rejected() {
     assert_eq!(error.kind(), "invalid_input");
     assert!(error.to_string().contains("empty header"));
     assert!(list_contacts(&storage, true).unwrap().is_empty());
+}
+
+#[test]
+fn trailing_empty_header_columns_are_tolerated() {
+    let (temp, mut storage) = fixture();
+    // "Name,Email," is what a hand-edited spreadsheet export looks like.
+    let path = write_csv(
+        &temp,
+        "trailing.csv",
+        "Name,Email,\nDana Reyes,dana@ridgeline.test,\n",
+    );
+    let preview = preview_contact_import(path.to_str().unwrap(), None).unwrap();
+    assert_eq!(preview.headers, ["Name", "Email"]);
+    assert_eq!(preview.row_count, 1);
+    assert!(preview.issues.is_empty());
+
+    let summary = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: path.to_str().unwrap().into(),
+            mapping: preview.mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.created, 1);
+    let dana = contact_by_display_name(&storage, "Dana Reyes");
+    assert_eq!(dana.channels.len(), 1);
+    assert_eq!(dana.channels[0].value, "dana@ridgeline.test");
+}
+
+#[test]
+fn formula_guarded_exports_round_trip_byte_for_byte() {
+    let (temp, mut storage) = fixture();
+    let contact = create_contact(
+        &mut storage,
+        serde_json::from_value::<CreateContactRequest>(serde_json::json!({
+            "displayName": "Dana Reyes",
+            "kind": "client",
+            "notes": "-leading dash note",
+            "channels": [{"kind": "phone", "value": "+1 555 0100", "preferred": true}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let export_path = temp.path().join("contacts.csv");
+    export_contacts_csv(&mut storage, export_path.to_str().unwrap(), false).unwrap();
+    let exported = text(&export_path);
+    assert!(exported.contains("'+1 555 0100")); // guarded on the way out
+    assert!(exported.contains("'-leading dash note"));
+
+    let mapping = preview_contact_import(export_path.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    let summary = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: export_path.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.created, 0);
+    assert_eq!(summary.updated, 1);
+
+    // The guard quote is stripped on the way back in, so values are unchanged
+    // and the existing phone is recognized instead of duplicated.
+    let reloaded = get_contact(&storage, &contact.id).unwrap();
+    assert_eq!(reloaded.notes.as_deref(), Some("-leading dash note"));
+    assert_eq!(reloaded.channels.len(), 1);
+    assert_eq!(reloaded.channels[0].value, "+1 555 0100");
+}
+
+#[test]
+fn curated_display_names_survive_a_name_column_import() {
+    let (temp, mut storage) = fixture();
+    let curated = create_contact(
+        &mut storage,
+        serde_json::from_value::<CreateContactRequest>(serde_json::json!({
+            "firstName": "Daniela",
+            "lastName": "Reyes",
+            "displayName": "Dana (site contact)",
+            "kind": "client"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let derived = create_contact(
+        &mut storage,
+        serde_json::from_value::<CreateContactRequest>(serde_json::json!({
+            "firstName": "Sam",
+            "lastName": "Ortiz",
+            "kind": "client"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let path = write_csv(
+        &temp,
+        "names.csv",
+        &format!(
+            "External ID,First Name,Last Name\n{},Daniela,Reyes-Kim\n{},Sam,Ortiz-Kim\n",
+            curated.id, derived.id
+        ),
+    );
+    let mapping = preview_contact_import(path.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    let summary = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: path.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.updated, 2);
+
+    // The curated display name is untouched; the auto-derived one follows the
+    // new name parts.
+    let curated = get_contact(&storage, &curated.id).unwrap();
+    assert_eq!(curated.display_name, "Dana (site contact)");
+    assert_eq!(curated.last_name.as_deref(), Some("Reyes-Kim"));
+    let derived = get_contact(&storage, &derived.id).unwrap();
+    assert_eq!(derived.display_name, "Sam Ortiz-Kim");
 }
 
 #[test]
