@@ -6069,10 +6069,12 @@ pub fn export_contacts_csv(
     path: &str,
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
-    let path = check_export_destination(path, overwrite)?;
-    let mut writer = open_csv_writer(&path)?;
+    let path = check_export_destination(storage, path, overwrite)?;
+    // Render before opening the destination: a failed query must never leave a
+    // truncated file over a previous export.
+    let mut writer = csv::Writer::from_writer(Vec::new());
     let row_count = write_contacts_csv(storage.connection(), &mut writer)?;
-    writer.flush()?;
+    write_export_file(&path, &csv_bytes(writer)?)?;
     log_export(storage, "contacts", row_count, &path)?;
     Ok(CsvExportReport { path, row_count })
 }
@@ -6181,10 +6183,10 @@ pub fn export_opportunities_csv(
     path: &str,
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
-    let path = check_export_destination(path, overwrite)?;
-    let mut writer = open_csv_writer(&path)?;
+    let path = check_export_destination(storage, path, overwrite)?;
+    let mut writer = csv::Writer::from_writer(Vec::new());
     let row_count = write_opportunities_csv(storage.connection(), &mut writer)?;
-    writer.flush()?;
+    write_export_file(&path, &csv_bytes(writer)?)?;
     log_export(storage, "opportunities", row_count, &path)?;
     Ok(CsvExportReport { path, row_count })
 }
@@ -6944,13 +6946,24 @@ fn format_export_number(value: f64) -> String {
 }
 
 /// Validate an export destination the way `export_handoff_envelope` does:
-/// existing files are only replaced when the caller asks for it.
+/// existing files are only replaced when the caller asks for it, and the live
+/// database and its sidecars are never a destination — exporting onto
+/// contractorcrm.sqlite3 destroys the database it is exporting.
 pub(crate) fn check_export_destination(
+    storage: &Storage,
     path: &str,
     overwrite: bool,
 ) -> Result<String, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
-    if std::path::Path::new(&path).exists() && !overwrite {
+    let destination = std::path::Path::new(&path);
+    if is_database_file(storage.database_path(), destination) {
+        return Err(ApplicationError::ValidationFailed {
+            code: "destination_is_database",
+            field: "path".into(),
+            message: format!("{path} belongs to the live database; pick another destination"),
+        });
+    }
+    if destination.exists() && !overwrite {
         return Err(ApplicationError::ValidationFailed {
             code: "destination_exists",
             field: "path".into(),
@@ -6958,6 +6971,38 @@ pub(crate) fn check_export_destination(
         });
     }
     Ok(path)
+}
+
+/// True when `destination` is the database file, one of its WAL/SHM sidecars,
+/// or one of the `<database>.*.bak` safety copies. Directories are compared
+/// canonically so "./data/../data/crm.sqlite3" cannot slip through; a
+/// destination whose directory does not exist yet can never be the database.
+fn is_database_file(database_path: &std::path::Path, destination: &std::path::Path) -> bool {
+    let resolve = |path: &std::path::Path| {
+        let parent = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from("."),
+        };
+        std::fs::canonicalize(parent).ok()
+    };
+    let (Some(database_directory), Some(destination_directory)) =
+        (resolve(database_path), resolve(destination))
+    else {
+        return false;
+    };
+    if database_directory != destination_directory {
+        return false;
+    }
+    let (Some(database_name), Some(destination_name)) = (
+        database_path.file_name().and_then(|name| name.to_str()),
+        destination.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return false;
+    };
+    destination_name == database_name
+        || destination_name == format!("{database_name}-wal")
+        || destination_name == format!("{database_name}-shm")
+        || destination_name.starts_with(&format!("{database_name}."))
 }
 
 /// Record the export in the command log, mirroring backup/hand-off exports.
@@ -6997,14 +7042,21 @@ fn write_export_record<W: std::io::Write>(
         .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
 }
 
-/// Open a CSV writer at `path`, creating missing parent directories.
-fn open_csv_writer(path: &str) -> Result<csv::Writer<std::fs::File>, ApplicationError> {
+/// Finished CSV bytes; `into_inner` flushes the buffered writer.
+pub(crate) fn csv_bytes(writer: csv::Writer<Vec<u8>>) -> Result<Vec<u8>, ApplicationError> {
+    writer
+        .into_inner()
+        .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
+}
+
+/// Write a rendered export to `path`, creating missing parent directories.
+pub(crate) fn write_export_file(path: &str, bytes: &[u8]) -> Result<(), ApplicationError> {
     let destination = std::path::Path::new(path);
     if let Some(parent) = destination.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let file = std::fs::File::create(destination)?;
-    Ok(csv::Writer::from_writer(file))
+    std::fs::write(destination, bytes)?;
+    Ok(())
 }

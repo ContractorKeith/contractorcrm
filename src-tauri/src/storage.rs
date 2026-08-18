@@ -517,6 +517,20 @@ impl Storage {
         Ok(storage)
     }
 
+    /// Fully migrated throwaway database that never touches the filesystem —
+    /// the archive import dry run applies an untrusted archive here first, so
+    /// constraint failures surface before the live database is touched.
+    pub fn open_in_memory() -> Result<Self, StorageError> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let mut storage = Self {
+            database_path: PathBuf::from(":memory:"),
+            connection,
+        };
+        storage.migrate(false)?;
+        Ok(storage)
+    }
+
     /// Open the database in the given application data directory (Tauri app
     /// data dir in production) under the default file name.
     pub fn open_in_app_data(app_data_dir: impl AsRef<Path>) -> Result<Self, StorageError> {

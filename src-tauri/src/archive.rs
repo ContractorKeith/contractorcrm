@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::application::{
-    check_export_destination, immediate, log_command, rebuild_search_index, write_contacts_csv,
-    write_opportunities_csv, ProductInfo,
+    check_export_destination, csv_bytes, immediate, log_command, rebuild_search_index,
+    write_contacts_csv, write_export_file, write_opportunities_csv, ProductInfo,
 };
 use crate::domain::Actor;
 use crate::error::ApplicationError;
@@ -251,7 +251,7 @@ pub fn export_archive(
     path: &str,
     overwrite: bool,
 ) -> Result<ArchiveExportReport, ApplicationError> {
-    let path = check_export_destination(path, overwrite)?;
+    let path = check_export_destination(storage, path, overwrite)?;
     let connection = storage.connection();
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -311,12 +311,7 @@ pub fn export_archive(
         .map_err(zip_write_error)?;
     let archive_bytes = writer.finish().map_err(zip_write_error)?.into_inner();
 
-    if let Some(parent) = std::path::Path::new(&path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    std::fs::write(&path, archive_bytes)?;
+    write_export_file(&path, &archive_bytes)?;
 
     let file_count = files.len() + 1;
     let total: i64 = record_counts.values().sum();
@@ -377,12 +372,6 @@ fn value_to_json(value: ValueRef<'_>) -> rusqlite::Result<serde_json::Value> {
     })
 }
 
-fn csv_bytes(writer: csv::Writer<Vec<u8>>) -> Result<Vec<u8>, ApplicationError> {
-    writer
-        .into_inner()
-        .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -396,23 +385,76 @@ fn zip_write_error(error: zip::result::ZipError) -> ApplicationError {
 // Verification
 // ---------------------------------------------------------------------------
 
+/// Caps on what an untrusted archive may expand to. Deflate hides its ratio
+/// until decompression, so entries are read through a limit instead of trusted:
+/// a real contractor database is a few megabytes, and these leave headroom.
+const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Most issues a preview reports; the payload crosses an IPC boundary, so a
+/// pathological archive cannot turn into a pathological response.
+const MAX_ISSUES: usize = 100;
+
 /// One validated row: values in canonical column order.
 struct ArchiveRow {
     values: Vec<Value>,
 }
 
-/// A fully verified archive: the manifest, the rows it carries, and every
-/// problem found. Rows are only trustworthy when `issues` is empty.
+/// A fully verified archive: the manifest, the rows it carries, the counts
+/// actually parsed, and every problem found. Rows are only trustworthy — and
+/// import only allowed — when `issues` is empty.
 struct VerifiedArchive {
     manifest: ArchiveManifest,
     tables: BTreeMap<&'static str, Vec<ArchiveRow>>,
+    record_counts: BTreeMap<String, i64>,
     issues: Vec<ArchiveIssue>,
 }
 
-fn issue(code: &str, message: String) -> ArchiveIssue {
-    ArchiveIssue {
-        code: code.to_owned(),
-        message,
+/// Bounded issue collector: keeps the first `MAX_ISSUES` problems, counts the
+/// rest, and tells verification when to stop looking.
+struct IssueLog {
+    issues: Vec<ArchiveIssue>,
+    total: usize,
+}
+
+impl IssueLog {
+    fn new() -> Self {
+        Self {
+            issues: Vec::new(),
+            total: 0,
+        }
+    }
+
+    fn push(&mut self, code: &str, message: String) {
+        self.total += 1;
+        if self.issues.len() < MAX_ISSUES {
+            self.issues.push(ArchiveIssue {
+                code: code.to_owned(),
+                message,
+            });
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
+    /// True once the cap is reached; verification stops at the next boundary.
+    fn is_full(&self) -> bool {
+        self.issues.len() >= MAX_ISSUES
+    }
+
+    fn finish(mut self) -> Vec<ArchiveIssue> {
+        if self.total > self.issues.len() {
+            let hidden = self.total - self.issues.len();
+            self.issues.push(ArchiveIssue {
+                code: "too_many_issues".to_owned(),
+                message: format!(
+                    "stopped after {MAX_ISSUES} problems; {hidden} more were not reported"
+                ),
+            });
+        }
+        self.issues
     }
 }
 
@@ -425,46 +467,30 @@ fn unreadable(path: &str, message: String) -> ApplicationError {
     }
 }
 
-/// Verify an archive end to end without writing anything.
+/// Verify an archive end to end without writing anything: entry paths, size
+/// caps, checksums, versions, row shapes, record counts, references, structural
+/// minimums, and finally a full dry-run apply into a throwaway database.
 fn verify_archive(
     connection: &Connection,
     path: &str,
 ) -> Result<VerifiedArchive, ApplicationError> {
-    let bytes = std::fs::read(path).map_err(|error| unreadable(path, error.to_string()))?;
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
-        .map_err(|error| unreadable(path, error.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|error| unreadable(path, error.to_string()))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|error| unreadable(path, error.to_string()))?;
 
-    let mut issues = Vec::new();
-    let mut entries: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    for index in 0..zip.len() {
-        let mut entry = zip
-            .by_index(index)
-            .map_err(|error| unreadable(path, error.to_string()))?;
-        let name = entry.name().to_owned();
-        if let Some(problem) = entry_path_issue(&name) {
-            issues.push(problem);
-            continue;
-        }
-        if entry.is_dir() {
-            continue;
-        }
-        let mut content = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut content)
-            .map_err(|error| unreadable(path, error.to_string()))?;
-        entries.insert(name, content);
-    }
-    // Duplicate names collapse when the central directory is indexed, so the
-    // declared entry count is what catches a smuggled second copy.
-    if let Some(declared) = declared_entry_count(&bytes) {
+    let mut issues = IssueLog::new();
+    let entries = read_entries(&mut zip, path, &mut issues)?;
+    if let Some(declared) = declared_entry_count(path)? {
+        // Duplicate names collapse when the central directory is indexed, so
+        // the declared count is what catches a smuggled second copy.
         if declared as usize != zip.len() {
-            issues.push(issue(
+            issues.push(
                 "duplicate_entry",
                 format!(
                     "archive declares {declared} entries but only {} are unique",
                     zip.len()
                 ),
-            ));
+            );
         }
     }
 
@@ -474,40 +500,140 @@ fn verify_archive(
     let manifest: ArchiveManifest = serde_json::from_slice(manifest_bytes)
         .map_err(|error| unreadable(path, format!("manifest.json is invalid: {error}")))?;
 
-    verify_manifest_versions(&manifest, &mut issues);
-    verify_checksums(&manifest, &entries, &mut issues);
+    let mut verified = VerifiedArchive {
+        manifest,
+        tables: BTreeMap::new(),
+        record_counts: BTreeMap::new(),
+        issues: Vec::new(),
+    };
 
-    let mut tables = BTreeMap::new();
-    for table in ARCHIVE_TABLES {
-        let columns = table_columns(connection, table)?;
-        let file = format!("data/{table}.json");
-        let Some(content) = entries.get(&file) else {
-            issues.push(issue(
-                "missing_table_file",
-                format!("archive has no {file}"),
-            ));
-            continue;
-        };
-        match parse_table(table, &columns, content, &mut issues) {
-            Some(rows) => {
-                tables.insert(*table, rows);
+    // A foreign product's archive is one clear problem, not sixteen missing
+    // table files, so it short-circuits the rest of verification.
+    if !verified
+        .manifest
+        .product
+        .name
+        .eq_ignore_ascii_case(env!("CARGO_PKG_NAME"))
+    {
+        issues.push(
+            "wrong_product",
+            format!(
+                "archive was written by \"{}\", not ContractorCRM",
+                verified.manifest.product.name
+            ),
+        );
+        verified.issues = issues.finish();
+        return Ok(verified);
+    }
+
+    verify_manifest_versions(&verified.manifest, &mut issues);
+    verify_checksums(&verified.manifest, &entries, &mut issues);
+
+    if !issues.is_full() {
+        for table in ARCHIVE_TABLES {
+            let columns = table_columns(connection, table)?;
+            let file = format!("data/{table}.json");
+            let Some(content) = entries.get(&file) else {
+                issues.push("missing_table_file", format!("archive has no {file}"));
+                continue;
+            };
+            if let Some(rows) = parse_table(table, &columns, content, &mut issues) {
+                verified
+                    .record_counts
+                    .insert((*table).to_owned(), rows.len() as i64);
+                verified.tables.insert(*table, rows);
             }
-            None => continue,
+            if issues.is_full() {
+                break;
+            }
         }
+        verify_record_counts(&verified.manifest, &verified.record_counts, &mut issues);
+    }
+
+    // References, structure, and the dry run only mean anything once the rows
+    // themselves parsed cleanly.
+    if issues.is_empty() {
+        verify_references(connection, &verified.tables, &mut issues)?;
     }
     if issues.is_empty() {
-        verify_references(connection, &tables, &mut issues)?;
+        verify_structure(connection, &verified.tables, &mut issues)?;
+    }
+    if issues.is_empty() {
+        dry_run_apply(connection, &verified.tables, &mut issues)?;
     }
 
-    Ok(VerifiedArchive {
-        manifest,
-        tables,
-        issues,
-    })
+    verified.issues = issues.finish();
+    Ok(verified)
 }
 
-/// Reject anything that could escape the archive root; `assets/` and `csv/`
-/// are carried but ignored, everything else must be a known data file.
+/// Read every acceptable entry into memory under the size caps. Files under
+/// `assets/` are refused outright in v1 — attachments arrive with issue #21 and
+/// an unread, unchecksummed area has no business in an archive before then.
+fn read_entries<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    path: &str,
+    issues: &mut IssueLog,
+) -> Result<BTreeMap<String, Vec<u8>>, ApplicationError> {
+    let mut entries: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut total_bytes: u64 = 0;
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|error| unreadable(path, error.to_string()))?;
+        let name = entry.name().to_owned();
+        if let Some(problem) = entry_path_issue(&name) {
+            issues.push(&problem.code, problem.message);
+            continue;
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        if name.starts_with("assets/") {
+            issues.push(
+                "unexpected_asset",
+                format!("entry \"{name}\" is an attachment; archives do not carry them yet"),
+            );
+            continue;
+        }
+        // Read through a limit rather than trusting the declared size: a
+        // compression bomb only lies once it is decompressed. Aborted reads
+        // still spend their budget, so total work stays under the archive cap
+        // no matter how many oversized entries an attacker packs.
+        let remaining = MAX_ARCHIVE_BYTES.saturating_sub(total_bytes);
+        if remaining == 0 {
+            issues.push(
+                "archive_too_large",
+                format!("archive expands past the {MAX_ARCHIVE_BYTES} byte limit"),
+            );
+            break;
+        }
+        let cap = MAX_ENTRY_BYTES.min(remaining);
+        let mut content = Vec::new();
+        let read = entry
+            .by_ref()
+            .take(cap + 1)
+            .read_to_end(&mut content)
+            .map_err(|error| unreadable(path, error.to_string()))? as u64;
+        total_bytes += read;
+        if read > cap {
+            // Drop the partial read; the entry is refused, not truncated.
+            drop(content);
+            issues.push(
+                "entry_too_large",
+                format!("entry \"{name}\" is larger than the {MAX_ENTRY_BYTES} byte limit"),
+            );
+            continue;
+        }
+        entries.insert(name, content);
+        if issues.is_full() {
+            break;
+        }
+    }
+    Ok(entries)
+}
+
+/// Reject anything that could escape the archive root; `csv/` and `assets/`
+/// are carried but never applied, everything else must be a known data file.
 fn entry_path_issue(name: &str) -> Option<ArchiveIssue> {
     if name.contains('\\') {
         return Some(issue(
@@ -550,64 +676,90 @@ fn entry_path_issue(name: &str) -> Option<ArchiveIssue> {
     None
 }
 
-/// Number of central directory records the archive claims, read from the end
-/// of central directory record. `None` when it cannot be read (ZIP64).
-fn declared_entry_count(bytes: &[u8]) -> Option<u16> {
-    let signature = [0x50, 0x4b, 0x05, 0x06];
-    let start = bytes.len().saturating_sub(u16::MAX as usize + 22);
-    let offset = bytes[start..]
-        .windows(4)
-        .rposition(|window| window == signature)?
-        + start;
-    let count = u16::from_le_bytes([*bytes.get(offset + 10)?, *bytes.get(offset + 11)?]);
-    (count != u16::MAX).then_some(count)
+fn issue(code: &str, message: String) -> ArchiveIssue {
+    ArchiveIssue {
+        code: code.to_owned(),
+        message,
+    }
 }
 
-fn verify_manifest_versions(manifest: &ArchiveManifest, issues: &mut Vec<ArchiveIssue>) {
+/// Number of central directory records the archive claims, read from the tail
+/// of the file. `None` when it cannot be read (ZIP64).
+fn declared_entry_count(path: &str) -> Result<Option<u16>, ApplicationError> {
+    use std::io::Seek;
+
+    let mut file =
+        std::fs::File::open(path).map_err(|error| unreadable(path, error.to_string()))?;
+    let length = file
+        .metadata()
+        .map_err(|error| unreadable(path, error.to_string()))?
+        .len();
+    // The end of central directory record is at most 22 bytes plus a 64 KiB
+    // comment, so only the tail has to be read.
+    let tail_length = length.min(u16::MAX as u64 + 22);
+    file.seek(std::io::SeekFrom::Start(length - tail_length))
+        .map_err(|error| unreadable(path, error.to_string()))?;
+    let mut tail = Vec::with_capacity(tail_length as usize);
+    file.take(tail_length)
+        .read_to_end(&mut tail)
+        .map_err(|error| unreadable(path, error.to_string()))?;
+
+    let signature = [0x50, 0x4b, 0x05, 0x06];
+    let Some(offset) = tail.windows(4).rposition(|window| window == signature) else {
+        return Ok(None);
+    };
+    let (Some(low), Some(high)) = (tail.get(offset + 10), tail.get(offset + 11)) else {
+        return Ok(None);
+    };
+    let count = u16::from_le_bytes([*low, *high]);
+    Ok((count != u16::MAX).then_some(count))
+}
+
+fn verify_manifest_versions(manifest: &ArchiveManifest, issues: &mut IssueLog) {
     if manifest.schema_version != ARCHIVE_SCHEMA_VERSION {
-        issues.push(issue(
+        issues.push(
             "unsupported_schema_version",
             format!(
                 "archive schema version {} is not supported (expected {ARCHIVE_SCHEMA_VERSION})",
                 manifest.schema_version
             ),
-        ));
+        );
     }
     let supported = storage::latest_migration_version();
     if manifest.database_migration_version > supported {
-        issues.push(issue(
+        issues.push(
             "unsupported_migration_version",
             format!(
                 "archive was written at database version {} but this app supports {supported}; \
                  update the app first",
                 manifest.database_migration_version
             ),
-        ));
+        );
     }
 }
 
-/// Every listed file must be present and match its checksum, and every data
-/// file present must be listed.
+/// Every listed file must be present and match its checksum, and every file
+/// present must be listed — nothing enters the import unchecksummed.
 fn verify_checksums(
     manifest: &ArchiveManifest,
     entries: &BTreeMap<String, Vec<u8>>,
-    issues: &mut Vec<ArchiveIssue>,
+    issues: &mut IssueLog,
 ) {
     let mut listed = BTreeSet::new();
     for file in &manifest.files {
         listed.insert(file.path.clone());
         let Some(content) = entries.get(&file.path) else {
-            issues.push(issue(
+            issues.push(
                 "missing_file",
                 format!(
                     "manifest lists \"{}\" but the archive has no such file",
                     file.path
                 ),
-            ));
+            );
             continue;
         };
         if content.len() as u64 != file.bytes {
-            issues.push(issue(
+            issues.push(
                 "size_mismatch",
                 format!(
                     "\"{}\" is {} bytes but the manifest says {}",
@@ -615,23 +767,64 @@ fn verify_checksums(
                     content.len(),
                     file.bytes
                 ),
-            ));
+            );
         }
         if sha256_hex(content) != file.sha256 {
-            issues.push(issue(
+            issues.push(
                 "checksum_mismatch",
                 format!("\"{}\" does not match its manifest checksum", file.path),
-            ));
+            );
+        }
+        if issues.is_full() {
+            return;
         }
     }
     for name in entries.keys() {
-        if name == "manifest.json" || name.starts_with("assets/") || listed.contains(name) {
+        if name == "manifest.json" || listed.contains(name) {
             continue;
         }
-        issues.push(issue(
+        issues.push(
             "unlisted_file",
             format!("\"{name}\" is in the archive but not listed in the manifest"),
-        ));
+        );
+        if issues.is_full() {
+            return;
+        }
+    }
+}
+
+/// The manifest's claimed counts must match the rows actually parsed — an
+/// inflated count over an emptied data file would otherwise import as a wipe.
+fn verify_record_counts(
+    manifest: &ArchiveManifest,
+    parsed: &BTreeMap<String, i64>,
+    issues: &mut IssueLog,
+) {
+    for table in ARCHIVE_TABLES {
+        let Some(parsed_count) = parsed.get(*table) else {
+            continue; // the table file is already reported as missing or unusable
+        };
+        match manifest.record_counts.get(*table) {
+            Some(claimed) if claimed == parsed_count => {}
+            Some(claimed) => issues.push(
+                "record_count_mismatch",
+                format!(
+                    "manifest claims {claimed} {table} rows but the archive holds {parsed_count}"
+                ),
+            ),
+            None => issues.push(
+                "record_count_mismatch",
+                format!("manifest has no record count for {table}"),
+            ),
+        }
+    }
+    for table in manifest.record_counts.keys() {
+        if !ARCHIVE_TABLES.contains(&table.as_str()) {
+            issues.push(
+                "record_count_mismatch",
+                format!("manifest counts unknown table \"{table}\""),
+            );
+        }
     }
 }
 
@@ -641,42 +834,45 @@ fn parse_table(
     table: &str,
     columns: &[ColumnSpec],
     content: &[u8],
-    issues: &mut Vec<ArchiveIssue>,
+    issues: &mut IssueLog,
 ) -> Option<Vec<ArchiveRow>> {
     let parsed: serde_json::Value = match serde_json::from_slice(content) {
         Ok(value) => value,
         Err(error) => {
-            issues.push(issue(
+            issues.push(
                 "invalid_table_json",
                 format!("data/{table}.json is not valid JSON: {error}"),
-            ));
+            );
             return None;
         }
     };
     let Some(array) = parsed.as_array() else {
-        issues.push(issue(
+        issues.push(
             "invalid_table_json",
             format!("data/{table}.json is not a JSON array"),
-        ));
+        );
         return None;
     };
 
     let mut rows = Vec::with_capacity(array.len());
     let mut seen_keys = BTreeSet::new();
     for (index, item) in array.iter().enumerate() {
+        if issues.is_full() {
+            break;
+        }
         let Some(object) = item.as_object() else {
-            issues.push(issue(
+            issues.push(
                 "invalid_table_json",
                 format!("{table} row {index} is not a JSON object"),
-            ));
+            );
             continue;
         };
         for key in object.keys() {
             if !columns.iter().any(|column| &column.camel == key) {
-                issues.push(issue(
+                issues.push(
                     "unknown_column",
                     format!("{table} row {index} has unknown field \"{key}\""),
-                ));
+                );
             }
         }
         let mut values = Vec::with_capacity(columns.len());
@@ -685,7 +881,7 @@ fn parse_table(
             match archive_value(table, index, column, object.get(&column.camel)) {
                 Ok(value) => values.push(value),
                 Err(problem) => {
-                    issues.push(problem);
+                    issues.push(&problem.code, problem.message);
                     row_valid = false;
                 }
             }
@@ -698,10 +894,10 @@ fn parse_table(
             if column.name == "id" || column.name.ends_with("_id") {
                 if let Value::Text(text) = &values[position] {
                     if text.trim().is_empty() {
-                        issues.push(issue(
+                        issues.push(
                             "invalid_id",
                             format!("{table} row {index} has an empty {}", column.camel),
-                        ));
+                        );
                         row_valid = false;
                     }
                 }
@@ -709,10 +905,10 @@ fn parse_table(
             if column.name == "version" {
                 if let Value::Integer(number) = &values[position] {
                     if *number < 1 {
-                        issues.push(issue(
+                        issues.push(
                             "invalid_version",
                             format!("{table} row {index} has version {number}"),
-                        ));
+                        );
                         row_valid = false;
                     }
                 }
@@ -736,10 +932,10 @@ fn parse_table(
             .collect::<Vec<_>>()
             .join("\u{1f}");
         if !seen_keys.insert(key.clone()) {
-            issues.push(issue(
+            issues.push(
                 "duplicate_primary_key",
                 format!("{table} has more than one row with key \"{key}\""),
-            ));
+            );
             continue;
         }
         rows.push(ArchiveRow { values });
@@ -792,20 +988,47 @@ fn archive_value(
     }
 }
 
+/// Column specs for every canonical table, read once per verification.
+fn all_table_columns(
+    connection: &Connection,
+) -> Result<BTreeMap<&'static str, Vec<ColumnSpec>>, ApplicationError> {
+    let mut specs = BTreeMap::new();
+    for table in ARCHIVE_TABLES {
+        specs.insert(*table, table_columns(connection, table)?);
+    }
+    Ok(specs)
+}
+
+/// Text value of one column in a parsed row, if it is set.
+fn cell(
+    specs: &BTreeMap<&'static str, Vec<ColumnSpec>>,
+    table: &str,
+    row: &ArchiveRow,
+    column: &str,
+) -> Option<String> {
+    let position = specs
+        .get(table)?
+        .iter()
+        .position(|spec| spec.name == column)?;
+    match &row.values[position] {
+        Value::Text(text) => Some(text.clone()),
+        _ => None,
+    }
+}
+
 /// Validate every relationship among the archived tables in memory, so a
 /// dangling reference is reported instead of failing mid-write.
 fn verify_references(
     connection: &Connection,
     tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
-    issues: &mut Vec<ArchiveIssue>,
+    issues: &mut IssueLog,
 ) -> Result<(), ApplicationError> {
-    let mut columns = BTreeMap::new();
+    let specs = all_table_columns(connection)?;
     let mut ids: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     for table in ARCHIVE_TABLES {
-        let specs = table_columns(connection, table)?;
         if let (Some(rows), Some(position)) = (
             tables.get(table),
-            specs.iter().position(|column| column.name == "id"),
+            specs[table].iter().position(|column| column.name == "id"),
         ) {
             let mut set = BTreeSet::new();
             for row in rows {
@@ -815,37 +1038,27 @@ fn verify_references(
             }
             ids.insert(*table, set);
         }
-        columns.insert(*table, specs);
     }
-
-    let cell = |table: &str, row: &ArchiveRow, column: &str| -> Option<String> {
-        let position = columns
-            .get(table)?
-            .iter()
-            .position(|spec| spec.name == column)?;
-        match &row.values[position] {
-            Value::Text(text) => Some(text.clone()),
-            _ => None,
-        }
-    };
 
     for (table, column, target) in ARCHIVE_FOREIGN_KEYS {
         let Some(rows) = tables.get(table) else {
             continue;
         };
         for (index, row) in rows.iter().enumerate() {
-            let Some(value) = cell(table, row, column) else {
+            let Some(value) = cell(&specs, table, row, column) else {
                 continue; // NULL references are allowed where the column is nullable
             };
-            let known = ids.get(target).is_some_and(|set| set.contains(&value));
-            if !known {
-                issues.push(issue(
+            if !ids.get(target).is_some_and(|set| set.contains(&value)) {
+                issues.push(
                     "missing_reference",
                     format!(
                         "{table} row {index} references {target} \"{value}\", which the archive \
                          does not contain"
                     ),
-                ));
+                );
+                if issues.is_full() {
+                    return Ok(());
+                }
             }
         }
     }
@@ -855,37 +1068,166 @@ fn verify_references(
             continue;
         };
         for (index, row) in rows.iter().enumerate() {
-            let (Some(parent_type), Some(parent_id)) =
-                (cell(table, row, type_column), cell(table, row, id_column))
-            else {
+            let (Some(parent_type), Some(parent_id)) = (
+                cell(&specs, table, row, type_column),
+                cell(&specs, table, row, id_column),
+            ) else {
                 continue; // both null together, enforced by the table CHECK
             };
             let Some(target) = polymorphic_table(&parent_type) else {
-                issues.push(issue(
+                issues.push(
                     "unknown_parent_type",
                     format!("{table} row {index} has unknown {type_column} \"{parent_type}\""),
-                ));
+                );
                 continue;
             };
             if !ids.get(target).is_some_and(|set| set.contains(&parent_id)) {
-                issues.push(issue(
+                issues.push(
                     "missing_reference",
                     format!(
                         "{table} row {index} references {target} \"{parent_id}\", which the \
                          archive does not contain"
                     ),
-                ));
+                );
+            }
+            if issues.is_full() {
+                return Ok(());
             }
         }
     }
     Ok(())
 }
 
+/// The pipeline shape the app itself seeds and depends on: without a pipeline
+/// whose stages cover open, won, and lost, creating an opportunity is
+/// impossible and the imported database would be unusable.
+fn verify_structure(
+    connection: &Connection,
+    tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
+    issues: &mut IssueLog,
+) -> Result<(), ApplicationError> {
+    let specs = all_table_columns(connection)?;
+    let empty = Vec::new();
+    let pipelines = tables.get("pipelines").unwrap_or(&empty);
+    let stages = tables.get("stages").unwrap_or(&empty);
+    if pipelines.is_empty() {
+        issues.push(
+            "missing_pipeline",
+            "the archive has no pipelines; at least one is required".to_owned(),
+        );
+        return Ok(());
+    }
+
+    let mut complete_pipelines = 0;
+    for (index, pipeline) in pipelines.iter().enumerate() {
+        let Some(pipeline_id) = cell(&specs, "pipelines", pipeline, "id") else {
+            continue;
+        };
+        let kinds = stages
+            .iter()
+            .filter(|stage| {
+                cell(&specs, "stages", stage, "pipeline_id").as_deref() == Some(&pipeline_id)
+            })
+            .filter_map(|stage| cell(&specs, "stages", stage, "kind"))
+            .collect::<BTreeSet<_>>();
+        if kinds.is_empty() {
+            issues.push(
+                "missing_pipeline",
+                format!("pipeline {index} (\"{pipeline_id}\") has no stages"),
+            );
+            continue;
+        }
+        if ["open", "won", "lost"]
+            .iter()
+            .all(|kind| kinds.contains(*kind))
+        {
+            complete_pipelines += 1;
+        }
+    }
+    if complete_pipelines == 0 {
+        issues.push(
+            "missing_stage_kind",
+            "no pipeline has open, won, and lost stages".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Apply the whole replace into a throwaway in-memory database. UNIQUE and
+/// CHECK constraints, triggers, and the search rebuild are all exercised here,
+/// so "no issues" really does mean the real import will succeed.
+fn dry_run_apply(
+    connection: &Connection,
+    tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
+    issues: &mut IssueLog,
+) -> Result<(), ApplicationError> {
+    let specs = all_table_columns(connection)?;
+    let mut scratch = Storage::open_in_memory()?;
+    let transaction = immediate(&mut scratch)?;
+    if let Err((table, error)) = replace_rows(&transaction, &specs, tables) {
+        issues.push(
+            "constraint_violation",
+            format!("{table} cannot be imported: {error}"),
+        );
+    } else if let Err(error) = rebuild_search_index(&transaction) {
+        issues.push(
+            "constraint_violation",
+            format!("the search index cannot be rebuilt: {error}"),
+        );
+    }
+    // Never committed: the scratch database exists only to be thrown away.
+    drop(transaction);
+    Ok(())
+}
+
+/// Delete every canonical row and insert the archive's, in dependency order.
+/// The error carries the table so a failure can be reported in the caller's
+/// terms rather than as a bare SQLite message.
+fn replace_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    specs: &BTreeMap<&'static str, Vec<ColumnSpec>>,
+    tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
+) -> Result<BTreeMap<String, i64>, (&'static str, ApplicationError)> {
+    for table in ARCHIVE_TABLES.iter().rev() {
+        transaction
+            .execute(&format!("DELETE FROM \"{table}\""), [])
+            .map_err(|error| (*table, ApplicationError::from(error)))?;
+    }
+    let mut record_counts = BTreeMap::new();
+    for table in ARCHIVE_TABLES {
+        let columns = &specs[table];
+        let rows = tables.get(table).map(Vec::as_slice).unwrap_or(&[]);
+        let names = columns
+            .iter()
+            .map(|column| format!("\"{}\"", column.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let placeholders = (1..=columns.len())
+            .map(|position| format!("?{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut statement = transaction
+            .prepare(&format!(
+                "INSERT INTO \"{table}\" ({names}) VALUES ({placeholders})"
+            ))
+            .map_err(|error| (*table, ApplicationError::from(error)))?;
+        for row in rows {
+            statement
+                .execute(rusqlite::params_from_iter(row.values.iter()))
+                .map_err(|error| (*table, ApplicationError::from(error)))?;
+        }
+        drop(statement);
+        record_counts.insert((*table).to_owned(), rows.len() as i64);
+    }
+    Ok(record_counts)
+}
+
 // ---------------------------------------------------------------------------
 // Preview and import
 // ---------------------------------------------------------------------------
 
-/// Verify an archive and report what it holds. Never writes to the database.
+/// Verify an archive and report what it actually holds — the counts come from
+/// the parsed rows, never from the manifest's claim. Never writes.
 pub fn preview_archive_import(
     storage: &Storage,
     path: &str,
@@ -896,66 +1238,56 @@ pub fn preview_archive_import(
         product: verified.manifest.product.clone(),
         exported_at: verified.manifest.exported_at.clone(),
         database_migration_version: verified.manifest.database_migration_version,
-        record_counts: verified.manifest.record_counts.clone(),
+        record_counts: verified.record_counts,
         issues: verified.issues,
     })
 }
 
-/// Replace every canonical record with the archive's, after full verification
-/// and a timestamped safety backup. The delete/insert/reindex happens in one
-/// transaction, so a failure leaves the live database exactly as it was.
+/// Replace every canonical record with the archive's. Verification (including
+/// the dry run) happens first, then a timestamped safety backup, then one
+/// transaction. A refused or failed import leaves the live database — and the
+/// filesystem — exactly as it was.
 pub fn import_archive(
     storage: &mut Storage,
     path: &str,
 ) -> Result<ArchiveImportReport, ApplicationError> {
     let verified = verify_archive(storage.connection(), path)?;
-    if let Some(first) = verified.issues.first() {
-        let extra = verified.issues.len() - 1;
-        let suffix = match extra {
-            0 => String::new(),
-            1 => " (and 1 more problem)".to_owned(),
-            more => format!(" (and {more} more problems)"),
-        };
-        return Err(ApplicationError::ValidationFailed {
-            code: "archive_invalid",
-            field: "path".into(),
-            message: format!("{}{suffix}", first.message),
-        });
+    if !verified.issues.is_empty() {
+        return Err(archive_invalid(&verified.issues));
     }
+    let specs = all_table_columns(storage.connection())?;
 
-    let mut specs = BTreeMap::new();
-    for table in ARCHIVE_TABLES {
-        specs.insert(*table, table_columns(storage.connection(), table)?);
-    }
+    // Only now, with nothing left to reject, is the live database touched.
     let safety_backup_path = storage.safety_copy("pre-import")?;
-
-    let mut record_counts = BTreeMap::new();
     let transaction = immediate(storage)?;
-    for table in ARCHIVE_TABLES.iter().rev() {
-        transaction.execute(&format!("DELETE FROM \"{table}\""), [])?;
-    }
-    for table in ARCHIVE_TABLES {
-        let columns = &specs[table];
-        let rows = verified.tables.get(table).map(Vec::as_slice).unwrap_or(&[]);
-        let names = columns
-            .iter()
-            .map(|column| format!("\"{}\"", column.name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let placeholders = (1..=columns.len())
-            .map(|position| format!("?{position}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut statement = transaction.prepare(&format!(
-            "INSERT INTO \"{table}\" ({names}) VALUES ({placeholders})"
-        ))?;
-        for row in rows {
-            statement.execute(rusqlite::params_from_iter(row.values.iter()))?;
+    let outcome = replace_rows(&transaction, &specs, &verified.tables)
+        .map_err(|(table, error)| {
+            issue(
+                "constraint_violation",
+                format!("{table} cannot be imported: {error}"),
+            )
+        })
+        .and_then(|record_counts| {
+            rebuild_search_index(&transaction)
+                .map(|()| record_counts)
+                .map_err(|error| {
+                    issue(
+                        "constraint_violation",
+                        format!("the search index cannot be rebuilt: {error}"),
+                    )
+                })
+        });
+    let record_counts = match outcome {
+        Ok(record_counts) => record_counts,
+        Err(problem) => {
+            // The dry run passed, so this is unexpected — roll back and take the
+            // untouched safety copy with us rather than leaving an orphan.
+            drop(transaction);
+            let _ = std::fs::remove_file(&safety_backup_path);
+            return Err(archive_invalid(&[problem]));
         }
-        drop(statement);
-        record_counts.insert((*table).to_owned(), rows.len() as i64);
-    }
-    rebuild_search_index(&transaction)?;
+    };
+
     let total: i64 = record_counts.values().sum();
     log_command(
         &transaction,
@@ -973,4 +1305,22 @@ pub fn import_archive(
         record_counts,
         safety_backup_path: safety_backup_path.to_string_lossy().into_owned(),
     })
+}
+
+/// Turn verification issues into the single refusal the caller sees.
+fn archive_invalid(issues: &[ArchiveIssue]) -> ApplicationError {
+    let first = issues
+        .first()
+        .map(|problem| problem.message.clone())
+        .unwrap_or_else(|| "the archive cannot be imported".to_owned());
+    let suffix = match issues.len().saturating_sub(1) {
+        0 => String::new(),
+        1 => " (and 1 more problem)".to_owned(),
+        more => format!(" (and {more} more problems)"),
+    };
+    ApplicationError::ValidationFailed {
+        code: "archive_invalid",
+        field: "path".into(),
+        message: format!("{first}{suffix}"),
+    }
 }
