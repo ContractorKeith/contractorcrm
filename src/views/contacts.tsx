@@ -18,6 +18,7 @@ import type {
 } from "../api/types";
 import { CsvImportDialog } from "../components/CsvImportDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { RecordAttachments } from "../components/RecordAttachments";
 import { RecordMetadata } from "../components/RecordMetadata";
 import { SavedViewFilters } from "../components/SavedViewFilters";
 import { SavedViews } from "../components/SavedViews";
@@ -402,6 +403,8 @@ export function ContactDetailView({ client, contactId, onBack, onEdit }: Contact
           ))}
         </ul>
       )}
+
+      <RecordAttachments client={client} parentType="contact" parentId={contact.id} />
 
       <ActivityTimeline client={client} parentType="contact" parentId={contact.id} />
     </section>

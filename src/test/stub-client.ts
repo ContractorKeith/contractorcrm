@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { CoreClient } from "../api/client";
 import type {
   Activity,
+  Attachment,
   AttentionFlag,
   Company,
   Contact,
@@ -104,6 +105,10 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
     issues: [],
   }),
   importArchive: vi.fn().mockResolvedValue({ recordCounts: {}, safetyBackupPath: "" }),
+  addAttachment: vi.fn(),
+  listAttachments: vi.fn().mockResolvedValue([]),
+  removeAttachment: vi.fn().mockResolvedValue({ fileRemoved: true }),
+  attachmentPath: vi.fn().mockResolvedValue({ path: "", exists: true }),
   ...overrides,
 });
 
@@ -262,6 +267,19 @@ export const makeTask = (overrides: Partial<Task> = {}): Task => ({
   completedAt: null,
   createdAt: "2026-08-14T12:00:00Z",
   updatedAt: "2026-08-14T12:00:00Z",
+  version: 1,
+  ...overrides,
+});
+
+export const makeAttachment = (overrides: Partial<Attachment> = {}): Attachment => ({
+  id: "attachment-1",
+  parentType: "contact",
+  parentId: "contact-1",
+  fileName: "site-plan.pdf",
+  mediaType: "application/pdf",
+  sizeBytes: 2048,
+  sha256: "abc123",
+  createdAt: "2026-08-14T12:00:00Z",
   version: 1,
   ...overrides,
 });

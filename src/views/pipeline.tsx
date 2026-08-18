@@ -23,6 +23,7 @@ import {
   type StageKind,
 } from "../api/types";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
+import { RecordAttachments } from "../components/RecordAttachments";
 import { RecordMetadata } from "../components/RecordMetadata";
 import { SavedViewFilters } from "../components/SavedViewFilters";
 import { SavedViews } from "../components/SavedViews";
@@ -893,6 +894,8 @@ export function OpportunityDetailView({
       )}
 
       {/* Activities are a separate section from the append-only stage history. */}
+      <RecordAttachments client={client} parentType="opportunity" parentId={detail.id} />
+
       <ActivityTimeline client={client} parentType="opportunity" parentId={detail.id} />
     </section>
   );
