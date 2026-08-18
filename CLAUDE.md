@@ -27,7 +27,9 @@ and Pipeline. Flat tags and typed text, number, date, and single-select custom
 fields are implemented across those same record surfaces, including saved-view
 schema v2 metadata filters. CSV contact import with mapping preview and stable
 external ids, and CSV export for contacts and opportunities, are implemented.
-Portable archives and attachments remain planned in issues #20–#21.
+Versioned portable archive export/import (checksum- and referential-integrity-
+verified ZIP, full-replace with a pre-import safety backup) is implemented.
+Attachments remain planned in issue #21.
 
 ## Planning baseline
 

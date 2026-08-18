@@ -170,11 +170,47 @@ Same as ContractorProject:
 
 ## Archive contract
 
-The portable archive is a versioned ZIP mirroring ContractorProject's:
+The portable archive (issue #20, implemented) is a versioned ZIP:
 
-- `manifest.json` with archive version, product version, and checksums
-- canonical CRM data as JSON (companies, contacts, opportunities, stages, activities, tasks, tags, custom fields, saved views)
-- attachments under a confined `assets/` directory
-- optional human-readable CSV exports (contacts, opportunities)
+- `manifest.json` — `schemaVersion` (currently `1`), `product` (name +
+  app version), `exportedAt`, `databaseMigrationVersion`, one
+  `ArchiveFileEntry` (`path`, `sha256`, `bytes`) per archived file, and
+  `recordCounts` per table.
+- `data/<table>.json` — one pretty-printed JSON array per canonical table, in
+  camelCase, for all 16 archived tables: `companies`, `contacts`,
+  `contact_channels`, `pipelines`, `stages`, `lost_reasons`, `opportunities`,
+  `stage_history`, `activities`, `tasks`, `saved_views`, `tags`,
+  `record_tags`, `custom_field_defs`, `custom_field_options`,
+  `custom_field_values`. `command_log`, `app_settings`, `search_index`, and
+  `schema_migrations` are deliberately excluded — history/preferences are
+  local, the FTS index is rebuilt on import, and migrations belong to the
+  database, not the archive.
+- `csv/contacts.csv` and `csv/opportunities.csv` — human-readable convenience
+  copies of the CSV export; `import_archive` ignores them.
+- `assets/` — a directory entry reserved for attachments; empty until
+  issue #21 ships managed files.
 
-Import validates paths, checksums, schema version, IDs, and referential integrity before writing anything. The whole import is transactional. CSV contact import ships in v1 with a mapping preview — every contractor arrives with a spreadsheet.
+Archive schema version and database migration version are tracked
+independently. `import_archive` verifies the whole archive before writing
+anything: entry-path validation (no absolute paths, backslashes, `.`/`..`
+traversal, unknown files, or a duplicate entry the central directory
+collapsed), per-file size and SHA-256 checksum against the manifest,
+`schemaVersion == 1`, and `databaseMigrationVersion <= supported` (an older
+archive imports forward; a newer one is rejected until the app is updated).
+Every row is then checked against the live schema read via `PRAGMA
+table_info` (unknown/missing columns, type/nullability mismatches, blank
+ids, invalid versions, duplicate primary keys — `record_tags` keys on
+`(tag_id, entity_type, record_id)`, every other table on `id`) and
+referential integrity is checked in memory across all 16 tables, including
+polymorphic `parent_type`/`parent_id` and `entity_type`/`record_id`
+ownership. A column missing from an older archive is allowed when it is
+nullable, so forward-compatible archives import cleanly. Any issue reported
+by `preview_archive_import` blocks `import_archive`.
+
+A successful import takes a timestamped safety backup first
+(`<database>.pre-import-<stamp>.bak`), then replaces every canonical row —
+delete all 16 tables in reverse dependency order, insert from the archive in
+dependency order, rebuild the FTS index — in one transaction, so a failure
+leaves the live database untouched. Only full replace is supported in v1;
+merge-import is out of scope. Export and import each write one
+`command_log` row (`export`/`archive` and `import`/`archive`).
