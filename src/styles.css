@@ -642,6 +642,93 @@ h1 {
   border-bottom: var(--border-hairline) solid var(--color-divider);
 }
 
+/* Archive import confirmation — manifest summary, counts, destructive warning. */
+.archive-import {
+  width: min(560px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.archive-import__manifest {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-label);
+}
+
+.archive-import__manifest dt {
+  color: var(--color-neutral-500);
+}
+
+.archive-import__manifest dd {
+  margin: 0;
+}
+
+.archive-import__counts {
+  width: 100%;
+  margin-bottom: var(--space-4);
+  border-collapse: collapse;
+  font-size: var(--font-size-label);
+}
+
+.archive-import__counts caption {
+  margin-bottom: var(--space-2);
+  text-align: left;
+  font-family: var(--font-heading);
+}
+
+.archive-import__counts th,
+.archive-import__counts td {
+  padding: var(--space-2);
+  text-align: left;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
+.archive-import__warning,
+.archive-import__blocked {
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  border: var(--border-hairline) solid var(--state-attention);
+  border-radius: var(--radius-sm);
+}
+
+.archive-import__blocked p,
+.archive-import__warning p {
+  margin: 0 0 var(--space-2);
+}
+
+.archive-import__backup {
+  font-size: var(--font-size-label);
+  word-break: break-all;
+}
+
+/* Backup & Data view — stacked sections of one-off maintenance actions. */
+.data-section {
+  max-width: 640px;
+  margin-bottom: var(--space-5);
+}
+
+.data-section h3 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-heading);
+}
+
+.data-section p {
+  margin: 0 0 var(--space-3);
+}
+
+.data-section__actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.data-section__result {
+  margin-top: var(--space-3);
+  font-size: var(--font-size-label);
+  word-break: break-all;
+}
+
 /* Tags and typed custom-field surfaces share the compact detail-form rhythm. */
 .record-metadata,
 .saved-view-filters {
@@ -843,6 +930,18 @@ h1 {
 
 .button--primary:hover {
   background: var(--color-action-hover);
+}
+
+/* Destructive confirm — archive import replaces every record. */
+.button--danger {
+  color: var(--color-paper);
+  background: var(--state-attention);
+  border-color: var(--state-attention);
+}
+
+.button--danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* — record tables: 28px rows, hairline dividers, condensed headers — */

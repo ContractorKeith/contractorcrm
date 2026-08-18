@@ -668,6 +668,48 @@ export interface CsvExportReport {
   rowCount: number;
 }
 
+// ---------------------------------------------------------------------------
+// Portable archive (docs/DATA_MODEL.md "Archive contract")
+// ---------------------------------------------------------------------------
+
+// Which app and version wrote an archive.
+export interface ProductInfo {
+  name: string;
+  version: string;
+}
+
+// Row count per canonical table, keyed by table name.
+export type ArchiveRecordCounts = Record<string, number>;
+
+// A machine-readable reason an archive cannot be imported.
+export interface ArchiveIssue {
+  code: string;
+  message: string;
+}
+
+// Where an archive landed and what it holds.
+export interface ArchiveExportReport {
+  path: string;
+  recordCounts: ArchiveRecordCounts;
+  fileCount: number;
+}
+
+// Read-only verification of an archive; an empty `issues` list means it imports.
+export interface ArchiveImportPreview {
+  schemaVersion: number;
+  product: ProductInfo;
+  exportedAt: string;
+  databaseMigrationVersion: number;
+  recordCounts: ArchiveRecordCounts;
+  issues: ArchiveIssue[];
+}
+
+// What an import wrote and where the pre-import safety backup went.
+export interface ArchiveImportReport {
+  recordCounts: ArchiveRecordCounts;
+  safetyBackupPath: string;
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =

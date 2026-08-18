@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { tauriCoreClient, type CoreClient } from "./api/client";
 import type { HealthReport, NavigationEntityType, SearchResult } from "./api/types";
@@ -9,6 +9,7 @@ import { AttentionView } from "./views/attention";
 import { CompaniesView, CompanyDetailView, CompanyFormView } from "./views/companies";
 import { ContactDetailView, ContactFormView, ContactsView } from "./views/contacts";
 import { OpportunityDetailView, OpportunityFormView, PipelineView } from "./views/pipeline";
+import { SettingsView } from "./views/settings";
 import { TasksView } from "./views/tasks";
 
 interface AppProps {
@@ -22,6 +23,7 @@ type View =
   | { name: "pipeline" }
   | { name: "tasks" }
   | { name: "attention" }
+  | { name: "settings" }
   | { name: "contactDetail"; id: string }
   | { name: "companyDetail"; id: string }
   | { name: "opportunityDetail"; id: string }
@@ -35,6 +37,9 @@ export function App({ client = tauriCoreClient }: AppProps) {
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [view, setView] = useState<View>({ name: "contacts" });
+  // Bumped when an archive import replaces every record; remounts the record
+  // views so none of them keep showing rows from the old database.
+  const [dataToken, setDataToken] = useState(0);
 
   useEffect(
     () =>
@@ -67,7 +72,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
       ? "companies"
       : view.name === "pipeline" || view.name.startsWith("opportunity")
         ? "pipeline"
-        : view.name === "tasks" || view.name === "attention"
+        : view.name === "tasks" || view.name === "attention" || view.name === "settings"
           ? view.name
           : "contacts";
 
@@ -171,109 +176,122 @@ export function App({ client = tauriCoreClient }: AppProps) {
           >
             Attention
           </button>
+          <button
+            type="button"
+            aria-pressed={section === "settings"}
+            onClick={() => setView({ name: "settings" })}
+          >
+            Backup &amp; Data
+          </button>
         </nav>
 
-        {view.name === "contacts" ? (
-          <ContactsView
-            client={client}
-            onOpen={(id) => setView({ name: "contactDetail", id })}
-            onCreate={() => setView({ name: "contactForm" })}
-          />
+        {view.name === "settings" ? (
+          <SettingsView client={client} onDataReplaced={() => setDataToken((token) => token + 1)} />
         ) : null}
 
-        {view.name === "contactDetail" ? (
-          <ContactDetailView
-            client={client}
-            contactId={view.id}
-            onBack={() => setView({ name: "contacts" })}
-            onEdit={() => setView({ name: "contactForm", id: view.id })}
-          />
-        ) : null}
+        <Fragment key={dataToken}>
+          {view.name === "contacts" ? (
+            <ContactsView
+              client={client}
+              onOpen={(id) => setView({ name: "contactDetail", id })}
+              onCreate={() => setView({ name: "contactForm" })}
+            />
+          ) : null}
 
-        {view.name === "contactForm" ? (
-          <ContactFormView
-            client={client}
-            {...(view.id ? { contactId: view.id } : {})}
-            onSaved={(contact) => setView({ name: "contactDetail", id: contact.id })}
-            onCancel={() =>
-              setView(view.id ? { name: "contactDetail", id: view.id } : { name: "contacts" })
-            }
-          />
-        ) : null}
+          {view.name === "contactDetail" ? (
+            <ContactDetailView
+              client={client}
+              contactId={view.id}
+              onBack={() => setView({ name: "contacts" })}
+              onEdit={() => setView({ name: "contactForm", id: view.id })}
+            />
+          ) : null}
 
-        {view.name === "companies" ? (
-          <CompaniesView
-            client={client}
-            onOpen={(id) => setView({ name: "companyDetail", id })}
-            onCreate={() => setView({ name: "companyForm" })}
-          />
-        ) : null}
+          {view.name === "contactForm" ? (
+            <ContactFormView
+              client={client}
+              {...(view.id ? { contactId: view.id } : {})}
+              onSaved={(contact) => setView({ name: "contactDetail", id: contact.id })}
+              onCancel={() =>
+                setView(view.id ? { name: "contactDetail", id: view.id } : { name: "contacts" })
+              }
+            />
+          ) : null}
 
-        {view.name === "companyDetail" ? (
-          <CompanyDetailView
-            client={client}
-            companyId={view.id}
-            onBack={() => setView({ name: "companies" })}
-            onEdit={() => setView({ name: "companyForm", id: view.id })}
-          />
-        ) : null}
+          {view.name === "companies" ? (
+            <CompaniesView
+              client={client}
+              onOpen={(id) => setView({ name: "companyDetail", id })}
+              onCreate={() => setView({ name: "companyForm" })}
+            />
+          ) : null}
 
-        {view.name === "tasks" ? <TasksView client={client} /> : null}
+          {view.name === "companyDetail" ? (
+            <CompanyDetailView
+              client={client}
+              companyId={view.id}
+              onBack={() => setView({ name: "companies" })}
+              onEdit={() => setView({ name: "companyForm", id: view.id })}
+            />
+          ) : null}
 
-        {view.name === "attention" ? (
-          <AttentionView
-            client={client}
-            onOpenRecord={(recordType, recordId) =>
-              // Tasks have no detail view — flags on them land on the Tasks tab.
-              setView(
-                recordType === "contact"
-                  ? { name: "contactDetail", id: recordId }
-                  : recordType === "opportunity"
-                    ? { name: "opportunityDetail", id: recordId }
-                    : { name: "tasks" },
-              )
-            }
-          />
-        ) : null}
+          {view.name === "tasks" ? <TasksView client={client} /> : null}
 
-        {view.name === "pipeline" ? (
-          <PipelineView
-            client={client}
-            onOpen={(id) => setView({ name: "opportunityDetail", id })}
-            onCreate={() => setView({ name: "opportunityForm" })}
-          />
-        ) : null}
+          {view.name === "attention" ? (
+            <AttentionView
+              client={client}
+              onOpenRecord={(recordType, recordId) =>
+                // Tasks have no detail view — flags on them land on the Tasks tab.
+                setView(
+                  recordType === "contact"
+                    ? { name: "contactDetail", id: recordId }
+                    : recordType === "opportunity"
+                      ? { name: "opportunityDetail", id: recordId }
+                      : { name: "tasks" },
+                )
+              }
+            />
+          ) : null}
 
-        {view.name === "opportunityDetail" ? (
-          <OpportunityDetailView
-            client={client}
-            opportunityId={view.id}
-            onBack={() => setView({ name: "pipeline" })}
-            onEdit={() => setView({ name: "opportunityForm", id: view.id })}
-          />
-        ) : null}
+          {view.name === "pipeline" ? (
+            <PipelineView
+              client={client}
+              onOpen={(id) => setView({ name: "opportunityDetail", id })}
+              onCreate={() => setView({ name: "opportunityForm" })}
+            />
+          ) : null}
 
-        {view.name === "opportunityForm" ? (
-          <OpportunityFormView
-            client={client}
-            {...(view.id ? { opportunityId: view.id } : {})}
-            onSaved={(opportunity) => setView({ name: "opportunityDetail", id: opportunity.id })}
-            onCancel={() =>
-              setView(view.id ? { name: "opportunityDetail", id: view.id } : { name: "pipeline" })
-            }
-          />
-        ) : null}
+          {view.name === "opportunityDetail" ? (
+            <OpportunityDetailView
+              client={client}
+              opportunityId={view.id}
+              onBack={() => setView({ name: "pipeline" })}
+              onEdit={() => setView({ name: "opportunityForm", id: view.id })}
+            />
+          ) : null}
 
-        {view.name === "companyForm" ? (
-          <CompanyFormView
-            client={client}
-            {...(view.id ? { companyId: view.id } : {})}
-            onSaved={(company) => setView({ name: "companyDetail", id: company.id })}
-            onCancel={() =>
-              setView(view.id ? { name: "companyDetail", id: view.id } : { name: "companies" })
-            }
-          />
-        ) : null}
+          {view.name === "opportunityForm" ? (
+            <OpportunityFormView
+              client={client}
+              {...(view.id ? { opportunityId: view.id } : {})}
+              onSaved={(opportunity) => setView({ name: "opportunityDetail", id: opportunity.id })}
+              onCancel={() =>
+                setView(view.id ? { name: "opportunityDetail", id: view.id } : { name: "pipeline" })
+              }
+            />
+          ) : null}
+
+          {view.name === "companyForm" ? (
+            <CompanyFormView
+              client={client}
+              {...(view.id ? { companyId: view.id } : {})}
+              onSaved={(company) => setView({ name: "companyDetail", id: company.id })}
+              onCancel={() =>
+                setView(view.id ? { name: "companyDetail", id: view.id } : { name: "companies" })
+              }
+            />
+          ) : null}
+        </Fragment>
       </main>
     </div>
   );
