@@ -4888,7 +4888,7 @@ const CONTACT_COLUMNS: &str = "id, company_id, first_name, last_name, display_na
     role, kind, preferred_contact_method, address_line1, address_line2, city, state, \
     postal_code, property_type, notes, favorite, archived_at, created_at, updated_at, version";
 
-fn immediate(storage: &mut Storage) -> Result<Transaction<'_>, ApplicationError> {
+pub(crate) fn immediate(storage: &mut Storage) -> Result<Transaction<'_>, ApplicationError> {
     Ok(storage
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?)
@@ -4948,6 +4948,46 @@ fn refresh_search_projection(
         _ => unreachable!("only indexed entity types are refreshed"),
     };
     debug_assert!(inserted <= 1);
+    Ok(())
+}
+
+/// Rebuild the whole FTS projection from the canonical tables. Used by the
+/// portable archive import, which replaces every canonical row at once and so
+/// cannot refresh record by record. Mirrors the migration 006 backfill.
+pub(crate) fn rebuild_search_index(transaction: &Transaction<'_>) -> Result<(), ApplicationError> {
+    transaction.execute_batch(
+        "DELETE FROM search_index;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'company', id, name,
+                trim(coalesce(name, '') || ' ' || coalesce(phone, '') || ' ' ||
+                     coalesce(email, '') || ' ' || coalesce(website, '') || ' ' ||
+                     coalesce(notes, ''))
+         FROM companies WHERE archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'contact', c.id, c.display_name,
+                trim(coalesce(c.display_name, '') || ' ' || coalesce(c.notes, '') || ' ' ||
+                     coalesce((SELECT group_concat(value, ' ') FROM contact_channels cc
+                               WHERE cc.contact_id = c.id), ''))
+         FROM contacts c WHERE c.archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'opportunity', id, name,
+                trim(coalesce(name, '') || ' ' || coalesce(notes, '') || ' ' ||
+                     coalesce(source_label, ''))
+         FROM opportunities WHERE archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'activity', a.id, a.summary,
+                trim(coalesce(a.summary, '') || ' ' || coalesce(a.body, ''))
+         FROM activities a
+         WHERE (a.parent_type = 'contact' AND EXISTS (
+                    SELECT 1 FROM contacts c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                ))
+            OR (a.parent_type = 'company' AND EXISTS (
+                    SELECT 1 FROM companies c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                ))
+            OR (a.parent_type = 'opportunity' AND EXISTS (
+                    SELECT 1 FROM opportunities o WHERE o.id = a.parent_id AND o.archived_at IS NULL
+                ));",
+    )?;
     Ok(())
 }
 
@@ -5669,7 +5709,7 @@ fn require_activity_parent(
 }
 
 /// Append a command_log row for undo/audit; part of the mutation transaction.
-fn log_command(
+pub(crate) fn log_command(
     transaction: &Transaction<'_>,
     actor: Actor,
     entity_type: &str,
@@ -6030,7 +6070,19 @@ pub fn export_contacts_csv(
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
     let path = check_export_destination(path, overwrite)?;
-    let connection = storage.connection();
+    let mut writer = open_csv_writer(&path)?;
+    let row_count = write_contacts_csv(storage.connection(), &mut writer)?;
+    writer.flush()?;
+    log_export(storage, "contacts", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
+}
+
+/// Contact CSV body, shared by the file export and the portable archive's
+/// human-readable copy. Returns the number of data rows written.
+pub(crate) fn write_contacts_csv<W: std::io::Write>(
+    connection: &rusqlite::Connection,
+    writer: &mut csv::Writer<W>,
+) -> Result<usize, ApplicationError> {
     let definitions = export_custom_field_defs(connection, "contact")?;
     let values = export_custom_field_values(connection, "contact")?;
 
@@ -6103,8 +6155,7 @@ pub fn export_contacts_csv(
     drop(statement);
 
     let tags = export_tags(connection, "contact")?;
-    let mut writer = open_csv_writer(&path)?;
-    write_export_record(&mut writer, &headers)?;
+    write_export_record(writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6118,11 +6169,9 @@ pub fn export_contacts_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        write_export_record(&mut writer, &cells)?;
+        write_export_record(writer, &cells)?;
     }
-    writer.flush()?;
-    log_export(storage, "contacts", row_count, &path)?;
-    Ok(CsvExportReport { path, row_count })
+    Ok(row_count)
 }
 
 /// Write every active opportunity to a CSV file; money is exported in major
@@ -6133,7 +6182,18 @@ pub fn export_opportunities_csv(
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
     let path = check_export_destination(path, overwrite)?;
-    let connection = storage.connection();
+    let mut writer = open_csv_writer(&path)?;
+    let row_count = write_opportunities_csv(storage.connection(), &mut writer)?;
+    writer.flush()?;
+    log_export(storage, "opportunities", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
+}
+
+/// Opportunity CSV body, shared by the file export and the portable archive.
+pub(crate) fn write_opportunities_csv<W: std::io::Write>(
+    connection: &rusqlite::Connection,
+    writer: &mut csv::Writer<W>,
+) -> Result<usize, ApplicationError> {
     let definitions = export_custom_field_defs(connection, "opportunity")?;
     let values = export_custom_field_values(connection, "opportunity")?;
 
@@ -6199,8 +6259,7 @@ pub fn export_opportunities_csv(
     drop(statement);
 
     let tags = export_tags(connection, "opportunity")?;
-    let mut writer = open_csv_writer(&path)?;
-    write_export_record(&mut writer, &headers)?;
+    write_export_record(writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6214,11 +6273,9 @@ pub fn export_opportunities_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        write_export_record(&mut writer, &cells)?;
+        write_export_record(writer, &cells)?;
     }
-    writer.flush()?;
-    log_export(storage, "opportunities", row_count, &path)?;
-    Ok(CsvExportReport { path, row_count })
+    Ok(row_count)
 }
 
 /// Effective column positions for the mapped targets, resolved once per file.
@@ -6888,7 +6945,10 @@ fn format_export_number(value: f64) -> String {
 
 /// Validate an export destination the way `export_handoff_envelope` does:
 /// existing files are only replaced when the caller asks for it.
-fn check_export_destination(path: &str, overwrite: bool) -> Result<String, ApplicationError> {
+pub(crate) fn check_export_destination(
+    path: &str,
+    overwrite: bool,
+) -> Result<String, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
     if std::path::Path::new(&path).exists() && !overwrite {
         return Err(ApplicationError::ValidationFailed {
@@ -6928,8 +6988,8 @@ fn sanitize_export_cell(value: &str) -> String {
     }
 }
 
-fn write_export_record(
-    writer: &mut csv::Writer<std::fs::File>,
+fn write_export_record<W: std::io::Write>(
+    writer: &mut csv::Writer<W>,
     cells: &[String],
 ) -> Result<(), ApplicationError> {
     writer

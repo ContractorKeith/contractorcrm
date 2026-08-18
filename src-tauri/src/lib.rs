@@ -1,4 +1,5 @@
 pub mod application;
+pub mod archive;
 pub mod attention;
 pub mod domain;
 pub mod error;
@@ -20,6 +21,7 @@ use application::{
     UpdateContactRequest, UpdateCustomFieldDefRequest, UpdateOpportunityRequest,
     UpdateSavedViewRequest, UpdateStageRequest, UpdateTagRequest, UpdateTaskRequest,
 };
+use archive::{ArchiveExportReport, ArchiveImportPreview, ArchiveImportReport};
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
@@ -104,6 +106,9 @@ macro_rules! with_local_api_v1_commands {
             import_contacts,
             export_contacts_csv,
             export_opportunities_csv,
+            export_archive,
+            preview_archive_import,
+            import_archive,
         }
     };
 }
@@ -853,6 +858,36 @@ fn export_opportunities_csv(
 ) -> Result<CsvExportReport, CommandError> {
     let mut storage = storage.lock().expect("storage mutex poisoned");
     application::export_opportunities_csv(&mut storage, &path, overwrite).map_err(Into::into)
+}
+
+// Portable archive commands — versioned ZIP export, verification, and import.
+
+#[tauri::command]
+fn export_archive(
+    storage: State<'_, SharedStorage>,
+    path: String,
+    overwrite: bool,
+) -> Result<ArchiveExportReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    archive::export_archive(&mut storage, &path, overwrite).map_err(Into::into)
+}
+
+#[tauri::command]
+fn preview_archive_import(
+    storage: State<'_, SharedStorage>,
+    path: String,
+) -> Result<ArchiveImportPreview, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    archive::preview_archive_import(&storage, &path).map_err(Into::into)
+}
+
+#[tauri::command]
+fn import_archive(
+    storage: State<'_, SharedStorage>,
+    path: String,
+) -> Result<ArchiveImportReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    archive::import_archive(&mut storage, &path).map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

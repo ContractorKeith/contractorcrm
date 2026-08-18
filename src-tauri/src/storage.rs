@@ -569,6 +569,26 @@ impl Storage {
         Ok(())
     }
 
+    /// Timestamped safety copy of the live database next to it, named
+    /// `<database>.<tag>-<stamp>.bak`. Used before destructive maintenance
+    /// (restore, archive import) so the previous state is always recoverable.
+    pub fn safety_copy(&self, tag: &str) -> Result<PathBuf, StorageError> {
+        let file_name = self
+            .database_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                StorageError::InvalidStoredData("database path has no file name".into())
+            })?
+            .to_string();
+        let stamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+        let safety_path = self
+            .database_path
+            .with_file_name(format!("{file_name}.{tag}-{stamp}.bak"));
+        self.connection.backup("main", &safety_path, None)?;
+        Ok(safety_path)
+    }
+
     /// Verify a backup file without touching the live database: it must open
     /// read-only, pass PRAGMA integrity_check, carry a schema_migrations
     /// table, and not be newer than this build's latest known migration.
@@ -640,11 +660,7 @@ impl Storage {
             .to_string();
 
         // Consistent timestamped safety copy of the live database, next to it.
-        let stamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
-        let safety_path = self
-            .database_path
-            .with_file_name(format!("{file_name}.pre-restore-{stamp}.bak"));
-        self.connection.backup("main", &safety_path, None)?;
+        let safety_path = self.safety_copy("pre-restore")?;
 
         // Close the live connection (swap in a throwaway in-memory one) so the
         // file can be replaced; drop the WAL/SHM sidecars with it.
