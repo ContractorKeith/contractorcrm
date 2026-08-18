@@ -94,6 +94,16 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   importContacts: vi.fn().mockResolvedValue({ created: 0, updated: 0, skipped: [] }),
   exportContactsCsv: vi.fn().mockResolvedValue({ path: "", rowCount: 0 }),
   exportOpportunitiesCsv: vi.fn().mockResolvedValue({ path: "", rowCount: 0 }),
+  exportArchive: vi.fn().mockResolvedValue({ path: "", recordCounts: {}, fileCount: 0 }),
+  previewArchiveImport: vi.fn().mockResolvedValue({
+    schemaVersion: 1,
+    product: { name: "ContractorCRM", version: "0.1.0" },
+    exportedAt: "2026-08-18T12:00:00Z",
+    databaseMigrationVersion: 9,
+    recordCounts: {},
+    issues: [],
+  }),
+  importArchive: vi.fn().mockResolvedValue({ recordCounts: {}, safetyBackupPath: "" }),
   ...overrides,
 });
 

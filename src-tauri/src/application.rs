@@ -4888,7 +4888,7 @@ const CONTACT_COLUMNS: &str = "id, company_id, first_name, last_name, display_na
     role, kind, preferred_contact_method, address_line1, address_line2, city, state, \
     postal_code, property_type, notes, favorite, archived_at, created_at, updated_at, version";
 
-fn immediate(storage: &mut Storage) -> Result<Transaction<'_>, ApplicationError> {
+pub(crate) fn immediate(storage: &mut Storage) -> Result<Transaction<'_>, ApplicationError> {
     Ok(storage
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?)
@@ -4948,6 +4948,46 @@ fn refresh_search_projection(
         _ => unreachable!("only indexed entity types are refreshed"),
     };
     debug_assert!(inserted <= 1);
+    Ok(())
+}
+
+/// Rebuild the whole FTS projection from the canonical tables. Used by the
+/// portable archive import, which replaces every canonical row at once and so
+/// cannot refresh record by record. Mirrors the migration 006 backfill.
+pub(crate) fn rebuild_search_index(transaction: &Transaction<'_>) -> Result<(), ApplicationError> {
+    transaction.execute_batch(
+        "DELETE FROM search_index;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'company', id, name,
+                trim(coalesce(name, '') || ' ' || coalesce(phone, '') || ' ' ||
+                     coalesce(email, '') || ' ' || coalesce(website, '') || ' ' ||
+                     coalesce(notes, ''))
+         FROM companies WHERE archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'contact', c.id, c.display_name,
+                trim(coalesce(c.display_name, '') || ' ' || coalesce(c.notes, '') || ' ' ||
+                     coalesce((SELECT group_concat(value, ' ') FROM contact_channels cc
+                               WHERE cc.contact_id = c.id), ''))
+         FROM contacts c WHERE c.archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'opportunity', id, name,
+                trim(coalesce(name, '') || ' ' || coalesce(notes, '') || ' ' ||
+                     coalesce(source_label, ''))
+         FROM opportunities WHERE archived_at IS NULL;
+         INSERT INTO search_index (entity_type, entity_id, title, content)
+         SELECT 'activity', a.id, a.summary,
+                trim(coalesce(a.summary, '') || ' ' || coalesce(a.body, ''))
+         FROM activities a
+         WHERE (a.parent_type = 'contact' AND EXISTS (
+                    SELECT 1 FROM contacts c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                ))
+            OR (a.parent_type = 'company' AND EXISTS (
+                    SELECT 1 FROM companies c WHERE c.id = a.parent_id AND c.archived_at IS NULL
+                ))
+            OR (a.parent_type = 'opportunity' AND EXISTS (
+                    SELECT 1 FROM opportunities o WHERE o.id = a.parent_id AND o.archived_at IS NULL
+                ));",
+    )?;
     Ok(())
 }
 
@@ -5669,7 +5709,7 @@ fn require_activity_parent(
 }
 
 /// Append a command_log row for undo/audit; part of the mutation transaction.
-fn log_command(
+pub(crate) fn log_command(
     transaction: &Transaction<'_>,
     actor: Actor,
     entity_type: &str,
@@ -6029,8 +6069,22 @@ pub fn export_contacts_csv(
     path: &str,
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
-    let path = check_export_destination(path, overwrite)?;
-    let connection = storage.connection();
+    let path = check_export_destination(storage, path, overwrite)?;
+    // Render before opening the destination: a failed query must never leave a
+    // truncated file over a previous export.
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    let row_count = write_contacts_csv(storage.connection(), &mut writer)?;
+    write_export_file(&path, &csv_bytes(writer)?)?;
+    log_export(storage, "contacts", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
+}
+
+/// Contact CSV body, shared by the file export and the portable archive's
+/// human-readable copy. Returns the number of data rows written.
+pub(crate) fn write_contacts_csv<W: std::io::Write>(
+    connection: &rusqlite::Connection,
+    writer: &mut csv::Writer<W>,
+) -> Result<usize, ApplicationError> {
     let definitions = export_custom_field_defs(connection, "contact")?;
     let values = export_custom_field_values(connection, "contact")?;
 
@@ -6103,8 +6157,7 @@ pub fn export_contacts_csv(
     drop(statement);
 
     let tags = export_tags(connection, "contact")?;
-    let mut writer = open_csv_writer(&path)?;
-    write_export_record(&mut writer, &headers)?;
+    write_export_record(writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6118,11 +6171,9 @@ pub fn export_contacts_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        write_export_record(&mut writer, &cells)?;
+        write_export_record(writer, &cells)?;
     }
-    writer.flush()?;
-    log_export(storage, "contacts", row_count, &path)?;
-    Ok(CsvExportReport { path, row_count })
+    Ok(row_count)
 }
 
 /// Write every active opportunity to a CSV file; money is exported in major
@@ -6132,8 +6183,19 @@ pub fn export_opportunities_csv(
     path: &str,
     overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
-    let path = check_export_destination(path, overwrite)?;
-    let connection = storage.connection();
+    let path = check_export_destination(storage, path, overwrite)?;
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    let row_count = write_opportunities_csv(storage.connection(), &mut writer)?;
+    write_export_file(&path, &csv_bytes(writer)?)?;
+    log_export(storage, "opportunities", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
+}
+
+/// Opportunity CSV body, shared by the file export and the portable archive.
+pub(crate) fn write_opportunities_csv<W: std::io::Write>(
+    connection: &rusqlite::Connection,
+    writer: &mut csv::Writer<W>,
+) -> Result<usize, ApplicationError> {
     let definitions = export_custom_field_defs(connection, "opportunity")?;
     let values = export_custom_field_values(connection, "opportunity")?;
 
@@ -6199,8 +6261,7 @@ pub fn export_opportunities_csv(
     drop(statement);
 
     let tags = export_tags(connection, "opportunity")?;
-    let mut writer = open_csv_writer(&path)?;
-    write_export_record(&mut writer, &headers)?;
+    write_export_record(writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6214,11 +6275,9 @@ pub fn export_opportunities_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        write_export_record(&mut writer, &cells)?;
+        write_export_record(writer, &cells)?;
     }
-    writer.flush()?;
-    log_export(storage, "opportunities", row_count, &path)?;
-    Ok(CsvExportReport { path, row_count })
+    Ok(row_count)
 }
 
 /// Effective column positions for the mapped targets, resolved once per file.
@@ -6887,10 +6946,24 @@ fn format_export_number(value: f64) -> String {
 }
 
 /// Validate an export destination the way `export_handoff_envelope` does:
-/// existing files are only replaced when the caller asks for it.
-fn check_export_destination(path: &str, overwrite: bool) -> Result<String, ApplicationError> {
+/// existing files are only replaced when the caller asks for it, and the live
+/// database and its sidecars are never a destination — exporting onto
+/// contractorcrm.sqlite3 destroys the database it is exporting.
+pub(crate) fn check_export_destination(
+    storage: &Storage,
+    path: &str,
+    overwrite: bool,
+) -> Result<String, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
-    if std::path::Path::new(&path).exists() && !overwrite {
+    let destination = std::path::Path::new(&path);
+    if is_database_file(storage.database_path(), destination) {
+        return Err(ApplicationError::ValidationFailed {
+            code: "destination_is_database",
+            field: "path".into(),
+            message: format!("{path} belongs to the live database; pick another destination"),
+        });
+    }
+    if destination.exists() && !overwrite {
         return Err(ApplicationError::ValidationFailed {
             code: "destination_exists",
             field: "path".into(),
@@ -6898,6 +6971,38 @@ fn check_export_destination(path: &str, overwrite: bool) -> Result<String, Appli
         });
     }
     Ok(path)
+}
+
+/// True when `destination` is the database file, one of its WAL/SHM sidecars,
+/// or one of the `<database>.*.bak` safety copies. Directories are compared
+/// canonically so "./data/../data/crm.sqlite3" cannot slip through; a
+/// destination whose directory does not exist yet can never be the database.
+fn is_database_file(database_path: &std::path::Path, destination: &std::path::Path) -> bool {
+    let resolve = |path: &std::path::Path| {
+        let parent = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from("."),
+        };
+        std::fs::canonicalize(parent).ok()
+    };
+    let (Some(database_directory), Some(destination_directory)) =
+        (resolve(database_path), resolve(destination))
+    else {
+        return false;
+    };
+    if database_directory != destination_directory {
+        return false;
+    }
+    let (Some(database_name), Some(destination_name)) = (
+        database_path.file_name().and_then(|name| name.to_str()),
+        destination.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return false;
+    };
+    destination_name == database_name
+        || destination_name == format!("{database_name}-wal")
+        || destination_name == format!("{database_name}-shm")
+        || destination_name.starts_with(&format!("{database_name}."))
 }
 
 /// Record the export in the command log, mirroring backup/hand-off exports.
@@ -6928,8 +7033,8 @@ fn sanitize_export_cell(value: &str) -> String {
     }
 }
 
-fn write_export_record(
-    writer: &mut csv::Writer<std::fs::File>,
+fn write_export_record<W: std::io::Write>(
+    writer: &mut csv::Writer<W>,
     cells: &[String],
 ) -> Result<(), ApplicationError> {
     writer
@@ -6937,14 +7042,21 @@ fn write_export_record(
         .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
 }
 
-/// Open a CSV writer at `path`, creating missing parent directories.
-fn open_csv_writer(path: &str) -> Result<csv::Writer<std::fs::File>, ApplicationError> {
+/// Finished CSV bytes; `into_inner` flushes the buffered writer.
+pub(crate) fn csv_bytes(writer: csv::Writer<Vec<u8>>) -> Result<Vec<u8>, ApplicationError> {
+    writer
+        .into_inner()
+        .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
+}
+
+/// Write a rendered export to `path`, creating missing parent directories.
+pub(crate) fn write_export_file(path: &str, bytes: &[u8]) -> Result<(), ApplicationError> {
     let destination = std::path::Path::new(path);
     if let Some(parent) = destination.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let file = std::fs::File::create(destination)?;
-    Ok(csv::Writer::from_writer(file))
+    std::fs::write(destination, bytes)?;
+    Ok(())
 }

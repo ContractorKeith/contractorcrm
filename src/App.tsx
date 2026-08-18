@@ -9,6 +9,7 @@ import { AttentionView } from "./views/attention";
 import { CompaniesView, CompanyDetailView, CompanyFormView } from "./views/companies";
 import { ContactDetailView, ContactFormView, ContactsView } from "./views/contacts";
 import { OpportunityDetailView, OpportunityFormView, PipelineView } from "./views/pipeline";
+import { SettingsView } from "./views/settings";
 import { TasksView } from "./views/tasks";
 
 interface AppProps {
@@ -22,6 +23,7 @@ type View =
   | { name: "pipeline" }
   | { name: "tasks" }
   | { name: "attention" }
+  | { name: "settings" }
   | { name: "contactDetail"; id: string }
   | { name: "companyDetail"; id: string }
   | { name: "opportunityDetail"; id: string }
@@ -67,7 +69,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
       ? "companies"
       : view.name === "pipeline" || view.name.startsWith("opportunity")
         ? "pipeline"
-        : view.name === "tasks" || view.name === "attention"
+        : view.name === "tasks" || view.name === "attention" || view.name === "settings"
           ? view.name
           : "contacts";
 
@@ -171,7 +173,18 @@ export function App({ client = tauriCoreClient }: AppProps) {
           >
             Attention
           </button>
+          <button
+            type="button"
+            aria-pressed={section === "settings"}
+            onClick={() => setView({ name: "settings" })}
+          >
+            Backup &amp; Data
+          </button>
         </nav>
+
+        {view.name === "settings" ? (
+          <SettingsView client={client} />
+        ) : null}
 
         {view.name === "contacts" ? (
           <ContactsView

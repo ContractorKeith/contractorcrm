@@ -60,6 +60,9 @@ import type {
   ContactImportSummary,
   CsvExportReport,
   ImportContactsRequest,
+  ArchiveExportReport,
+  ArchiveImportPreview,
+  ArchiveImportReport,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -136,6 +139,9 @@ export interface CoreClient {
   importContacts(request: ImportContactsRequest): Promise<ContactImportSummary>;
   exportContactsCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
   exportOpportunitiesCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
+  exportArchive(path: string, overwrite: boolean): Promise<ArchiveExportReport>;
+  previewArchiveImport(path: string): Promise<ArchiveImportPreview>;
+  importArchive(path: string): Promise<ArchiveImportReport>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -211,4 +217,7 @@ export const tauriCoreClient: CoreClient = {
   exportContactsCsv: (path, overwrite) => invoke("export_contacts_csv", { path, overwrite }),
   exportOpportunitiesCsv: (path, overwrite) =>
     invoke("export_opportunities_csv", { path, overwrite }),
+  exportArchive: (path, overwrite) => invoke("export_archive", { path, overwrite }),
+  previewArchiveImport: (path) => invoke("preview_archive_import", { path }),
+  importArchive: (path) => invoke("import_archive", { path }),
 };

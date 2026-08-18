@@ -517,6 +517,20 @@ impl Storage {
         Ok(storage)
     }
 
+    /// Fully migrated throwaway database that never touches the filesystem —
+    /// the archive import dry run applies an untrusted archive here first, so
+    /// constraint failures surface before the live database is touched.
+    pub fn open_in_memory() -> Result<Self, StorageError> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let mut storage = Self {
+            database_path: PathBuf::from(":memory:"),
+            connection,
+        };
+        storage.migrate(false)?;
+        Ok(storage)
+    }
+
     /// Open the database in the given application data directory (Tauri app
     /// data dir in production) under the default file name.
     pub fn open_in_app_data(app_data_dir: impl AsRef<Path>) -> Result<Self, StorageError> {
@@ -567,6 +581,26 @@ impl Storage {
             .execute("VACUUM INTO ?1", [destination_text])
             .map_err(|error| StorageError::BackupFailed(error.to_string()))?;
         Ok(())
+    }
+
+    /// Timestamped safety copy of the live database next to it, named
+    /// `<database>.<tag>-<stamp>.bak`. Used before destructive maintenance
+    /// (restore, archive import) so the previous state is always recoverable.
+    pub fn safety_copy(&self, tag: &str) -> Result<PathBuf, StorageError> {
+        let file_name = self
+            .database_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                StorageError::InvalidStoredData("database path has no file name".into())
+            })?
+            .to_string();
+        let stamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+        let safety_path = self
+            .database_path
+            .with_file_name(format!("{file_name}.{tag}-{stamp}.bak"));
+        self.connection.backup("main", &safety_path, None)?;
+        Ok(safety_path)
     }
 
     /// Verify a backup file without touching the live database: it must open
@@ -640,11 +674,7 @@ impl Storage {
             .to_string();
 
         // Consistent timestamped safety copy of the live database, next to it.
-        let stamp = Utc::now().format("%Y%m%dT%H%M%S%3fZ");
-        let safety_path = self
-            .database_path
-            .with_file_name(format!("{file_name}.pre-restore-{stamp}.bak"));
-        self.connection.backup("main", &safety_path, None)?;
+        let safety_path = self.safety_copy("pre-restore")?;
 
         // Close the live connection (swap in a throwaway in-memory one) so the
         // file can be replaced; drop the WAL/SHM sidecars with it.

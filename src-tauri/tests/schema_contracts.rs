@@ -1,9 +1,10 @@
 use contractorcrm_lib::{
     application::{
         ContactImportMapping, CreateTagRequest, CustomFieldValueInput, ImportContactsRequest,
-        SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter, SavedViewSort,
-        SavedViewSortDirection, SearchResult, SetRecordMetadataRequest,
+        ProductInfo, SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter,
+        SavedViewSort, SavedViewSortDirection, SearchResult, SetRecordMetadataRequest,
     },
+    archive::{ArchiveFileEntry, ArchiveIssue, ArchiveManifest, ARCHIVE_SCHEMA_VERSION},
     error::ApplicationError,
     storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
 };
@@ -525,6 +526,72 @@ fn tags_and_custom_fields_publish_strict_bounded_wire_types() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn portable_archive_publishes_strict_bounded_wire_types() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for name in ["export_archive", "preview_archive_import", "import_archive"] {
+        assert!(
+            commands.iter().any(|command| command["name"] == name),
+            "missing {name}"
+        );
+    }
+    for strict_type in [
+        "ProductInfo",
+        "ArchiveFileEntry",
+        "ArchiveManifest",
+        "ArchiveIssue",
+        "ArchiveExportReport",
+        "ArchiveImportPreview",
+        "ArchiveImportReport",
+    ] {
+        assert_eq!(
+            schema["wireTypes"][strict_type]["additionalProperties"], false,
+            "{strict_type} must reject unknown fields"
+        );
+    }
+    // The published manifest shape is exactly what the exporter writes.
+    let manifest = serde_json::to_value(ArchiveManifest {
+        schema_version: ARCHIVE_SCHEMA_VERSION,
+        product: ProductInfo {
+            name: "ContractorCRM".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        exported_at: "2026-08-18T00:00:00.000Z".into(),
+        database_migration_version: storage::latest_migration_version(),
+        files: vec![ArchiveFileEntry {
+            path: "data/contacts.json".into(),
+            sha256: "0".repeat(64),
+            bytes: 2,
+        }],
+        record_counts: BTreeMap::from([("contacts".to_owned(), 1)]),
+    })
+    .expect("serialize manifest");
+    let mut actual_fields = manifest
+        .as_object()
+        .expect("manifest is an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual_fields.sort();
+    let mut expected_fields = string_array(&schema["wireTypes"]["ArchiveManifest"], "required");
+    expected_fields.sort();
+    assert_eq!(actual_fields, expected_fields);
+    assert_eq!(
+        schema["wireTypes"]["ArchiveManifest"]["properties"]["schemaVersion"]["const"],
+        ARCHIVE_SCHEMA_VERSION
+    );
+    assert_eq!(
+        manifest["files"][0]["sha256"].as_str().map(str::len),
+        Some(64)
+    );
+
+    assert!(serde_json::from_value::<ArchiveIssue>(serde_json::json!({
+        "code": "checksum_mismatch", "message": "bad", "unexpected": true
+    }))
+    .is_err());
 }
 
 #[test]
