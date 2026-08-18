@@ -2,7 +2,9 @@
 
 Issue: #19
 Status: implemented
-Updated: 2026-08-18 (review round: patch-semantics import, guarded exports)
+Updated: 2026-08-18 (review round: patch-semantics import, guarded exports;
+micro-update: round-trip-safe formula escaping, trailing-comma tolerance,
+curated display-name preservation)
 
 ## Boundary
 
@@ -63,6 +65,29 @@ of custom field values.
   which discarded secondary phones/emails on every re-import. The first
   channel of a kind for a contact still claims `preferred`; an existing
   preferred channel keeps that status.
+- **Curated display names are never overwritten by a name column
+  (micro-update).** A mapped first/last-name cell only re-derives
+  `display_name` when the stored `display_name` was itself derived from the
+  stored name parts (i.e. it still matches what `derive_display_name` would
+  produce today). If the stored `display_name` was hand-edited/curated, a
+  first/last-name column in the import file leaves it alone — only an
+  explicitly mapped `displayName` column can change a curated name. This
+  refines the original "any name column re-derives display_name" behavior,
+  which could silently discard a curated name on re-import.
+- **Formula-injection escaping round-trips (micro-update).** `mapped_cell`
+  strips exactly one leading `'` from an import cell when that quote is
+  immediately followed by a formula-trigger character (`= + - @` TAB or CR) —
+  undoing the export guard below — before the cell is trimmed/validated. A
+  file this app exported (with `'=SUM(...)`-style escaping) therefore
+  round-trips byte-for-byte on re-import instead of accumulating quotes or
+  misreading `'+1 555 0100'` as a literal quoted phone number. A `'` not
+  followed by a trigger character is left as ordinary data.
+- **Trailing empty header columns are tolerated (micro-update).** A
+  hand-edited file ending in a trailing comma (e.g. `Name,Email,`) has its
+  trailing empty header column — and the cells under it — dropped before
+  header validation runs, rather than being rejected outright. An interior
+  blank header or a duplicate header (anywhere in the row, before or after
+  trailing-empty-column trimming) is still rejected as `invalid_input`.
 - **Archived contacts are never resurrected by import (review-round fix).** A
   row whose `external_id`/id matches an archived contact is skipped with a
   reason instead of being written to (which would have silently un-hidden
@@ -74,15 +99,20 @@ of custom field values.
   instead of silently clobbering it. Each export writes one `command_log` row
   (`entity_type: "export"`, actor `user`) so exports are auditable like every
   other write.
-- **Formula-injection guard on export (review-round fix).** A cell whose first
-  character is `=`, `+`, `-`, `@`, a tab, or a carriage return is prefixed with
-  `'` before writing, so a malicious or auto-generated field value can't
-  execute as a formula when the CSV is opened in Excel/Sheets.
-- **Header and encoding validation (review-round fix).** Reading a CSV file
-  (preview or import) rejects duplicate or empty header names as
+- **Formula-injection guard on export (review-round fix; round-trip-safe as of
+  the micro-update above).** A cell whose first character is `=`, `+`, `-`,
+  `@`, a tab, or a carriage return is prefixed with exactly one `'` before
+  writing, so a malicious or auto-generated field value can't execute as a
+  formula when the CSV is opened in Excel/Sheets. Import strips that same
+  single leading quote back off (see above), so the guard doesn't corrupt an
+  export/import round trip.
+- **Header and encoding validation (review-round fix; trailing columns
+  tolerated as of the micro-update above).** Reading a CSV file (preview or
+  import) rejects an interior blank header or a duplicate header name as
   `invalid_input` — a duplicate header would silently lose data because only
-  its first column is ever read by name. Non-UTF-8/malformed files fail as
-  `invalid_input` with re-save-as-UTF-8 guidance instead of surfacing as an
+  its first column is ever read by name. A trailing empty header column is
+  dropped and tolerated rather than rejected. Non-UTF-8/malformed files fail
+  as `invalid_input` with re-save-as-UTF-8 guidance instead of surfacing as an
   opaque IO error.
 
 ## Persistence contract
@@ -113,8 +143,9 @@ The versioned local API adds four commands (`schemas/v1/local-api.json`):
 `propertyType`, `notes`, `company`, `email`, `phone`, `tags`), the CSV header
 it reads from; unset targets are simply not imported. An unknown header in an
 explicit mapping is a caller (`invalid_input`) error, not a per-row problem.
-Reading a file (preview or import) also rejects duplicate or empty headers,
-and non-UTF-8/malformed content, as `invalid_input`.
+Reading a file (preview or import) drops a trailing empty header column (and
+its cells) before validating, then rejects an interior blank header, a
+duplicate header, or non-UTF-8/malformed content, as `invalid_input`.
 
 For a new contact, each row is validated through the same contact validation
 interactive writes use, with `kind` defaulting to `client` when unmapped, so
@@ -141,7 +172,9 @@ Both exports include only active (non-archived) records, ordered by
 name/display name then id, create missing parent directories for the
 destination path, reject an existing destination unless `overwrite` is true
 (`validation_failed` / `destination_exists`), sanitize formula-triggering
-cells, and log one `command_log` row (`entity_type: "export"`) per run.
+cells with exactly one leading `'` (which `import_contacts` strips back off,
+keeping the guard round-trip-safe), and log one `command_log` row
+(`entity_type: "export"`) per run.
 
 ## Verification
 
@@ -149,16 +182,19 @@ cells, and log one `command_log` row (`entity_type: "export"`) per run.
 
 - Preview: mapping auto-guess plus reported row issues without writing;
   honoring an explicit mapping and rejecting unknown columns; sampling at most
-  50 rows while still counting all of them; duplicate/empty headers rejected;
-  non-UTF-8 files reported as an encoding error rather than a storage failure.
+  50 rows while still counting all of them; duplicate/interior-empty headers
+  rejected; trailing empty header columns tolerated; non-UTF-8 files reported
+  as an encoding error rather than a storage failure.
 - Import: creating contacts, companies, and tags with `import`-actor command
   log rows; updating matched contacts by external id while skipping invalid
   rows; atomicity (a forced failure leaves nothing behind); RFC 4180 edge
   cases (quoted commas, embedded newlines, blank rows); updates are patches
   that never clear unmapped or blank fields; rows matching archived contacts
-  are skipped and the archived contact is left untouched.
+  are skipped and the archived contact is left untouched; curated display
+  names survive a name-column import.
 - Export: contact export carries metadata columns and round-trips without
   creating duplicates on re-import; opportunity export writes major-unit
   values, stage names, and metadata columns; exports create missing
   directories and refuse to clobber an existing file without `overwrite`;
-  exports neutralize spreadsheet-formula-triggering cells.
+  exports neutralize spreadsheet-formula-triggering cells; a formula-guarded
+  export round-trips byte-for-byte back through import.
