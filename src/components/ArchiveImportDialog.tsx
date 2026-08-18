@@ -30,6 +30,10 @@ const TABLE_LABELS: Record<string, string> = {
   custom_field_values: "Custom field values",
 };
 
+// The core caps issues, but a hostile archive can still carry enough to flood
+// the dialog — show the first slice and count the rest.
+const SHOWN_ISSUES = 50;
+
 function tableLabel(table: string): string {
   return TABLE_LABELS[table] ?? table.replace(/_/g, " ");
 }
@@ -81,6 +85,9 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
   const [preview, setPreview] = useState<ArchiveImportPreview | null>(null);
   const [report, setReport] = useState<ArchiveImportReport | null>(null);
   const [busy, setBusy] = useState(true);
+  // True only while the core is replacing the database — the dialog is sealed
+  // shut for that window so the report and safety backup path cannot be lost.
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -119,6 +126,7 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
 
   const runImport = async () => {
     setBusy(true);
+    setImporting(true);
     try {
       setReport(await client.importArchive(path));
       setError(null);
@@ -127,6 +135,7 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
         isCommandError(rejection) ? rejection.message : "The archive could not be imported.",
       );
     } finally {
+      setImporting(false);
       setBusy(false);
     }
   };
@@ -134,7 +143,9 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
   const trapFocus = (event: React.KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose(report !== null);
+      // Never leave mid-import: the database is being replaced and the caller
+      // still needs the report and the safety backup path.
+      if (!importing) onClose(report !== null);
       return;
     }
     if (event.key !== "Tab") return;
@@ -210,10 +221,13 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
               <div className="archive-import__blocked">
                 <p role="alert">This archive can't be imported.</p>
                 <ul aria-label="Archive problems">
-                  {preview.issues.map((archiveIssue, index) => (
+                  {preview.issues.slice(0, SHOWN_ISSUES).map((archiveIssue, index) => (
                     <li key={index}>{archiveIssue.message}</li>
                   ))}
                 </ul>
+                {preview.issues.length > SHOWN_ISSUES ? (
+                  <p>…and {preview.issues.length - SHOWN_ISSUES} more issues.</p>
+                ) : null}
               </div>
             ) : (
               <div className="archive-import__warning">
@@ -236,6 +250,7 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
             ref={closeRef}
             type="button"
             className="button"
+            disabled={importing}
             onClick={() => onClose(report !== null)}
           >
             {report ? "Done" : "Cancel"}

@@ -99,7 +99,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
     schemaVersion: 1,
     product: { name: "ContractorCRM", version: "0.1.0" },
     exportedAt: "2026-08-18T12:00:00Z",
-    databaseMigrationVersion: 8,
+    databaseMigrationVersion: 9,
     recordCounts: {},
     issues: [],
   }),

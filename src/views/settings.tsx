@@ -7,8 +7,6 @@ import { ArchiveImportDialog, totalRecords } from "../components/ArchiveImportDi
 
 interface SettingsViewProps {
   client: CoreClient;
-  /** Called after an import replaced every record, so live views re-query. */
-  onDataReplaced: () => void;
 }
 
 // contractorcrm-archive-YYYY-MM-DD.zip in the user's local date.
@@ -22,7 +20,7 @@ function suggestedArchiveName(today = new Date()): string {
 }
 
 /** Backup & Data: portable archive export and import for this device. */
-export function SettingsView({ client, onDataReplaced }: SettingsViewProps) {
+export function SettingsView({ client }: SettingsViewProps) {
   const [importPath, setImportPath] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -75,9 +73,10 @@ export function SettingsView({ client, onDataReplaced }: SettingsViewProps) {
       <div className="data-section">
         <h3>Portable archive</h3>
         <p>
-          A portable archive is a single file holding every contact, company, opportunity,
-          activity, task, tag, and saved view on this device — keep it as a backup or move your
-          CRM to another machine.
+          A portable archive is a single file holding your CRM records — contacts, companies,
+          opportunities, activities, tasks, tags, and saved views. Keep it as a backup or move
+          your records to another machine. App preferences such as attention thresholds stay on
+          this device and do not travel with the archive.
         </p>
         <div className="data-section__actions">
           <button type="button" className="button" onClick={() => void exportArchive()}>
@@ -103,10 +102,9 @@ export function SettingsView({ client, onDataReplaced }: SettingsViewProps) {
           path={importPath}
           onClose={(imported) => {
             setImportPath(null);
-            if (imported) {
-              setStatus("Archive imported — all records were replaced.");
-              onDataReplaced();
-            }
+            // Record views re-query when they mount, so navigating back to
+            // them after an import always reads the replaced database.
+            if (imported) setStatus("Archive imported — all records were replaced.");
           }}
         />
       ) : null}

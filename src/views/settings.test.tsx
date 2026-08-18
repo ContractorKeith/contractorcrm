@@ -77,7 +77,9 @@ describe("backup and data view", () => {
     expect(await screen.findByText("/tmp/crm.zip already exists")).toBeVisible();
   });
 
-  it("previews a picked archive, replaces the data on confirm, and reloads the record views", async () => {
+  // Record views re-query on mount, so returning to Contacts reads the
+  // replaced database rather than the rows loaded before the import.
+  it("previews a picked archive, replaces the data on confirm, and shows the restored records", async () => {
     const user = userEvent.setup();
     vi.mocked(open).mockResolvedValue("/tmp/crm.zip");
     const listContacts = vi
@@ -90,7 +92,7 @@ describe("backup and data view", () => {
         schemaVersion: 1,
         product: { name: "ContractorCRM", version: "0.1.0" },
         exportedAt: "2026-08-18T15:30:00Z",
-        databaseMigrationVersion: 8,
+        databaseMigrationVersion: 9,
         recordCounts: { contacts: 12 },
         issues: [],
       }),

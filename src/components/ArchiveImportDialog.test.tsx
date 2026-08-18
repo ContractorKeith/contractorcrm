@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ArchiveImportPreview } from "../api/types";
+import type { ArchiveImportPreview, ArchiveImportReport } from "../api/types";
 import { stubClient } from "../test/stub-client";
 import { ArchiveImportDialog } from "./ArchiveImportDialog";
 
@@ -10,7 +10,7 @@ const preview = (overrides: Partial<ArchiveImportPreview> = {}): ArchiveImportPr
   schemaVersion: 1,
   product: { name: "ContractorCRM", version: "0.1.0" },
   exportedAt: "2026-08-18T15:30:00Z",
-  databaseMigrationVersion: 8,
+  databaseMigrationVersion: 9,
   recordCounts: { contacts: 12, companies: 3, tasks: 5 },
   issues: [],
   ...overrides,
@@ -26,7 +26,7 @@ describe("ArchiveImportDialog", () => {
 
     expect(await screen.findByText("ContractorCRM 0.1.0")).toBeVisible();
     expect(client.previewArchiveImport).toHaveBeenCalledWith("/tmp/crm.zip");
-    expect(screen.getByText("Version 1 · database 8")).toBeVisible();
+    expect(screen.getByText("Version 1 · database 9")).toBeVisible();
     const counts = screen.getByRole("table", { name: "Records in this archive" });
     expect(within(counts).getByRole("rowheader", { name: "Contacts" })).toBeVisible();
     expect(within(counts).getByRole("rowheader", { name: "Total" })).toBeVisible();
@@ -92,6 +92,56 @@ describe("ArchiveImportDialog", () => {
     expect(within(problems).getByText("archive has no data/tasks.json")).toBeVisible();
     expect(screen.getByRole("button", { name: "Replace all data and import" })).toBeDisabled();
     expect(screen.queryByText(/Importing replaces all current CRM data/)).not.toBeInTheDocument();
+  });
+
+  it("caps a flood of problems and counts the rest", async () => {
+    const issues = Array.from({ length: 80 }, (_index, number) => ({
+      code: "invalid_value",
+      message: `contacts row ${number} field "kind" must be text`,
+    }));
+    const client = stubClient({
+      previewArchiveImport: vi.fn().mockResolvedValue(preview({ issues })),
+    });
+
+    render(<ArchiveImportDialog client={client} path="/tmp/crm.zip" onClose={vi.fn()} />);
+
+    const problems = await screen.findByRole("list", { name: "Archive problems" });
+    expect(within(problems).getAllByRole("listitem")).toHaveLength(50);
+    expect(screen.getByText("…and 30 more issues.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Replace all data and import" })).toBeDisabled();
+  });
+
+  it("stays open while the core is replacing the database", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    let finishImport = (_report: ArchiveImportReport) => {};
+    const client = stubClient({
+      previewArchiveImport: vi.fn().mockResolvedValue(preview()),
+      importArchive: vi.fn().mockReturnValue(
+        new Promise<ArchiveImportReport>((resolve) => {
+          finishImport = resolve;
+        }),
+      ),
+    });
+
+    render(<ArchiveImportDialog client={client} path="/tmp/crm.zip" onClose={onClose} />);
+    await user.click(await screen.findByRole("button", { name: "Replace all data and import" }));
+
+    // Escape and Cancel are both inert until the import reports back.
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Import portable archive" })).toBeVisible();
+
+    finishImport({
+      recordCounts: { contacts: 12 },
+      safetyBackupPath: "/backups/pre-import.sqlite3",
+    });
+
+    expect(await screen.findByText("Archive imported — 12 records restored.")).toBeVisible();
+    expect(screen.getByText(/\/backups\/pre-import\.sqlite3/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledWith(true);
   });
 
   it("surfaces the core's message when the archive cannot be read at all", async () => {
