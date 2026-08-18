@@ -242,16 +242,15 @@ fn import_updates_by_external_id_and_skips_invalid_rows() {
     assert_eq!(after.display_name, "Dana Reyes-Kim");
     assert_eq!(after.city.as_deref(), Some("Gainesville"));
     assert_eq!(after.version, before.version + 1);
-    // Channel replacement is per kind: the new phone replaced the old one.
-    assert_eq!(after.channels.len(), 2);
-    assert!(after
+    // Channels are additive: the new phone joins the old one, the unchanged
+    // email is not duplicated.
+    let mut values = after
         .channels
         .iter()
-        .any(|channel| channel.value == "555-0199"));
-    assert!(!after
-        .channels
-        .iter()
-        .any(|channel| channel.value == "555-0100"));
+        .map(|channel| channel.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    assert_eq!(values, ["555-0100", "555-0199", "dana@ridgeline.test"]);
     // A second company was created for the new row only.
     assert_eq!(
         contractorcrm_lib::application::list_companies(&storage, true)
@@ -323,7 +322,7 @@ fn import_handles_quoted_commas_newlines_and_blank_rows() {
 
     // Exports quote the same values back out and re-import unchanged.
     let export_path = temp.path().join("out.csv");
-    export_contacts_csv(&storage, export_path.to_str().unwrap()).unwrap();
+    export_contacts_csv(&mut storage, export_path.to_str().unwrap(), false).unwrap();
     let exported = text(&export_path);
     assert!(exported.contains("\"Reyes, Dana\""));
     assert!(exported.contains("\"Line one\nLine two, with comma\""));
@@ -389,7 +388,7 @@ fn contact_export_carries_metadata_columns_and_round_trips_without_creates() {
     .unwrap();
 
     let export_path = temp.path().join("contacts.csv");
-    let report = export_contacts_csv(&storage, export_path.to_str().unwrap()).unwrap();
+    let report = export_contacts_csv(&mut storage, export_path.to_str().unwrap(), false).unwrap();
     assert_eq!(report.row_count, 1);
     let exported = text(&export_path);
     let header = exported.lines().next().unwrap();
@@ -423,6 +422,18 @@ fn contact_export_carries_metadata_columns_and_round_trips_without_creates() {
     let reloaded = get_contact(&storage, &contact.id).unwrap();
     assert_eq!(reloaded.display_name, "Dana Reyes");
     assert_eq!(reloaded.notes.as_deref(), Some("Repeat client"));
+    // The secondary email the export could not carry must survive re-import.
+    let mut values = reloaded
+        .channels
+        .iter()
+        .map(|channel| channel.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    assert_eq!(
+        values,
+        ["555-0100", "dana@ridgeline.test", "second@ridgeline.test"]
+    );
+    assert_eq!(reloaded.channels.len(), contact.channels.len());
 }
 
 #[test]
@@ -482,7 +493,8 @@ fn opportunity_export_writes_major_units_stage_and_metadata_columns() {
     .unwrap();
 
     let export_path = temp.path().join("opportunities.csv");
-    let report = export_opportunities_csv(&storage, export_path.to_str().unwrap()).unwrap();
+    let report =
+        export_opportunities_csv(&mut storage, export_path.to_str().unwrap(), false).unwrap();
     assert_eq!(report.row_count, 1);
     let exported = text(&export_path);
     assert_eq!(
@@ -498,7 +510,7 @@ fn opportunity_export_writes_major_units_stage_and_metadata_columns() {
 }
 
 #[test]
-fn export_to_a_missing_directory_creates_it_and_overwrites_existing_files() {
+fn export_creates_missing_directories_and_refuses_to_clobber_without_overwrite() {
     let (temp, mut storage) = fixture();
     create_contact(
         &mut storage,
@@ -510,7 +522,7 @@ fn export_to_a_missing_directory_creates_it_and_overwrites_existing_files() {
     .unwrap();
 
     let nested = temp.path().join("exports").join("contacts.csv");
-    export_contacts_csv(&storage, nested.to_str().unwrap()).unwrap();
+    export_contacts_csv(&mut storage, nested.to_str().unwrap(), false).unwrap();
     assert!(nested.is_file());
     let first = text(&nested);
 
@@ -522,7 +534,235 @@ fn export_to_a_missing_directory_creates_it_and_overwrites_existing_files() {
         .unwrap(),
     )
     .unwrap();
-    let report = export_contacts_csv(&storage, nested.to_str().unwrap()).unwrap();
+
+    // An existing file is never silently replaced.
+    let error = export_contacts_csv(&mut storage, nested.to_str().unwrap(), false).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("already exists"));
+    assert_eq!(first, text(&nested));
+
+    let report = export_contacts_csv(&mut storage, nested.to_str().unwrap(), true).unwrap();
     assert_eq!(report.row_count, 2);
     assert_ne!(first, text(&nested));
+
+    // Opportunity exports guard the same way.
+    let opportunities = temp.path().join("exports").join("opportunities.csv");
+    export_opportunities_csv(&mut storage, opportunities.to_str().unwrap(), false).unwrap();
+    let error =
+        export_opportunities_csv(&mut storage, opportunities.to_str().unwrap(), false).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+
+    // Both exports are recorded in the command log.
+    let logged: Vec<String> = {
+        let mut statement = storage
+            .connection()
+            .prepare("SELECT entity_id FROM command_log WHERE entity_type='export' ORDER BY id")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap();
+        rows
+    };
+    assert_eq!(logged, ["contacts", "contacts", "opportunities"]);
+}
+
+#[test]
+fn import_updates_are_patches_that_never_clear_unmapped_or_blank_fields() {
+    let (temp, mut storage) = fixture();
+    let first = write_csv(&temp, "first.csv", SAMPLE);
+    let mapping = preview_contact_import(first.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: first.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    let before = contact_by_display_name(&storage, "Dana Reyes");
+    assert!(before.company_id.is_some());
+
+    // A narrow file with only id, name, and phone must leave everything else
+    // alone, including a blank cell in a mapped column.
+    let narrow = write_csv(
+        &temp,
+        "narrow.csv",
+        "External ID,Display Name,Phone Number,City\n\
+         crm-1,Dana Reyes,555-0199,\n",
+    );
+    let mapping = preview_contact_import(narrow.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    let summary = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: narrow.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.updated, 1);
+    assert_eq!(summary.created, 0);
+
+    let after = get_contact(&storage, &before.id).unwrap();
+    assert_eq!(after.kind, before.kind);
+    assert_eq!(after.company_id, before.company_id);
+    assert_eq!(after.city, before.city); // blank cell kept "Ocala"
+    assert_eq!(after.first_name, before.first_name);
+    assert_eq!(after.last_name, before.last_name);
+    assert_eq!(after.display_name, "Dana Reyes");
+    assert_eq!(after.version, before.version + 1);
+    // Channels are additive: the new phone joins the old ones.
+    let mut values = after
+        .channels
+        .iter()
+        .map(|channel| channel.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    assert_eq!(values, ["555-0100", "555-0199", "dana@ridgeline.test"]);
+    assert!(after
+        .channels
+        .iter()
+        .any(|channel| channel.value == "555-0100" && channel.preferred));
+
+    // Re-running the same file adds nothing new.
+    let mapping = preview_contact_import(narrow.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: narrow.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        get_contact(&storage, &before.id).unwrap().channels.len(),
+        after.channels.len()
+    );
+}
+
+#[test]
+fn import_skips_rows_matching_archived_contacts() {
+    let (temp, mut storage) = fixture();
+    let path = write_csv(&temp, "contacts.csv", SAMPLE);
+    let mapping = preview_contact_import(path.to_str().unwrap(), None)
+        .unwrap()
+        .mapping;
+    import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: path.to_str().unwrap().into(),
+            mapping: mapping.clone(),
+        },
+    )
+    .unwrap();
+    let dana = contact_by_display_name(&storage, "Dana Reyes");
+    contractorcrm_lib::application::archive_contact(
+        &mut storage,
+        contractorcrm_lib::application::ArchiveRequest {
+            actor: Actor::User,
+            id: dana.id.clone(),
+            expected_version: dana.version,
+        },
+    )
+    .unwrap();
+
+    let summary = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: path.to_str().unwrap().into(),
+            mapping,
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.created, 0);
+    assert_eq!(summary.updated, 1); // the other row still updates
+    assert_eq!(summary.skipped.len(), 1);
+    assert_eq!(summary.skipped[0].line, 2);
+    assert!(summary.skipped[0].reason.contains("archived contact"));
+    assert!(summary.skipped[0].reason.contains(&dana.id));
+    let unchanged = get_contact(&storage, &dana.id).unwrap();
+    assert_eq!(unchanged.version, dana.version + 1); // archive only
+}
+
+#[test]
+fn duplicate_and_empty_headers_are_rejected() {
+    let (temp, mut storage) = fixture();
+    let duplicate = write_csv(
+        &temp,
+        "duplicate.csv",
+        "Name,Email,Email\nDana Reyes,a@test,b@test\n",
+    );
+    let error = preview_contact_import(duplicate.to_str().unwrap(), None).unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+    assert!(error.to_string().contains("duplicate column header"));
+    let error = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::Import,
+            path: duplicate.to_str().unwrap().into(),
+            mapping: ContactImportMapping {
+                display_name: Some("Name".into()),
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+
+    let empty = write_csv(&temp, "empty.csv", "Name,,City\nDana Reyes,x,Ocala\n");
+    let error = preview_contact_import(empty.to_str().unwrap(), None).unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+    assert!(error.to_string().contains("empty header"));
+    assert!(list_contacts(&storage, true).unwrap().is_empty());
+}
+
+#[test]
+fn non_utf8_files_report_an_encoding_error_not_a_storage_failure() {
+    let (temp, _storage) = fixture();
+    let path = temp.path().join("cp1252.csv");
+    // "Se\xf1or" as Windows-1252 — invalid UTF-8.
+    let mut bytes = b"Name,City\n".to_vec();
+    bytes.extend_from_slice(&[0x53, 0x65, 0xf1, 0x6f, 0x72]);
+    bytes.extend_from_slice(b",Ocala\n");
+    std::fs::write(&path, bytes).unwrap();
+
+    let error = preview_contact_import(path.to_str().unwrap(), None).unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+    assert!(error.to_string().contains("UTF-8"));
+}
+
+#[test]
+fn exports_neutralize_spreadsheet_formulas() {
+    let (temp, mut storage) = fixture();
+    create_contact(
+        &mut storage,
+        serde_json::from_value::<CreateContactRequest>(serde_json::json!({
+            "displayName": "=HYPERLINK(\"http://evil.test\",\"click\")",
+            "kind": "client",
+            "notes": "+1 (555) 0100",
+            "city": "@home"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let export_path = temp.path().join("contacts.csv");
+    export_contacts_csv(&mut storage, export_path.to_str().unwrap(), false).unwrap();
+    let exported = text(&export_path);
+    assert!(exported.contains("\"'=HYPERLINK("));
+    assert!(exported.contains("'+1 (555) 0100"));
+    assert!(exported.contains("'@home"));
+    assert!(!exported.contains(",=HYPERLINK"));
 }

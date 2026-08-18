@@ -5698,8 +5698,10 @@ fn log_command(
 
 /// Sample rows returned by the import preview.
 const IMPORT_SAMPLE_ROWS: usize = 50;
-/// Default contact kind when the CSV has no usable kind column.
+/// Contact kind used for records an import creates without a kind column.
 const IMPORT_DEFAULT_KIND: &str = "client";
+/// Leading characters spreadsheets treat as the start of a formula.
+const FORMULA_PREFIXES: [char; 5] = ['=', '+', '-', '@', '\t'];
 
 /// Import targets in mapping order with the header aliases the auto-guess
 /// accepts. Aliases are normalized (lowercase, alphanumeric only) and the
@@ -5907,13 +5909,23 @@ pub struct CsvExportReport {
     pub row_count: usize,
 }
 
-/// A prepared import row: validated contact fields plus the side references
-/// resolved against the database while applying.
+/// A prepared import row. `patch` holds only the cells the file actually
+/// carried (blank cells are None) so updates can leave everything else alone;
+/// `fields` is the validated create shape with import defaults applied.
 struct PreparedImportRow {
+    line: u64,
+    patch: ContactPatch,
+    kind_mapped: bool,
     fields: ValidContactFields,
     external_id: Option<String>,
     company_name: Option<String>,
     tags: Vec<String>,
+}
+
+/// An existing contact an import row matched.
+struct ImportMatch {
+    id: String,
+    archived: bool,
 }
 
 /// Parse a CSV file's header and rows without touching the database.
@@ -5947,7 +5959,9 @@ pub fn preview_contact_import(
 
 /// Apply a whole mapped CSV file: valid rows are created or updated by external
 /// id, invalid rows are skipped and reported. One immediate transaction covers
-/// the file, so a failure leaves the database untouched.
+/// the file, so a failure leaves the database untouched. Updates are patches —
+/// a column the file does not carry (or carries blank) never clears a stored
+/// value, and channels are only ever added.
 pub fn import_contacts(
     storage: &mut Storage,
     request: ImportContactsRequest,
@@ -5973,15 +5987,20 @@ pub fn import_contacts(
             Some(name) => Some(resolve_import_company(&transaction, name, actor)?),
             None => None,
         };
-        let mut fields = row.fields;
-        fields.company_id = company_id;
         match find_contact_for_import(&transaction, row.external_id.as_deref())? {
-            Some(contact_id) => {
-                update_imported_contact(&transaction, &contact_id, &fields, actor)?;
-                apply_import_tags(&transaction, &contact_id, &row.tags, actor)?;
+            // Archived contacts stay out of the way of imports; unarchive first.
+            Some(matched) if matched.archived => skipped.push(ContactImportIssue {
+                line: row.line,
+                reason: format!("matches archived contact {}", matched.id),
+            }),
+            Some(matched) => {
+                update_imported_contact(&transaction, &matched.id, &row, company_id, actor)?;
+                apply_import_tags(&transaction, &matched.id, &row.tags, actor)?;
                 updated += 1;
             }
             None => {
+                let mut fields = row.fields;
+                fields.company_id = company_id;
                 let contact_id = insert_imported_contact(
                     &transaction,
                     &fields,
@@ -5994,6 +6013,7 @@ pub fn import_contacts(
         }
     }
     transaction.commit()?;
+    skipped.sort_by_key(|issue| issue.line);
     Ok(ContactImportSummary {
         created,
         updated,
@@ -6005,9 +6025,11 @@ pub fn import_contacts(
 /// field definition. The `external_id` column falls back to the record id so an
 /// exported file re-imports onto the same records.
 pub fn export_contacts_csv(
-    storage: &Storage,
+    storage: &mut Storage,
     path: &str,
+    overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
+    let path = check_export_destination(path, overwrite)?;
     let connection = storage.connection();
     let definitions = export_custom_field_defs(connection, "contact")?;
     let values = export_custom_field_values(connection, "contact")?;
@@ -6057,18 +6079,16 @@ pub fn export_contacts_csv(
          WHERE c.archived_at IS NULL
          ORDER BY c.display_name, c.id",
     )?;
+    // Rows are collected before writing; contractor-scale contact books are
+    // small enough that double-buffering the file is not worth streaming.
     let rows = statement
         .query_map([], |row| {
+            let favorite: bool = row.get(15)?;
             let mut cells = Vec::with_capacity(headers.len());
-            for index in 0..16 {
-                cells.push(match index {
-                    15 => {
-                        let favorite: bool = row.get(15)?;
-                        favorite.to_string()
-                    }
-                    _ => row.get::<_, Option<String>>(index)?.unwrap_or_default(),
-                });
+            for index in 0..15 {
+                cells.push(row.get::<_, Option<String>>(index)?.unwrap_or_default());
             }
+            cells.push(favorite.to_string());
             for index in 16..19 {
                 cells.push(row.get::<_, Option<String>>(index)?.unwrap_or_default());
             }
@@ -6083,8 +6103,8 @@ pub fn export_contacts_csv(
     drop(statement);
 
     let tags = export_tags(connection, "contact")?;
-    let mut writer = open_csv_writer(path)?;
-    writer.write_record(&headers).map_err(csv_error)?;
+    let mut writer = open_csv_writer(&path)?;
+    write_export_record(&mut writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6098,21 +6118,21 @@ pub fn export_contacts_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        writer.write_record(&cells).map_err(csv_error)?;
+        write_export_record(&mut writer, &cells)?;
     }
     writer.flush()?;
-    Ok(CsvExportReport {
-        path: path.to_owned(),
-        row_count,
-    })
+    log_export(storage, "contacts", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
 }
 
 /// Write every active opportunity to a CSV file; money is exported in major
 /// units with a separate currency column.
 pub fn export_opportunities_csv(
-    storage: &Storage,
+    storage: &mut Storage,
     path: &str,
+    overwrite: bool,
 ) -> Result<CsvExportReport, ApplicationError> {
+    let path = check_export_destination(path, overwrite)?;
     let connection = storage.connection();
     let definitions = export_custom_field_defs(connection, "opportunity")?;
     let values = export_custom_field_values(connection, "opportunity")?;
@@ -6179,8 +6199,8 @@ pub fn export_opportunities_csv(
     drop(statement);
 
     let tags = export_tags(connection, "opportunity")?;
-    let mut writer = open_csv_writer(path)?;
-    writer.write_record(&headers).map_err(csv_error)?;
+    let mut writer = open_csv_writer(&path)?;
+    write_export_record(&mut writer, &headers)?;
     let row_count = rows.len();
     for (id, mut cells, created_at, updated_at) in rows {
         cells.push(tags.get(&id).cloned().unwrap_or_default());
@@ -6194,27 +6214,38 @@ pub fn export_opportunities_csv(
         }
         cells.push(created_at);
         cells.push(updated_at);
-        writer.write_record(&cells).map_err(csv_error)?;
+        write_export_record(&mut writer, &cells)?;
     }
     writer.flush()?;
-    Ok(CsvExportReport {
-        path: path.to_owned(),
-        row_count,
-    })
+    log_export(storage, "opportunities", row_count, &path)?;
+    Ok(CsvExportReport { path, row_count })
 }
 
 /// Effective column positions for the mapped targets, resolved once per file.
 type MappingIndexes = std::collections::BTreeMap<&'static str, usize>;
 
-fn csv_error(error: csv::Error) -> ApplicationError {
-    ApplicationError::Io(std::io::Error::other(error.to_string()))
-}
-
 /// A parsed CSV file: header names plus each data record with its line number.
 type CsvFile = (Vec<String>, Vec<(u64, csv::StringRecord)>);
 
+/// Malformed or non-UTF-8 files are caller errors, not storage failures, so
+/// they surface as invalid input with a message a user can act on.
+fn csv_parse_error(path: &str, error: csv::Error) -> ApplicationError {
+    let message = match error.kind() {
+        csv::ErrorKind::Utf8 { .. } => format!(
+            "\"{path}\" is not UTF-8 text; re-save it as CSV UTF-8 \
+             (Excel: \"CSV UTF-8 (Comma delimited)\")"
+        ),
+        _ => format!("cannot read \"{path}\": {error}"),
+    };
+    ApplicationError::InvalidInput {
+        field: "path".into(),
+        message,
+    }
+}
+
 /// Read a CSV file into its headers plus every data record with its line
-/// number. Ragged rows are tolerated; missing cells read as empty.
+/// number. Ragged rows are tolerated; missing cells read as empty. The whole
+/// file is buffered — contractor-scale contact lists make streaming needless.
 fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
     let file = std::fs::File::open(&path).map_err(|error| ApplicationError::InvalidInput {
@@ -6224,13 +6255,14 @@ fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(file);
     let headers = reader
         .headers()
-        .map_err(csv_error)?
+        .map_err(|error| csv_parse_error(&path, error))?
         .iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    validate_csv_headers(&headers)?;
     let mut records = Vec::new();
     for record in reader.records() {
-        let record = record.map_err(csv_error)?;
+        let record = record.map_err(|error| csv_parse_error(&path, error))?;
         // Skip rows that are entirely blank — trailing newlines are common.
         if record.iter().all(|cell| cell.trim().is_empty()) {
             continue;
@@ -6239,6 +6271,32 @@ fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
         records.push((line, record));
     }
     Ok((headers, records))
+}
+
+/// Headers must be present and unique: mapping by name silently loses data
+/// otherwise, because only the first column of a repeated name is ever read.
+fn validate_csv_headers(headers: &[String]) -> Result<(), ApplicationError> {
+    if headers.is_empty() {
+        return Err(ApplicationError::InvalidInput {
+            field: "path".into(),
+            message: "the file has no header row".into(),
+        });
+    }
+    for (index, header) in headers.iter().enumerate() {
+        if header.trim().is_empty() {
+            return Err(ApplicationError::InvalidInput {
+                field: "path".into(),
+                message: format!("column {} has an empty header", index + 1),
+            });
+        }
+        if headers[..index].iter().any(|earlier| earlier == header) {
+            return Err(ApplicationError::InvalidInput {
+                field: "path".into(),
+                message: format!("duplicate column header \"{header}\"; make headers unique"),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Normalize a header for fuzzy matching: lowercase, alphanumerics only.
@@ -6335,14 +6393,15 @@ fn prepare_import_row(
             preferred: true,
         });
     }
+    let kind = mapped_cell(record, indexes, "kind");
+    let kind_mapped = kind.is_some();
     let patch = ContactPatch {
         company_id: None, // resolved by name while applying
         first_name: mapped_cell(record, indexes, "firstName"),
         last_name: mapped_cell(record, indexes, "lastName"),
         display_name: mapped_cell(record, indexes, "displayName"),
         role: mapped_cell(record, indexes, "role"),
-        kind: mapped_cell(record, indexes, "kind")
-            .unwrap_or_else(|| IMPORT_DEFAULT_KIND.to_owned()),
+        kind: kind.unwrap_or_else(|| IMPORT_DEFAULT_KIND.to_owned()),
         preferred_contact_method: mapped_cell(record, indexes, "preferredContactMethod"),
         address_line1: mapped_cell(record, indexes, "addressLine1"),
         address_line2: mapped_cell(record, indexes, "addressLine2"),
@@ -6354,7 +6413,7 @@ fn prepare_import_row(
         favorite: false,
         channels,
     };
-    let fields = validate_contact_patch(patch).map_err(issue)?;
+    let fields = validate_contact_patch(patch.clone()).map_err(issue)?;
     let external_id = match mapped_cell(record, indexes, "externalId") {
         None => None,
         Some(value) => Some(required_text("externalId", value, 200).map_err(issue)?),
@@ -6377,6 +6436,9 @@ fn prepare_import_row(
         }
     }
     Ok(PreparedImportRow {
+        line,
+        patch,
+        kind_mapped,
         fields,
         external_id,
         company_name,
@@ -6424,27 +6486,25 @@ fn resolve_import_company(
 fn find_contact_for_import(
     transaction: &Transaction<'_>,
     external_id: Option<&str>,
-) -> Result<Option<String>, ApplicationError> {
+) -> Result<Option<ImportMatch>, ApplicationError> {
     let Some(external_id) = external_id else {
         return Ok(None);
     };
-    let by_external: Option<String> = transaction
+    let matched = transaction
         .query_row(
-            "SELECT id FROM contacts WHERE external_id = ?1",
+            "SELECT id, archived_at IS NOT NULL FROM contacts
+             WHERE external_id = ?1 OR id = ?1
+             ORDER BY external_id = ?1 DESC LIMIT 1",
             [external_id],
-            |row| row.get(0),
+            |row| {
+                Ok(ImportMatch {
+                    id: row.get(0)?,
+                    archived: row.get(1)?,
+                })
+            },
         )
         .optional()?;
-    if by_external.is_some() {
-        return Ok(by_external);
-    }
-    Ok(transaction
-        .query_row(
-            "SELECT id FROM contacts WHERE id = ?1",
-            [external_id],
-            |row| row.get(0),
-        )
-        .optional()?)
+    Ok(matched)
 }
 
 /// Insert one imported contact with its channels, projection, and log row.
@@ -6497,15 +6557,18 @@ fn insert_imported_contact(
     Ok(contact_id)
 }
 
-/// Update a matched contact the way `update_contact` does — full editable set,
-/// version bump — but only replaces channel kinds the CSV actually carries.
+/// Patch a matched contact: only the columns the file carried are written, the
+/// version bumps like any other write, and channels are added, never removed.
 fn update_imported_contact(
     transaction: &Transaction<'_>,
     contact_id: &str,
-    fields: &ValidContactFields,
+    row: &PreparedImportRow,
+    company_id: Option<String>,
     actor: Actor,
 ) -> Result<(), ApplicationError> {
     let existing = require_contact(transaction, contact_id)?;
+    let merged = merge_import_patch(&existing, row, company_id);
+    let fields = validate_contact_patch(merged)?;
     transaction.execute(
         "UPDATE contacts SET
             company_id = ?2, first_name = ?3, last_name = ?4, display_name = ?5,
@@ -6534,31 +6597,7 @@ fn update_imported_contact(
             existing.version + 1,
         ],
     )?;
-    let first_sort_key: i64 = transaction.query_row(
-        "SELECT COALESCE(MAX(sort_key), -1) + 1 FROM contact_channels WHERE contact_id = ?1",
-        [&existing.id],
-        |row| row.get(0),
-    )?;
-    for (offset, channel) in fields.channels.iter().enumerate() {
-        let sort_key = first_sort_key + offset as i64;
-        transaction.execute(
-            "DELETE FROM contact_channels WHERE contact_id = ?1 AND kind = ?2",
-            params![existing.id, channel.kind.as_database_value()],
-        )?;
-        transaction.execute(
-            "INSERT INTO contact_channels (id, contact_id, kind, label, value, preferred, sort_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                new_id(),
-                existing.id,
-                channel.kind.as_database_value(),
-                channel.label,
-                channel.value,
-                channel.preferred,
-                sort_key,
-            ],
-        )?;
-    }
+    add_import_channels(transaction, &existing.id, &row.fields.channels)?;
     refresh_search_projection(transaction, "contact", &existing.id)?;
     log_command(
         transaction,
@@ -6567,6 +6606,120 @@ fn update_imported_contact(
         &existing.id,
         &format!("imported update to contact \"{}\"", fields.display_name),
     )?;
+    Ok(())
+}
+
+/// Overlay the row's mapped cells on the stored contact. Unmapped and blank
+/// cells keep the stored value — v1 imports never clear a field.
+fn merge_import_patch(
+    existing: &Contact,
+    row: &PreparedImportRow,
+    company_id: Option<String>,
+) -> ContactPatch {
+    let patch = &row.patch;
+    let first_name = patch
+        .first_name
+        .clone()
+        .or_else(|| existing.first_name.clone());
+    let last_name = patch
+        .last_name
+        .clone()
+        .or_else(|| existing.last_name.clone());
+    // A name column in the file re-derives the display name from the merged
+    // parts; a file without any name column leaves the stored one alone.
+    let display_name = match &patch.display_name {
+        Some(value) => value.clone(),
+        None if patch.first_name.is_some() || patch.last_name.is_some() => {
+            derive_display_name(None, &first_name, &last_name)
+                .unwrap_or_else(|_| existing.display_name.clone())
+        }
+        None => existing.display_name.clone(),
+    };
+    ContactPatch {
+        company_id: company_id.or_else(|| existing.company_id.clone()),
+        first_name,
+        last_name,
+        display_name: Some(display_name),
+        role: patch.role.clone().or_else(|| {
+            existing
+                .role
+                .map(|role| role.as_database_value().to_owned())
+        }),
+        kind: if row.kind_mapped {
+            patch.kind.clone()
+        } else {
+            existing.kind.as_database_value().to_owned()
+        },
+        preferred_contact_method: patch
+            .preferred_contact_method
+            .clone()
+            .or_else(|| existing.preferred_contact_method.clone()),
+        address_line1: patch
+            .address_line1
+            .clone()
+            .or_else(|| existing.address_line1.clone()),
+        address_line2: patch
+            .address_line2
+            .clone()
+            .or_else(|| existing.address_line2.clone()),
+        city: patch.city.clone().or_else(|| existing.city.clone()),
+        state: patch.state.clone().or_else(|| existing.state.clone()),
+        postal_code: patch
+            .postal_code
+            .clone()
+            .or_else(|| existing.postal_code.clone()),
+        property_type: patch
+            .property_type
+            .clone()
+            .or_else(|| existing.property_type.clone()),
+        notes: patch.notes.clone().or_else(|| existing.notes.clone()),
+        favorite: existing.favorite,
+        // Channels are applied additively, outside the patch.
+        channels: Vec::new(),
+    }
+}
+
+/// Add the row's channels to a contact. An exact value already on the record
+/// is left alone and nothing is ever deleted, so secondary phones and emails
+/// survive repeated imports.
+fn add_import_channels(
+    transaction: &Transaction<'_>,
+    contact_id: &str,
+    channels: &[ValidChannel],
+) -> Result<(), ApplicationError> {
+    for channel in channels {
+        let kind = channel.kind.as_database_value();
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM contact_channels
+             WHERE contact_id = ?1 AND kind = ?2 AND value = ?3)",
+            params![contact_id, kind, channel.value],
+            |row| row.get(0),
+        )?;
+        if exists {
+            continue;
+        }
+        // Only the first channel of a kind claims "preferred"; an existing
+        // preferred phone or email keeps that status.
+        let (kind_count, next_sort_key): (i64, i64) = transaction.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(sort_key), -1) + 1 FROM contact_channels
+             WHERE contact_id = ?1 AND kind = ?2",
+            params![contact_id, kind],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        transaction.execute(
+            "INSERT INTO contact_channels (id, contact_id, kind, label, value, preferred, sort_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                new_id(),
+                contact_id,
+                kind,
+                channel.label,
+                channel.value,
+                kind_count == 0,
+                next_sort_key,
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -6703,10 +6856,62 @@ fn format_export_number(value: f64) -> String {
     }
 }
 
+/// Validate an export destination the way `export_handoff_envelope` does:
+/// existing files are only replaced when the caller asks for it.
+fn check_export_destination(path: &str, overwrite: bool) -> Result<String, ApplicationError> {
+    let path = required_text("path", path.to_owned(), 4096)?;
+    if std::path::Path::new(&path).exists() && !overwrite {
+        return Err(ApplicationError::ValidationFailed {
+            code: "destination_exists",
+            field: "path".into(),
+            message: format!("{path} already exists; enable overwrite to replace it"),
+        });
+    }
+    Ok(path)
+}
+
+/// Record the export in the command log, mirroring backup/hand-off exports.
+fn log_export(
+    storage: &mut Storage,
+    entity_id: &str,
+    row_count: usize,
+    path: &str,
+) -> Result<(), ApplicationError> {
+    let transaction = immediate(storage)?;
+    log_command(
+        &transaction,
+        Actor::User,
+        "export",
+        entity_id,
+        &format!("exported {row_count} {entity_id} to \"{path}\""),
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Neutralize spreadsheet formulas: a cell starting with a formula trigger is
+/// prefixed with a single quote so Excel and Sheets treat it as text.
+fn sanitize_export_cell(value: &str) -> String {
+    match value.chars().next() {
+        Some(first) if FORMULA_PREFIXES.contains(&first) || first == '\r' => {
+            format!("'{value}")
+        }
+        _ => value.to_owned(),
+    }
+}
+
+fn write_export_record(
+    writer: &mut csv::Writer<std::fs::File>,
+    cells: &[String],
+) -> Result<(), ApplicationError> {
+    writer
+        .write_record(cells.iter().map(|cell| sanitize_export_cell(cell)))
+        .map_err(|error| ApplicationError::Io(std::io::Error::other(error.to_string())))
+}
+
 /// Open a CSV writer at `path`, creating missing parent directories.
 fn open_csv_writer(path: &str) -> Result<csv::Writer<std::fs::File>, ApplicationError> {
-    let path = required_text("path", path.to_owned(), 4096)?;
-    let destination = std::path::Path::new(&path);
+    let destination = std::path::Path::new(path);
     if let Some(parent) = destination.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;

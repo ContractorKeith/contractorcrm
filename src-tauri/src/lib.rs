@@ -839,18 +839,20 @@ fn import_contacts(
 fn export_contacts_csv(
     storage: State<'_, SharedStorage>,
     path: String,
+    overwrite: bool,
 ) -> Result<CsvExportReport, CommandError> {
-    let storage = storage.lock().expect("storage mutex poisoned");
-    application::export_contacts_csv(&storage, &path).map_err(Into::into)
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::export_contacts_csv(&mut storage, &path, overwrite).map_err(Into::into)
 }
 
 #[tauri::command]
 fn export_opportunities_csv(
     storage: State<'_, SharedStorage>,
     path: String,
+    overwrite: bool,
 ) -> Result<CsvExportReport, CommandError> {
-    let storage = storage.lock().expect("storage mutex poisoned");
-    application::export_opportunities_csv(&storage, &path).map_err(Into::into)
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::export_opportunities_csv(&mut storage, &path, overwrite).map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

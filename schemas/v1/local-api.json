@@ -71,8 +71,8 @@
     {"name":"get_database_info","mode":"read","input":[],"output":"DatabaseInfo"},
     {"name":"preview_contact_import","mode":"read","input":[{"name":"path","type":"string","required":true},{"name":"mapping","type":"ContactImportMapping","required":false}],"output":"ContactImportPreview"},
     {"name":"import_contacts","mode":"write","input":[{"name":"request","type":"ImportContactsRequest","required":true}],"output":"ContactImportSummary"},
-    {"name":"export_contacts_csv","mode":"write","input":[{"name":"path","type":"string","required":true}],"output":"CsvExportReport"},
-    {"name":"export_opportunities_csv","mode":"write","input":[{"name":"path","type":"string","required":true}],"output":"CsvExportReport"}
+    {"name":"export_contacts_csv","mode":"write","input":[{"name":"path","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"CsvExportReport"},
+    {"name":"export_opportunities_csv","mode":"write","input":[{"name":"path","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"CsvExportReport"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
