@@ -320,8 +320,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Recompute the manifest checksums so a tampered archive stays internally
-/// consistent — the way a determined attacker would repackage it.
+/// Recompute the manifest checksums and record counts so a tampered archive
+/// stays internally consistent — the way a determined attacker would repackage
+/// it. Verification has to catch the content, not the bookkeeping.
 fn resign(entries: &mut BTreeMap<String, Vec<u8>>) {
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&entries["manifest.json"]).unwrap();
@@ -333,10 +334,45 @@ fn resign(entries: &mut BTreeMap<String, Vec<u8>>) {
         })
         .collect::<Vec<_>>();
     manifest["files"] = json!(files);
+    let mut counts = serde_json::Map::new();
+    for table in ARCHIVE_TABLES {
+        if let Some(bytes) = entries.get(&format!("data/{table}.json")) {
+            let rows: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            counts.insert((*table).to_owned(), json!(rows.as_array().unwrap().len()));
+        }
+    }
+    manifest["recordCounts"] = serde_json::Value::Object(counts);
     entries.insert(
         "manifest.json".into(),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     );
+}
+
+/// Rebuild an archive with one data table replaced, keeping the manifest
+/// honest, and return the tampered copy's path.
+fn repack(
+    temp: &Path,
+    source: &Path,
+    name: &str,
+    mutate: impl Fn(&mut BTreeMap<String, Vec<u8>>),
+) -> PathBuf {
+    let mut entries = read_entries(source);
+    mutate(&mut entries);
+    resign(&mut entries);
+    let path = temp.join(name);
+    write_entries(&path, &entries);
+    path
+}
+
+fn set_table(entries: &mut BTreeMap<String, Vec<u8>>, table: &str, rows: &serde_json::Value) {
+    entries.insert(
+        format!("data/{table}.json"),
+        serde_json::to_vec_pretty(rows).unwrap(),
+    );
+}
+
+fn table_rows(entries: &BTreeMap<String, Vec<u8>>, table: &str) -> serde_json::Value {
+    serde_json::from_slice(&entries[&format!("data/{table}.json")]).unwrap()
 }
 
 /// Export a populated database and hand back the archive path plus its temp dir.
@@ -651,4 +687,293 @@ fn a_file_that_is_not_an_archive_is_a_caller_error() {
     let missing = temp.path().join("missing.zip");
     let error = preview_archive_import(&target, missing.to_str().unwrap()).unwrap_err();
     assert_eq!(error.kind(), "invalid_input");
+}
+
+#[test]
+fn inflated_manifest_counts_cannot_smuggle_an_empty_archive_past_preview() {
+    let (temp, path, _source) = exported();
+    // Empty every data file but leave the manifest claiming the original counts.
+    let mut entries = read_entries(&path);
+    for table in ARCHIVE_TABLES {
+        set_table(&mut entries, table, &json!([]));
+    }
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&entries["manifest.json"]).unwrap();
+    let files = entries
+        .iter()
+        .filter(|(name, _)| name.as_str() != "manifest.json")
+        .map(|(name, bytes)| {
+            json!({"path": name, "sha256": sha256_hex(bytes), "bytes": bytes.len()})
+        })
+        .collect::<Vec<_>>();
+    manifest["files"] = json!(files); // checksums honest, counts inflated
+    entries.insert(
+        "manifest.json".into(),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    );
+    let tampered = temp.path().join("hollow.zip");
+    write_entries(&tampered, &entries);
+
+    let mut target = storage(temp.path(), "target");
+    let before = dump(&target);
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"record_count_mismatch"),
+        "{preview:?}"
+    );
+    // The preview reports what the archive actually holds, not the claim.
+    assert_eq!(preview.record_counts["contacts"], 0);
+
+    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before, "the wipe never happens");
+}
+
+#[test]
+fn constraint_violations_are_caught_by_the_preview_dry_run() {
+    let (temp, path, _source) = exported();
+
+    // A second tag with the same label breaks the case-insensitive unique index.
+    let duplicate_label = repack(temp.path(), &path, "dup-tag.zip", |entries| {
+        let mut tags = table_rows(entries, "tags");
+        let mut clone = tags[0].clone();
+        clone["id"] = json!("tag-duplicate-label");
+        clone["label"] = json!(tags[0]["label"].as_str().unwrap().to_uppercase());
+        tags.as_array_mut().unwrap().push(clone);
+        set_table(entries, "tags", &tags);
+    });
+    // A negative amount breaks the opportunities CHECK.
+    let negative_value = repack(temp.path(), &path, "negative.zip", |entries| {
+        let mut opportunities = table_rows(entries, "opportunities");
+        opportunities[0]["valueMinor"] = json!(-1);
+        set_table(entries, "opportunities", &opportunities);
+    });
+
+    for tampered in [duplicate_label, negative_value] {
+        let mut target = storage(temp.path(), "target");
+        let before = dump(&target);
+        let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+        assert!(
+            issue_codes(&preview).contains(&"constraint_violation"),
+            "{tampered:?}: {preview:?}"
+        );
+        let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+        assert_eq!(error.kind(), "validation_failed");
+        assert_eq!(dump(&target), before);
+        std::fs::remove_file(&tampered).unwrap();
+    }
+}
+
+#[test]
+fn an_oversized_entry_is_refused_without_being_buffered() {
+    let (temp, path, _source) = exported();
+    let mut entries = read_entries(&path);
+    // Highly compressible, so the archive on disk stays tiny — the classic
+    // ratio bomb. 257 MiB of zeros is past the per-entry cap.
+    entries.insert("data/companies.json".into(), vec![b' '; 257 * 1024 * 1024]);
+    let tampered = temp.path().join("bomb.zip");
+    write_entries(&tampered, &entries);
+    assert!(
+        std::fs::metadata(&tampered).unwrap().len() < 5 * 1024 * 1024,
+        "the bomb must be cheap on disk"
+    );
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"entry_too_large"),
+        "{preview:?}"
+    );
+    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+}
+
+#[test]
+fn attachments_are_refused_until_archives_carry_them() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "asset.zip", |entries| {
+        entries.insert("assets/photo.jpg".into(), b"not really a photo".to_vec());
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"unexpected_asset"),
+        "{preview:?}"
+    );
+    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+}
+
+#[test]
+fn issue_reporting_is_capped_so_payloads_stay_bounded() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "noisy.zip", |entries| {
+        let template = table_rows(entries, "contacts")[0].clone();
+        let mut contacts = Vec::new();
+        for index in 0..150 {
+            let mut row = template.clone();
+            row["id"] = json!(format!("contact-{index}"));
+            row["surpriseColumn"] = json!("noise");
+            contacts.push(row);
+        }
+        set_table(entries, "contacts", &json!(contacts));
+    });
+
+    let target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert_eq!(preview.issues.len(), 101, "100 issues plus the summary");
+    assert_eq!(preview.issues.last().unwrap().code, "too_many_issues");
+    assert!(
+        preview.issues.last().unwrap().message.contains("more"),
+        "{:?}",
+        preview.issues.last()
+    );
+}
+
+#[test]
+fn an_archive_without_a_usable_pipeline_is_refused() {
+    let (temp, path, _source) = exported();
+    // Consistent but empty: no dangling references, no pipeline either.
+    let tampered = repack(temp.path(), &path, "empty.zip", |entries| {
+        for table in ARCHIVE_TABLES {
+            set_table(entries, table, &json!([]));
+        }
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"missing_pipeline"),
+        "{preview:?}"
+    );
+    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+
+    // A pipeline whose stages cannot express won or lost is just as unusable.
+    let no_kinds = repack(temp.path(), &path, "kinds.zip", |entries| {
+        let mut stages = table_rows(entries, "stages");
+        let open_only = stages
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|stage| stage["kind"] == "open")
+            .cloned()
+            .collect::<Vec<_>>();
+        stages = json!(open_only);
+        set_table(entries, "stages", &stages);
+        // Everything that pointed at the removed stages goes too.
+        for table in ["opportunities", "stage_history", "record_tags"] {
+            set_table(entries, table, &json!([]));
+        }
+        for table in ["activities", "tasks", "custom_field_values"] {
+            set_table(entries, table, &json!([]));
+        }
+    });
+    let preview = preview_archive_import(&target, no_kinds.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"missing_stage_kind"),
+        "{preview:?}"
+    );
+}
+
+#[test]
+fn a_refused_import_leaves_no_orphan_safety_backup() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "dangling.zip", |entries| {
+        let mut contacts = table_rows(entries, "contacts");
+        contacts[0]["companyId"] = json!("company-that-does-not-exist");
+        set_table(entries, "contacts", &contacts);
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let directory = target.database_path().parent().unwrap().to_path_buf();
+    import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+
+    let backups = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".bak"))
+        .collect::<Vec<_>>();
+    assert!(backups.is_empty(), "{backups:?}");
+}
+
+#[test]
+fn exports_refuse_to_overwrite_the_live_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut target = storage(temp.path(), "live");
+    let database = target.database_path().to_path_buf();
+    let directory = database.parent().unwrap().to_path_buf();
+    let name = database.file_name().unwrap().to_string_lossy().into_owned();
+
+    for destination in [
+        database.clone(),
+        directory.join(format!("{name}-wal")),
+        directory.join(format!("{name}-shm")),
+        directory.join(format!("{name}.pre-import-20260818T000000000Z.bak")),
+    ] {
+        let path = destination.to_str().unwrap();
+        for error in [
+            export_archive(&mut target, path, true).unwrap_err(),
+            contractorcrm_lib::application::export_contacts_csv(&mut target, path, true)
+                .unwrap_err(),
+            contractorcrm_lib::application::export_opportunities_csv(&mut target, path, true)
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), "validation_failed", "{destination:?}");
+            assert!(error.to_string().contains("live database"), "{error}");
+        }
+    }
+    // The database still opens and works after the refusals.
+    assert!(database.is_file());
+    contractorcrm_lib::application::list_contacts(&target, false).unwrap();
+}
+
+#[test]
+fn a_failed_csv_export_keeps_the_previous_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut source = storage(temp.path(), "source");
+    populated(&mut source);
+    let path = temp.path().join("contacts.csv");
+    contractorcrm_lib::application::export_contacts_csv(&mut source, path.to_str().unwrap(), false)
+        .unwrap();
+    let good = std::fs::read(&path).unwrap();
+    assert!(!good.is_empty());
+
+    // Break the query the export depends on, then re-export over the file.
+    source
+        .connection()
+        .execute_batch(
+            "DROP TABLE custom_field_values;
+             DROP TABLE custom_field_options;
+             DROP TABLE custom_field_defs;",
+        )
+        .unwrap();
+    contractorcrm_lib::application::export_contacts_csv(&mut source, path.to_str().unwrap(), true)
+        .unwrap_err();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        good,
+        "a failed export must not truncate the previous one"
+    );
+}
+
+#[test]
+fn another_products_archive_is_refused_with_one_clear_issue() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "foreign.zip", |entries| {
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&entries["manifest.json"]).unwrap();
+        manifest["product"]["name"] = json!("SomeOtherCRM");
+        entries.insert(
+            "manifest.json".into(),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        );
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert_eq!(issue_codes(&preview), ["wrong_product"], "{preview:?}");
+    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
 }
