@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import type { CoreClient } from "../api/client";
 import {
@@ -188,6 +189,28 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [customFields, setCustomFields] = useState<SavedViewCustomFieldPredicate[]>([]);
   const [matchingIds, setMatchingIds] = useState<string[] | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [csvStatus, setCsvStatus] = useState("");
+  const [csvError, setCsvError] = useState<string | null>(null);
+
+  // Pick a destination, then write every opportunity to it. The native save
+  // dialog already confirms replacement, so the export overwrites directly.
+  const exportCsv = async () => {
+    setCsvError(null);
+    setCsvStatus("");
+    try {
+      const destination = await save({
+        defaultPath: "opportunities.csv",
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof destination !== "string") return;
+      const report = await client.exportOpportunitiesCsv(destination, true);
+      setCsvStatus(`Exported ${report.rowCount} opportunities to ${report.path}.`);
+    } catch (rejection) {
+      setCsvError(
+        isCommandError(rejection) ? rejection.message : "The pipeline could not be exported.",
+      );
+    }
+  };
 
   // Persist the List | Board choice across sessions.
   const setMode = (next: PipelineMode) => {
@@ -356,11 +379,19 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
             </label>
           ) : null}
           <span className="list-count">{opportunities?.length ?? 0}</span>
+          <button type="button" className="button" onClick={() => void exportCsv()}>
+            Export CSV…
+          </button>
           <button type="button" className="button button--primary" onClick={onCreate}>
             New opportunity
           </button>
         </div>
       </div>
+
+      <span className="saved-views__status" role="status" aria-live="polite">
+        {csvStatus}
+      </span>
+      {csvError ? <span role="alert" className="saved-views__error">{csvError}</span> : null}
 
       {loadError ? (
         <GeneralError message="Could not read the pipeline from the local database." />

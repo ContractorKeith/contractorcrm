@@ -55,6 +55,11 @@ import type {
   CustomFieldDefinitionLifecycleRequest,
   RecordMetadata,
   SetRecordMetadataRequest,
+  ContactImportMapping,
+  ContactImportPreview,
+  ContactImportSummary,
+  CsvExportReport,
+  ImportContactsRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -127,6 +132,10 @@ export interface CoreClient {
   getAttentionFlags(referenceTime?: string): Promise<AttentionFlag[]>;
   getAttentionThresholds(): Promise<AttentionThresholds>;
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
+  previewContactImport(path: string, mapping?: ContactImportMapping | null): Promise<ContactImportPreview>;
+  importContacts(request: ImportContactsRequest): Promise<ContactImportSummary>;
+  exportContactsCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
+  exportOpportunitiesCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -197,4 +206,9 @@ export const tauriCoreClient: CoreClient = {
   getAttentionFlags: (referenceTime) => invoke("get_attention_flags", { referenceTime }),
   getAttentionThresholds: () => invoke("get_attention_thresholds"),
   setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),
+  previewContactImport: (path, mapping) => invoke("preview_contact_import", { path, mapping }),
+  importContacts: (request) => invoke("import_contacts", { request }),
+  exportContactsCsv: (path, overwrite) => invoke("export_contacts_csv", { path, overwrite }),
+  exportOpportunitiesCsv: (path, overwrite) =>
+    invoke("export_opportunities_csv", { path, overwrite }),
 };

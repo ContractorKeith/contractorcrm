@@ -1,7 +1,7 @@
 # Data model
 
-Status: implemented through database migration 008
-Updated: 2026-08-17
+Status: implemented through database migration 009
+Updated: 2026-08-18
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`, including
 each implemented table's columns, required fields, primary key, foreign keys,
@@ -50,10 +50,13 @@ Use `job` only for the ContractorProject record an opportunity hands off to; the
 - address fields, `property_type`
 - `notes`
 - `favorite` flag
+- `external_id` nullable — stable import identity, unique when set (partial index, migration 009)
 - `archived_at` nullable
 - `created_at`, `updated_at`, `version`
 
 Derived, not stored as truth: `last_contacted_at` and next open task come from activities and tasks; they are replaceable projections.
+
+CSV import matches an incoming row to an existing contact by `external_id` first, then by record `id`, so a file exported from the CRM re-imports onto the same contacts. Exports emit `COALESCE(external_id, id)` for the same reason.
 
 ### `tags` and `record_tags`
 

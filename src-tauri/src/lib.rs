@@ -7,17 +7,18 @@ pub mod storage;
 use std::sync::Mutex;
 
 use application::{
-    ArchiveRequest, CompleteTaskRequest, ContactListItem, CreateCompanyRequest,
-    CreateContactRequest, CreateCustomFieldDefRequest, CreateOpportunityRequest,
-    CreateSavedViewRequest, CreateTagRequest, CreateTaskRequest, CustomFieldDef,
+    ArchiveRequest, CompleteTaskRequest, ContactImportMapping, ContactImportPreview,
+    ContactImportSummary, ContactListItem, CreateCompanyRequest, CreateContactRequest,
+    CreateCustomFieldDefRequest, CreateOpportunityRequest, CreateSavedViewRequest,
+    CreateTagRequest, CreateTaskRequest, CsvExportReport, CustomFieldDef,
     CustomFieldDefArchiveRequest, DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest,
-    EnvelopeExportReport, LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
-    MoveOpportunityStageRequest, OpportunityDetail, OpportunityListItem, RecordMetadata,
-    RestoreReport, SavedView, SavedViewEntityType, SearchResult, SetAttentionThresholdsRequest,
-    SetRecordMetadataRequest, Tag, TagArchiveRequest, TaskActionRequest, UnlinkHandoffRequest,
-    UpdateActivityRequest, UpdateCompanyRequest, UpdateContactRequest, UpdateCustomFieldDefRequest,
-    UpdateOpportunityRequest, UpdateSavedViewRequest, UpdateStageRequest, UpdateTagRequest,
-    UpdateTaskRequest,
+    EnvelopeExportReport, ImportContactsRequest, LinkJobRequest, LinkQuoteRequest,
+    ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
+    OpportunityListItem, RecordMetadata, RestoreReport, SavedView, SavedViewEntityType,
+    SearchResult, SetAttentionThresholdsRequest, SetRecordMetadataRequest, Tag, TagArchiveRequest,
+    TaskActionRequest, UnlinkHandoffRequest, UpdateActivityRequest, UpdateCompanyRequest,
+    UpdateContactRequest, UpdateCustomFieldDefRequest, UpdateOpportunityRequest,
+    UpdateSavedViewRequest, UpdateStageRequest, UpdateTagRequest, UpdateTaskRequest,
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
@@ -99,6 +100,10 @@ macro_rules! with_local_api_v1_commands {
             backup_database,
             restore_database,
             get_database_info,
+            preview_contact_import,
+            import_contacts,
+            export_contacts_csv,
+            export_opportunities_csv,
         }
     };
 }
@@ -811,6 +816,45 @@ fn get_database_info(storage: State<'_, SharedStorage>) -> Result<DatabaseInfo, 
     application::get_database_info(&storage).map_err(Into::into)
 }
 
+// CSV commands — mapped contact import plus contact and opportunity exports.
+
+#[tauri::command]
+fn preview_contact_import(
+    path: String,
+    mapping: Option<ContactImportMapping>,
+) -> Result<ContactImportPreview, CommandError> {
+    application::preview_contact_import(&path, mapping).map_err(Into::into)
+}
+
+#[tauri::command]
+fn import_contacts(
+    storage: State<'_, SharedStorage>,
+    request: ImportContactsRequest,
+) -> Result<ContactImportSummary, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::import_contacts(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn export_contacts_csv(
+    storage: State<'_, SharedStorage>,
+    path: String,
+    overwrite: bool,
+) -> Result<CsvExportReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::export_contacts_csv(&mut storage, &path, overwrite).map_err(Into::into)
+}
+
+#[tauri::command]
+fn export_opportunities_csv(
+    storage: State<'_, SharedStorage>,
+    path: String,
+    overwrite: bool,
+) -> Result<CsvExportReport, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::export_opportunities_csv(&mut storage, &path, overwrite).map_err(Into::into)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     macro_rules! command_handler {
@@ -820,6 +864,8 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // File pickers for CSV import/export live in the frontend.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Open and migrate the database in the Tauri app data dir; commands
             // reach it through managed state (Connection is Send, not Sync).

@@ -439,6 +439,15 @@ WHEN EXISTS (SELECT 1 FROM record_tags WHERE entity_type='opportunity' AND recor
 BEGIN SELECT RAISE(ABORT, 'opportunity metadata must be removed first'); END;
 ";
 
+/// v9 stable external ids for imported contacts. Nullable so hand-entered
+/// contacts stay untouched; the partial unique index keeps one contact per
+/// external id without blocking the many NULL rows.
+const MIGRATION_009: &str = "\
+ALTER TABLE contacts ADD COLUMN external_id TEXT;
+CREATE UNIQUE INDEX contacts_external_id_unique
+    ON contacts(external_id) WHERE external_id IS NOT NULL;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -472,6 +481,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 8,
         sql: MIGRATION_008,
+    },
+    Migration {
+        version: 9,
+        sql: MIGRATION_009,
     },
 ];
 

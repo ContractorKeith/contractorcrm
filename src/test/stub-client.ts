@@ -84,6 +84,16 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
     proposalStageName: "Proposal Sent",
   }),
   setAttentionThresholds: vi.fn(),
+  previewContactImport: vi.fn().mockResolvedValue({
+    headers: [],
+    rowCount: 0,
+    mapping: {},
+    sampleRows: [],
+    issues: [],
+  }),
+  importContacts: vi.fn().mockResolvedValue({ created: 0, updated: 0, skipped: [] }),
+  exportContactsCsv: vi.fn().mockResolvedValue({ path: "", rowCount: 0 }),
+  exportOpportunitiesCsv: vi.fn().mockResolvedValue({ path: "", rowCount: 0 }),
   ...overrides,
 });
 

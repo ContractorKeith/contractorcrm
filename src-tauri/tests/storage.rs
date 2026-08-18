@@ -79,12 +79,12 @@ fn schema_migrations_records_versions_and_rerunning_is_a_no_op() {
     let database_path = temp.path().join("contractorcrm.sqlite3");
 
     let storage = Storage::open(&database_path).expect("first open");
-    assert_eq!(applied_versions(&storage), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(applied_versions(&storage), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     drop(storage);
 
     // Reopening re-runs the migration framework; applied versions are skipped.
     let reopened = Storage::open(&database_path).expect("second open");
-    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assert_eq!(table_names(&reopened), EXPECTED_TABLES);
 }
 
@@ -167,13 +167,16 @@ fn populated_v7_database_upgrades_with_backup_and_preserves_core_projections() {
          DROP TABLE custom_field_defs;
          DROP TABLE record_tags;
          DROP TABLE tags;
-         DELETE FROM schema_migrations WHERE version=8;",
+         DROP INDEX contacts_external_id_unique;
+         ALTER TABLE contacts DROP COLUMN external_id;
+         DELETE FROM schema_migrations WHERE version=8;
+         DELETE FROM schema_migrations WHERE version=9;",
         )
         .expect("return fixture to populated v7");
     drop(storage);
 
     let upgraded = Storage::open(&database_path).expect("upgrade v7 to v8");
-    assert_eq!(applied_versions(&upgraded), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(applied_versions(&upgraded), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assert_eq!(
         upgraded
             .connection()
@@ -208,5 +211,68 @@ fn populated_v7_database_upgrades_with_backup_and_preserves_core_projections() {
     drop(upgraded);
 
     let reopened = Storage::open(&database_path).expect("idempotent reopen");
-    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn populated_v8_database_gains_contact_external_ids() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    let storage = Storage::open(&database_path).expect("create current database");
+    let now = now_utc();
+    storage
+        .connection()
+        .execute(
+            "INSERT INTO contacts (id,display_name,kind,created_at,updated_at,version)
+             VALUES ('legacy-contact','Legacy Contact','client',?1,?1,1)",
+            [&now],
+        )
+        .expect("seed contact");
+    storage
+        .connection()
+        .execute_batch(
+            "DROP INDEX contacts_external_id_unique;
+             ALTER TABLE contacts DROP COLUMN external_id;
+             DELETE FROM schema_migrations WHERE version=9;",
+        )
+        .expect("return fixture to populated v8");
+    drop(storage);
+
+    let upgraded = Storage::open(&database_path).expect("upgrade v8 to v9");
+    assert_eq!(applied_versions(&upgraded), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    let external_id: Option<String> = upgraded
+        .connection()
+        .query_row(
+            "SELECT external_id FROM contacts WHERE id='legacy-contact'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("existing contact keeps its row and gains a null external id");
+    assert_eq!(external_id, None);
+
+    // The partial unique index allows many NULLs but one row per external id.
+    upgraded
+        .connection()
+        .execute(
+            "UPDATE contacts SET external_id='crm-1' WHERE id='legacy-contact'",
+            [],
+        )
+        .expect("set external id");
+    let now = now_utc();
+    upgraded
+        .connection()
+        .execute(
+            "INSERT INTO contacts (id,display_name,kind,external_id,created_at,updated_at,version)
+             VALUES ('other-contact','Other Contact','client',NULL,?1,?1,1)",
+            [&now],
+        )
+        .expect("null external ids are unconstrained");
+    let duplicate = upgraded.connection().execute(
+        "UPDATE contacts SET external_id='crm-1' WHERE id='other-contact'",
+        [],
+    );
+    assert!(duplicate.is_err(), "duplicate external id must be rejected");
+    assert!(database_path
+        .with_file_name("contractorcrm.sqlite3.pre-migration-v9.bak")
+        .is_file());
 }
