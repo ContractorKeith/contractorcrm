@@ -1,8 +1,8 @@
 use contractorcrm_lib::{
     application::{
-        CreateTagRequest, CustomFieldValueInput, SavedView, SavedViewDefinition,
-        SavedViewEntityType, SavedViewFilter, SavedViewSort, SavedViewSortDirection, SearchResult,
-        SetRecordMetadataRequest,
+        ContactImportMapping, CreateTagRequest, CustomFieldValueInput, ImportContactsRequest,
+        SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter, SavedViewSort,
+        SavedViewSortDirection, SearchResult, SetRecordMetadataRequest,
     },
     error::ApplicationError,
     storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
@@ -524,5 +524,74 @@ fn tags_and_custom_fields_publish_strict_bounded_wire_types() {
             "definitionId": "field-1", "textValue": "value"
         }))
         .is_err()
+    );
+}
+
+#[test]
+fn csv_import_export_publish_strict_bounded_wire_types() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for name in [
+        "preview_contact_import",
+        "import_contacts",
+        "export_contacts_csv",
+        "export_opportunities_csv",
+    ] {
+        assert!(
+            commands.iter().any(|command| command["name"] == name),
+            "missing {name}"
+        );
+    }
+    for strict_type in [
+        "ContactImportMapping",
+        "ContactImportIssue",
+        "ContactImportPreview",
+        "ImportContactsRequest",
+        "ContactImportSummary",
+        "CsvExportReport",
+    ] {
+        assert_eq!(
+            schema["wireTypes"][strict_type]["additionalProperties"], false,
+            "{strict_type} must reject unknown fields"
+        );
+    }
+    // The published mapping targets are exactly the fields the seam accepts.
+    let mut published = string_array(&schema["wireTypes"]["ContactImportTarget"], "enum");
+    published.sort();
+    let mut mapping_properties = schema["wireTypes"]["ContactImportMapping"]["properties"]
+        .as_object()
+        .expect("mapping properties")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    mapping_properties.sort();
+    assert_eq!(published, mapping_properties);
+    let round_trip: ContactImportMapping = serde_json::from_value(serde_json::json!({
+        "firstName": "First", "lastName": "Last", "email": "Email"
+    }))
+    .expect("partial mapping deserializes");
+    assert_eq!(round_trip.first_name.as_deref(), Some("First"));
+    assert!(round_trip.display_name.is_none());
+
+    assert!(
+        serde_json::from_value::<ContactImportMapping>(serde_json::json!({
+            "firstName": "First", "customField": "Nope"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ImportContactsRequest>(serde_json::json!({
+            "path": "/tmp/contacts.csv", "mapping": {}, "unexpected": true
+        }))
+        .is_err()
+    );
+    // Imports default to the `import` actor recorded in the command log.
+    let defaulted: ImportContactsRequest = serde_json::from_value(serde_json::json!({
+        "path": "/tmp/contacts.csv", "mapping": {}
+    }))
+    .expect("actor is optional");
+    assert_eq!(
+        serde_json::to_value(defaulted.actor).expect("serialize actor"),
+        "import"
     );
 }
