@@ -1,7 +1,7 @@
 # MVP delivery plan
 
-Status: active — implemented through Slice 4 tags and typed custom fields
-Updated: 2026-08-17
+Status: active — implemented through Slice 4 CSV contact import/export
+Updated: 2026-08-18
 
 The work is sequenced as tracer slices, mirroring ContractorProject's plan. Each slice leaves a usable path through the real desktop app and keeps records, persistence, UI, and agent interfaces aligned. Because the sibling module already proved the stack, ContractorCRM skips the platform spikes and reuses its CI, packaging, and release patterns.
 
@@ -58,7 +58,7 @@ Exit: nothing falls through the cracks — every stale lead and overdue follow-u
 - [x] Global search with keyboard-first navigation; recents and favorites.
 - [x] Saved views with versioned filter and sort definitions.
 - [x] Tags and custom fields (text, number, date, select), with versioned saved-view filters.
-- [ ] CSV contact import with mapping preview and stable external IDs; CSV export for contacts and opportunities.
+- [x] CSV contact import with mapping preview and stable external IDs; CSV export for contacts and opportunities.
 - [ ] Versioned portable archive export/import with path and checksum validation.
 - [ ] Attachments on contacts and opportunities as managed files.
 
