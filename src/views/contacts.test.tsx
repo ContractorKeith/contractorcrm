@@ -2,9 +2,14 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { open, save } from "@tauri-apps/plugin-dialog";
+
 import { App } from "../App";
 import { makeCompany, makeContact, stubClient } from "../test/stub-client";
 import { formatLocalDateTime } from "./date-format";
+
+// Native file dialogs only exist inside Tauri, so stand them in for tests.
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 describe("contact list and detail", () => {
   beforeEach(() => {
@@ -278,5 +283,66 @@ describe("contact list and detail", () => {
 
     expect(client.archiveContact).toHaveBeenCalledWith({ id: "c1", expectedVersion: 2 });
     expect(await screen.findByRole("button", { name: "Unarchive" })).toBeVisible();
+  });
+
+  it("exports contacts to the chosen file and confirms the row count", async () => {
+    const user = userEvent.setup();
+    vi.mocked(save).mockResolvedValue("/tmp/contacts.csv");
+    const client = stubClient({
+      listContacts: vi.fn().mockResolvedValue([makeContact({ id: "c1" })]),
+      exportContactsCsv: vi.fn().mockResolvedValue({ path: "/tmp/contacts.csv", rowCount: 12 }),
+    });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
+
+    expect(client.exportContactsCsv).toHaveBeenCalledWith("/tmp/contacts.csv");
+    expect(
+      await screen.findByText("Exported 12 contacts to /tmp/contacts.csv."),
+    ).toBeVisible();
+  });
+
+  it("skips the export when the save dialog is cancelled", async () => {
+    const user = userEvent.setup();
+    vi.mocked(save).mockResolvedValue(null);
+    const client = stubClient({ exportContactsCsv: vi.fn() });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
+
+    expect(client.exportContactsCsv).not.toHaveBeenCalled();
+  });
+
+  it("opens the mapping wizard for a picked CSV and reloads contacts after import", async () => {
+    const user = userEvent.setup();
+    vi.mocked(open).mockResolvedValue("/tmp/leads.csv" as never);
+    const listContacts = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([makeContact({ id: "c1", displayName: "Dana Ruiz" })]);
+    const client = stubClient({
+      listContacts,
+      previewContactImport: vi.fn().mockResolvedValue({
+        headers: ["Name"],
+        rowCount: 1,
+        mapping: { displayName: "Name" },
+        sampleRows: [["Dana Ruiz"]],
+        issues: [],
+      }),
+      importContacts: vi.fn().mockResolvedValue({ created: 1, updated: 0, skipped: [] }),
+    });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Import CSV…" }));
+
+    expect(await screen.findByRole("dialog", { name: "Import contacts from CSV" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+
+    expect(client.importContacts).toHaveBeenCalledWith({
+      path: "/tmp/leads.csv",
+      mapping: { displayName: "Name" },
+    });
+    expect(await screen.findByText("Dana Ruiz")).toBeVisible();
   });
 });

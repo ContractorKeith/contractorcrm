@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { CoreClient } from "../api/client";
 import type {
@@ -14,6 +15,7 @@ import type {
   Tag,
   CustomFieldDefinition,
 } from "../api/types";
+import { CsvImportDialog } from "../components/CsvImportDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordMetadata } from "../components/RecordMetadata";
 import { SavedViewFilters } from "../components/SavedViewFilters";
@@ -62,6 +64,10 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const [customFields, setCustomFields] = useState<SavedViewCustomFieldPredicate[]>([]);
   const [matchingIds, setMatchingIds] = useState<string[] | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [importPath, setImportPath] = useState<string | null>(null);
+  const [csvStatus, setCsvStatus] = useState("");
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -78,7 +84,7 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     return () => {
       active = false;
     };
-  }, [client, showArchived]);
+  }, [client, showArchived, reloadToken]);
 
   useEffect(() => {
     void Promise.all([client.listTags(true), client.listCustomFieldDefs("contact", true)])
@@ -113,6 +119,31 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
       .then((ids) => { setMatchingIds(ids); setFilterError(null); })
       .catch(() => { setMatchingIds([]); setFilterError("This filter references missing or invalid metadata and could not be applied."); });
   }, [client, definition.filter.includeArchived, tagIdsAll, customFields]);
+
+  // Pick a CSV file, then hand it to the mapping wizard.
+  const pickImportFile = async () => {
+    setCsvError(null);
+    setCsvStatus("");
+    const picked = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv"] }] });
+    if (typeof picked === "string") setImportPath(picked);
+  };
+
+  // Pick a destination, then write every contact to it.
+  const exportCsv = async () => {
+    setCsvError(null);
+    setCsvStatus("");
+    const destination = await save({
+      defaultPath: "contacts.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (typeof destination !== "string") return;
+    try {
+      const report = await client.exportContactsCsv(destination);
+      setCsvStatus(`Exported ${report.rowCount} contacts to ${report.path}.`);
+    } catch {
+      setCsvError("The contacts could not be exported.");
+    }
+  };
 
   const columns: ColumnDef<ContactListItem>[] = [
     {
@@ -178,11 +209,33 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
             <span>Show archived</span>
           </label>
           <span className="list-count">{contacts?.length ?? 0}</span>
+          <button type="button" className="button" onClick={() => void pickImportFile()}>
+            Import CSV…
+          </button>
+          <button type="button" className="button" onClick={() => void exportCsv()}>
+            Export CSV…
+          </button>
           <button type="button" className="button button--primary" onClick={onCreate}>
             New contact
           </button>
         </div>
       </div>
+
+      <span className="saved-views__status" role="status" aria-live="polite">
+        {csvStatus}
+      </span>
+      {csvError ? <span role="alert" className="saved-views__error">{csvError}</span> : null}
+
+      {importPath ? (
+        <CsvImportDialog
+          client={client}
+          path={importPath}
+          onClose={(imported) => {
+            setImportPath(null);
+            if (imported) setReloadToken((token) => token + 1);
+          }}
+        />
+      ) : null}
 
       {loadError ? (
         <GeneralError message="Could not read contacts from the local database." />

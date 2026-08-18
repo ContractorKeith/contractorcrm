@@ -606,6 +606,68 @@ export interface AttentionFlag {
   explanation: string;
 }
 
+// ---------------------------------------------------------------------------
+// CSV import / export
+// ---------------------------------------------------------------------------
+
+// Contact fields a CSV column can be mapped onto.
+export type ContactImportTarget =
+  | "externalId"
+  | "firstName"
+  | "lastName"
+  | "displayName"
+  | "role"
+  | "kind"
+  | "preferredContactMethod"
+  | "addressLine1"
+  | "addressLine2"
+  | "city"
+  | "state"
+  | "postalCode"
+  | "propertyType"
+  | "notes"
+  | "company"
+  | "email"
+  | "phone"
+  | "tags";
+
+// Each target names the CSV header it reads from; unset targets are not imported.
+export type ContactImportMapping = Partial<Record<ContactImportTarget, string | null>>;
+
+// One row the import refused, identified by its 1-based CSV line number.
+export interface ContactImportIssue {
+  line: number;
+  reason: string;
+}
+
+// Read-only look at a CSV file before anything is written.
+export interface ContactImportPreview {
+  headers: string[];
+  rowCount: number;
+  mapping: ContactImportMapping;
+  sampleRows: string[][];
+  issues: ContactImportIssue[];
+}
+
+export interface ImportContactsRequest {
+  actor?: Actor;
+  path: string;
+  mapping: ContactImportMapping;
+}
+
+// What an import did; skipped rows carry their line and reason.
+export interface ContactImportSummary {
+  created: number;
+  updated: number;
+  skipped: ContactImportIssue[];
+}
+
+// Where a CSV export landed and how many records it holds.
+export interface CsvExportReport {
+  path: string;
+  rowCount: number;
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =

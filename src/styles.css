@@ -610,6 +610,38 @@ h1 {
   margin: 0 0 var(--space-4);
 }
 
+/* CSV import wizard — wider than the name dialogs, scrolls on long files. */
+.csv-import {
+  width: min(760px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.csv-import__path {
+  font-size: var(--font-size-label);
+  word-break: break-all;
+}
+
+.csv-import table {
+  width: 100%;
+  margin-bottom: var(--space-4);
+  border-collapse: collapse;
+  font-size: var(--font-size-label);
+}
+
+.csv-import caption {
+  margin-bottom: var(--space-2);
+  text-align: left;
+  font-family: var(--font-heading);
+}
+
+.csv-import th,
+.csv-import td {
+  padding: var(--space-2);
+  text-align: left;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+}
+
 /* Tags and typed custom-field surfaces share the compact detail-form rhythm. */
 .record-metadata,
 .saved-view-filters {
