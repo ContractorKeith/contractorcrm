@@ -1,5 +1,6 @@
 pub mod application;
 pub mod archive;
+pub mod attachments;
 pub mod attention;
 pub mod domain;
 pub mod error;
@@ -22,6 +23,10 @@ use application::{
     UpdateSavedViewRequest, UpdateStageRequest, UpdateTagRequest, UpdateTaskRequest,
 };
 use archive::{ArchiveExportReport, ArchiveImportPreview, ArchiveImportReport};
+use attachments::{
+    AddAttachmentRequest, Attachment, AttachmentLocation, AttachmentParentType, AttachmentRemoval,
+    AttachmentStore, RemoveAttachmentRequest,
+};
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
@@ -109,6 +114,10 @@ macro_rules! with_local_api_v1_commands {
             export_archive,
             preview_archive_import,
             import_archive,
+            add_attachment,
+            list_attachments,
+            remove_attachment,
+            attachment_path,
         }
     };
 }
@@ -865,11 +874,12 @@ fn export_opportunities_csv(
 #[tauri::command]
 fn export_archive(
     storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
     path: String,
     overwrite: bool,
 ) -> Result<ArchiveExportReport, CommandError> {
     let mut storage = storage.lock().expect("storage mutex poisoned");
-    archive::export_archive(&mut storage, &path, overwrite).map_err(Into::into)
+    archive::export_archive(&mut storage, &attachments, &path, overwrite).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -884,10 +894,53 @@ fn preview_archive_import(
 #[tauri::command]
 fn import_archive(
     storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
     path: String,
 ) -> Result<ArchiveImportReport, CommandError> {
     let mut storage = storage.lock().expect("storage mutex poisoned");
-    archive::import_archive(&mut storage, &path).map_err(Into::into)
+    archive::import_archive(&mut storage, &attachments, &path).map_err(Into::into)
+}
+
+// Attachment commands — managed files on contacts and opportunities.
+
+#[tauri::command]
+fn add_attachment(
+    storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
+    request: AddAttachmentRequest,
+) -> Result<Attachment, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    attachments::add_attachment(&mut storage, &attachments, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn list_attachments(
+    storage: State<'_, SharedStorage>,
+    parent_type: AttachmentParentType,
+    parent_id: String,
+) -> Result<Vec<Attachment>, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    attachments::list_attachments(&storage, parent_type, &parent_id).map_err(Into::into)
+}
+
+#[tauri::command]
+fn remove_attachment(
+    storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
+    request: RemoveAttachmentRequest,
+) -> Result<AttachmentRemoval, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    attachments::remove_attachment(&mut storage, &attachments, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn attachment_path(
+    storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
+    attachment_id: String,
+) -> Result<AttachmentLocation, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    attachments::attachment_path(&storage, &attachments, &attachment_id).map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -901,12 +954,16 @@ pub fn run() {
     tauri::Builder::default()
         // File pickers for CSV import/export live in the frontend.
         .plugin(tauri_plugin_dialog::init())
+        // Opening an attachment hands the managed path to the OS.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Open and migrate the database in the Tauri app data dir; commands
             // reach it through managed state (Connection is Send, not Sync).
             let app_data = app.path().app_data_dir()?;
-            let storage = Storage::open_in_app_data(app_data)?;
+            let storage = Storage::open_in_app_data(&app_data)?;
             app.manage(Mutex::new(storage));
+            // Managed attachment files live beside the database.
+            app.manage(AttachmentStore::open_in_app_data(&app_data));
             Ok(())
         })
         .invoke_handler(with_local_api_v1_commands!(command_handler))

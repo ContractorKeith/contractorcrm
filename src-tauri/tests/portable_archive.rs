@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use contractorcrm_lib::archive::{export_archive, import_archive, preview_archive_import};
+use contractorcrm_lib::attachments::AttachmentStore;
 use contractorcrm_lib::storage::Storage;
 use rusqlite::types::Value;
 use serde_json::json;
@@ -26,16 +27,47 @@ const ARCHIVE_TABLES: &[&str] = &[
     "custom_field_defs",
     "custom_field_options",
     "custom_field_values",
+    "attachments",
 ];
 
 fn storage(temp: &Path, name: &str) -> Storage {
     Storage::open_in_app_data(temp.join(name)).unwrap()
 }
 
+/// Managed attachment root beside the database, the way production wires it.
+fn attachments(temp: &Path, name: &str) -> AttachmentStore {
+    AttachmentStore::open_in_app_data(temp.join(name))
+}
+
+/// Write a source file outside the store and attach it to a record.
+fn attach(
+    storage: &mut Storage,
+    store: &AttachmentStore,
+    source_dir: &Path,
+    parent_type: &str,
+    parent_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> contractorcrm_lib::attachments::Attachment {
+    std::fs::create_dir_all(source_dir).unwrap();
+    let source = source_dir.join(file_name);
+    std::fs::write(&source, bytes).unwrap();
+    contractorcrm_lib::attachments::add_attachment(
+        storage,
+        store,
+        serde_json::from_value(json!({
+            "parentType": parent_type, "parentId": parent_id,
+            "sourcePath": source.to_str().unwrap()
+        }))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 /// A database with rows in every canonical table: archived and active records,
 /// channels, stage history, activities on all three parents, personal and
 /// parented tasks, saved views, tags, and all four custom field types.
-fn populated(storage: &mut Storage) {
+fn populated(storage: &mut Storage, store: &AttachmentStore, source_dir: &Path) {
     use contractorcrm_lib::application as app;
 
     let acme: contractorcrm_lib::domain::Company = app::create_company(
@@ -259,6 +291,26 @@ fn populated(storage: &mut Storage) {
         .unwrap(),
     )
     .unwrap();
+    // Managed attachments on both parent kinds.
+    attach(
+        storage,
+        store,
+        source_dir,
+        "contact",
+        &dana.id,
+        "site-notes.txt",
+        b"measurements and gate swing",
+    );
+    attach(
+        storage,
+        store,
+        source_dir,
+        "opportunity",
+        &fence.id,
+        "cedar-quote.pdf",
+        b"%PDF-1.4 cedar quote",
+    );
+
     // Keep the lost opportunity referenced so stage history has two rows.
     assert_eq!(gate.stage_id, "stage-lost");
 }
@@ -379,9 +431,10 @@ fn table_rows(entries: &BTreeMap<String, Vec<u8>>, table: &str) -> serde_json::V
 fn exported() -> (tempfile::TempDir, PathBuf, Storage) {
     let temp = tempfile::tempdir().unwrap();
     let mut source = storage(temp.path(), "source");
-    populated(&mut source);
+    let store = attachments(temp.path(), "source");
+    populated(&mut source, &store, &temp.path().join("inbox"));
     let path = temp.path().join("crm-archive.zip");
-    export_archive(&mut source, path.to_str().unwrap(), false).unwrap();
+    export_archive(&mut source, &store, path.to_str().unwrap(), false).unwrap();
     (temp, path, source)
 }
 
@@ -403,7 +456,12 @@ fn archive_round_trips_every_canonical_row_into_a_fresh_database() {
     );
 
     let mut target = storage(temp.path(), "target");
-    let report = import_archive(&mut target, path.to_str().unwrap()).unwrap();
+    let report = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        path.to_str().unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(dump(&target), expected);
     for table in ARCHIVE_TABLES {
@@ -450,15 +508,33 @@ fn export_reports_counts_and_refuses_an_existing_destination() {
         );
     }
 
-    let report = export_archive(&mut source, path.to_str().unwrap(), true).unwrap();
+    let report = export_archive(
+        &mut source,
+        &attachments(temp.path(), "source"),
+        path.to_str().unwrap(),
+        true,
+    )
+    .unwrap();
     assert_eq!(report.file_count, entries.len());
     assert_eq!(report.record_counts["contacts"], 2);
     assert_eq!(report.record_counts["record_tags"], 4);
 
-    let error = export_archive(&mut source, path.to_str().unwrap(), false).unwrap_err();
+    let error = export_archive(
+        &mut source,
+        &attachments(temp.path(), "source"),
+        path.to_str().unwrap(),
+        false,
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
     let fresh = temp.path().join("elsewhere/new.zip");
-    export_archive(&mut source, fresh.to_str().unwrap(), false).unwrap();
+    export_archive(
+        &mut source,
+        &attachments(temp.path(), "source"),
+        fresh.to_str().unwrap(),
+        false,
+    )
+    .unwrap();
     assert!(fresh.exists(), "missing parent directories are created");
 }
 
@@ -480,7 +556,12 @@ fn a_tampered_file_is_reported_by_preview_and_refused_by_import() {
     );
     assert_eq!(dump(&target), before, "preview never writes");
 
-    let error = import_archive(&mut target, path.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        path.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
     assert_eq!(dump(&target), before);
 }
@@ -509,7 +590,12 @@ fn entries_that_escape_the_archive_root_are_rejected() {
         );
         drop(target);
         let mut target = storage(temp.path(), "target");
-        let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+        let error = import_archive(
+            &mut target,
+            &attachments(temp.path(), "target"),
+            tampered.to_str().unwrap(),
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), "validation_failed", "{name}");
         std::fs::remove_file(&tampered).unwrap();
     }
@@ -542,7 +628,12 @@ fn unsupported_schema_and_database_versions_are_rejected() {
         assert!(issue_codes(&preview).contains(&code), "{preview:?}");
         drop(target);
         let mut target = storage(temp.path(), "target");
-        let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+        let error = import_archive(
+            &mut target,
+            &attachments(temp.path(), "target"),
+            tampered.to_str().unwrap(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("version"), "{error}");
         std::fs::remove_file(&tampered).unwrap();
     }
@@ -575,7 +666,12 @@ fn a_dangling_reference_is_rejected_before_anything_is_written() {
         issue_codes(&preview).contains(&"missing_reference"),
         "{preview:?}"
     );
-    let error = import_archive(&mut target, path.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        path.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
     assert_eq!(dump(&target), before, "a refused import writes nothing");
 }
@@ -667,7 +763,12 @@ fn import_leaves_a_restorable_pre_import_safety_backup() {
     .unwrap();
     let before = dump(&target);
 
-    let report = import_archive(&mut target, path.to_str().unwrap()).unwrap();
+    let report = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        path.to_str().unwrap(),
+    )
+    .unwrap();
     assert_ne!(dump(&target), before);
     assert!(Path::new(&report.safety_backup_path).is_file());
 
@@ -724,7 +825,12 @@ fn inflated_manifest_counts_cannot_smuggle_an_empty_archive_past_preview() {
     // The preview reports what the archive actually holds, not the claim.
     assert_eq!(preview.record_counts["contacts"], 0);
 
-    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
     assert_eq!(dump(&target), before, "the wipe never happens");
 }
@@ -757,7 +863,12 @@ fn constraint_violations_are_caught_by_the_preview_dry_run() {
             issue_codes(&preview).contains(&"constraint_violation"),
             "{tampered:?}: {preview:?}"
         );
-        let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+        let error = import_archive(
+            &mut target,
+            &attachments(temp.path(), "target"),
+            tampered.to_str().unwrap(),
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), "validation_failed");
         assert_eq!(dump(&target), before);
         std::fs::remove_file(&tampered).unwrap();
@@ -784,12 +895,17 @@ fn an_oversized_entry_is_refused_without_being_buffered() {
         issue_codes(&preview).contains(&"entry_too_large"),
         "{preview:?}"
     );
-    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
 }
 
 #[test]
-fn attachments_are_refused_until_archives_carry_them() {
+fn an_asset_file_without_an_attachments_row_is_refused() {
     let (temp, path, _source) = exported();
     let tampered = repack(temp.path(), &path, "asset.zip", |entries| {
         entries.insert("assets/photo.jpg".into(), b"not really a photo".to_vec());
@@ -801,7 +917,12 @@ fn attachments_are_refused_until_archives_carry_them() {
         issue_codes(&preview).contains(&"unexpected_asset"),
         "{preview:?}"
     );
-    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
 }
 
@@ -847,7 +968,12 @@ fn an_archive_without_a_usable_pipeline_is_refused() {
         issue_codes(&preview).contains(&"missing_pipeline"),
         "{preview:?}"
     );
-    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
 
     // A pipeline whose stages cannot express won or lost is just as unusable.
@@ -863,7 +989,12 @@ fn an_archive_without_a_usable_pipeline_is_refused() {
         stages = json!(open_only);
         set_table(entries, "stages", &stages);
         // Everything that pointed at the removed stages goes too.
-        for table in ["opportunities", "stage_history", "record_tags"] {
+        for table in [
+            "opportunities",
+            "stage_history",
+            "record_tags",
+            "attachments",
+        ] {
             set_table(entries, table, &json!([]));
         }
         for table in ["activities", "tasks", "custom_field_values"] {
@@ -888,7 +1019,12 @@ fn a_refused_import_leaves_no_orphan_safety_backup() {
 
     let mut target = storage(temp.path(), "target");
     let directory = target.database_path().parent().unwrap().to_path_buf();
-    import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
 
     let backups = std::fs::read_dir(&directory)
         .unwrap()
@@ -914,7 +1050,7 @@ fn exports_refuse_to_overwrite_the_live_database() {
     ] {
         let path = destination.to_str().unwrap();
         for error in [
-            export_archive(&mut target, path, true).unwrap_err(),
+            export_archive(&mut target, &attachments(temp.path(), "live"), path, true).unwrap_err(),
             contractorcrm_lib::application::export_contacts_csv(&mut target, path, true)
                 .unwrap_err(),
             contractorcrm_lib::application::export_opportunities_csv(&mut target, path, true)
@@ -933,7 +1069,11 @@ fn exports_refuse_to_overwrite_the_live_database() {
 fn a_failed_csv_export_keeps_the_previous_file() {
     let temp = tempfile::tempdir().unwrap();
     let mut source = storage(temp.path(), "source");
-    populated(&mut source);
+    populated(
+        &mut source,
+        &attachments(temp.path(), "source"),
+        &temp.path().join("inbox"),
+    );
     let path = temp.path().join("contacts.csv");
     contractorcrm_lib::application::export_contacts_csv(&mut source, path.to_str().unwrap(), false)
         .unwrap();
@@ -974,6 +1114,191 @@ fn another_products_archive_is_refused_with_one_clear_issue() {
     let mut target = storage(temp.path(), "target");
     let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
     assert_eq!(issue_codes(&preview), ["wrong_product"], "{preview:?}");
-    let error = import_archive(&mut target, tampered.to_str().unwrap()).unwrap_err();
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
+}
+
+#[test]
+fn an_archive_carries_managed_attachment_files_and_replaces_the_targets() {
+    let (temp, path, source) = exported();
+    let expected = dump(&source);
+    assert_eq!(expected["attachments"].len(), 2);
+    // Every managed file is packed next to its row.
+    let entries = read_entries(&path);
+    let assets = entries
+        .keys()
+        .filter(|name| name.starts_with("assets/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(assets.len(), 2, "{assets:?}");
+    assert!(
+        assets.iter().any(|name| name.ends_with("/cedar-quote.pdf")),
+        "{assets:?}"
+    );
+
+    // The target starts with a managed file of its own; the import replaces it.
+    let mut target = storage(temp.path(), "target");
+    let target_store = attachments(temp.path(), "target");
+    let stale = target_store.root().join("stale-attachment");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("gone.txt"), b"replaced by the import").unwrap();
+
+    import_archive(&mut target, &target_store, path.to_str().unwrap()).unwrap();
+
+    assert_eq!(dump(&target), expected);
+    assert!(!stale.exists(), "orphaned managed files are cleared");
+    let mut located = Vec::new();
+    for id in ids(&target, "SELECT id FROM attachments ORDER BY created_at") {
+        let location =
+            contractorcrm_lib::attachments::attachment_path(&target, &target_store, &id).unwrap();
+        assert!(location.exists, "{location:?}");
+        located.push(std::fs::read(&location.path).unwrap());
+    }
+    assert!(
+        located.contains(&b"measurements and gate swing".to_vec()),
+        "attachment bytes survive the round trip"
+    );
+    // No staging directory is left behind.
+    let leftovers = std::fs::read_dir(target_store.root())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".import-staging-"))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn tampered_attachment_bytes_are_refused_by_the_manifest_and_by_the_row() {
+    let (temp, path, _source) = exported();
+    let asset_name = read_entries(&path)
+        .keys()
+        .find(|name| name.ends_with("/cedar-quote.pdf"))
+        .unwrap()
+        .clone();
+
+    // Repacked without re-signing: the manifest checksum catches it.
+    let mut entries = read_entries(&path);
+    entries.insert(asset_name.clone(), b"%PDF-1.4 swapped quote".to_vec());
+    let unsigned = temp.path().join("asset-unsigned.zip");
+    write_entries(&unsigned, &entries);
+
+    // Re-signed with the same length: only the row's checksum can catch it.
+    let same_length = repack(temp.path(), &path, "asset-resigned.zip", |entries| {
+        entries.insert(asset_name.clone(), b"%PDF-1.4 CEDAR quote".to_vec());
+    });
+    // Re-signed with a different length: the row's size catches it first.
+    let different_length = repack(temp.path(), &path, "asset-longer.zip", |entries| {
+        entries.insert(asset_name.clone(), b"%PDF-1.4 much longer quote".to_vec());
+    });
+
+    for (tampered, code) in [
+        (unsigned, "checksum_mismatch"),
+        (same_length, "attachment_checksum_mismatch"),
+        (different_length, "attachment_size_mismatch"),
+    ] {
+        let mut target = storage(temp.path(), "target");
+        let before = dump(&target);
+        let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+        assert!(issue_codes(&preview).contains(&code), "{code}: {preview:?}");
+        let error = import_archive(
+            &mut target,
+            &attachments(temp.path(), "target"),
+            tampered.to_str().unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "validation_failed");
+        assert_eq!(dump(&target), before);
+    }
+}
+
+#[test]
+fn an_attachments_row_without_its_file_is_refused() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "no-asset.zip", |entries| {
+        entries.retain(|name, _| !name.ends_with("/cedar-quote.pdf"));
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"attachment_file_missing"),
+        "{preview:?}"
+    );
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    // Nothing was staged on the way to the refusal.
+    assert!(!attachments(temp.path(), "target").root().exists());
+}
+
+#[test]
+fn an_archive_written_before_attachments_existed_still_imports() {
+    let (temp, path, _source) = exported();
+    // Exactly what a migration-9 export looks like: no attachments table file,
+    // no assets, and a manifest that predates the table.
+    let older = repack(temp.path(), &path, "migration-9.zip", |entries| {
+        entries.retain(|name, _| name != "data/attachments.json" && !name.starts_with("assets/"));
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&entries["manifest.json"]).unwrap();
+        manifest["databaseMigrationVersion"] = json!(9);
+        entries.insert(
+            "manifest.json".into(),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        );
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, older.to_str().unwrap()).unwrap();
+    assert_eq!(preview.issues, vec![], "{preview:?}");
+    assert!(!preview.record_counts.contains_key("attachments"));
+
+    let report = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        older.to_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report.record_counts["attachments"], 0);
+    assert!(dump(&target)["attachments"].is_empty());
+    assert!(!dump(&target)["contacts"].is_empty());
+}
+
+#[test]
+fn an_export_refuses_to_write_an_archive_missing_a_managed_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut source = storage(temp.path(), "source");
+    let store = attachments(temp.path(), "source");
+    populated(&mut source, &store, &temp.path().join("inbox"));
+    let id = ids(&source, "SELECT id FROM attachments ORDER BY created_at")
+        .first()
+        .unwrap()
+        .clone();
+    std::fs::remove_dir_all(store.root().join(&id)).unwrap();
+
+    let path = temp.path().join("broken.zip");
+    let error = export_archive(&mut source, &store, path.to_str().unwrap(), false).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("missing its file"), "{error}");
+    assert!(!path.exists(), "a refused export writes nothing");
+}
+
+/// Ids from a single-column query, in query order.
+fn ids(storage: &Storage, sql: &str) -> Vec<String> {
+    storage
+        .connection()
+        .prepare(sql)
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
 }

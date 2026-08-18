@@ -21,6 +21,8 @@ serde_json = "1"
 sha2 = "0.10"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2"
+# Opens a managed attachment with the OS default application.
+tauri-plugin-opener = "2"
 thiserror = "2.0.20"
 uuid = { version = "1.24.0", features = ["serde", "v7"] }
 # Portable archive container: deflate only (no aes/bzip2/zstd/time backends).

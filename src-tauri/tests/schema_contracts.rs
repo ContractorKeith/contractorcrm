@@ -5,6 +5,9 @@ use contractorcrm_lib::{
         SavedViewSort, SavedViewSortDirection, SearchResult, SetRecordMetadataRequest,
     },
     archive::{ArchiveFileEntry, ArchiveIssue, ArchiveManifest, ARCHIVE_SCHEMA_VERSION},
+    attachments::{
+        AddAttachmentRequest, Attachment, AttachmentParentType, RemoveAttachmentRequest,
+    },
     error::ApplicationError,
     storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
 };
@@ -592,6 +595,96 @@ fn portable_archive_publishes_strict_bounded_wire_types() {
         "code": "checksum_mismatch", "message": "bad", "unexpected": true
     }))
     .is_err());
+}
+
+#[test]
+fn attachments_publish_strict_bounded_wire_types() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for name in [
+        "add_attachment",
+        "list_attachments",
+        "remove_attachment",
+        "attachment_path",
+    ] {
+        assert!(
+            commands.iter().any(|command| command["name"] == name),
+            "missing {name}"
+        );
+    }
+    for strict_type in [
+        "Attachment",
+        "AddAttachmentRequest",
+        "RemoveAttachmentRequest",
+        "AttachmentRemoval",
+        "AttachmentLocation",
+    ] {
+        assert_eq!(
+            schema["wireTypes"][strict_type]["additionalProperties"], false,
+            "{strict_type} must reject unknown fields"
+        );
+    }
+    assert_eq!(
+        string_array(&schema["wireTypes"]["AttachmentParentType"], "enum"),
+        ["contact", "opportunity"]
+    );
+
+    // The published shape is exactly what the seam returns; the managed
+    // relative path stays internal.
+    let attachment = Attachment {
+        id: "attachment-1".into(),
+        parent_type: AttachmentParentType::Opportunity,
+        parent_id: "opportunity-1".into(),
+        file_name: "cedar-quote.pdf".into(),
+        media_type: Some("application/pdf".into()),
+        size_bytes: 12,
+        sha256: "0".repeat(64),
+        created_at: "2026-08-18T00:00:00.000Z".into(),
+        version: 1,
+    };
+    let serialized = serde_json::to_value(attachment).expect("serialize attachment");
+    let mut actual_fields = serialized
+        .as_object()
+        .expect("attachment is an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual_fields.sort();
+    let mut expected_fields = string_array(&schema["wireTypes"]["Attachment"], "required");
+    expected_fields.sort();
+    assert_eq!(actual_fields, expected_fields);
+    assert_eq!(serialized["parentType"], "opportunity");
+    assert!(serialized.get("relativePath").is_none());
+
+    assert!(
+        serde_json::from_value::<AddAttachmentRequest>(serde_json::json!({
+            "parentType": "contact", "parentId": "contact-1",
+            "sourcePath": "/tmp/quote.pdf", "unexpected": true
+        }))
+        .is_err()
+    );
+    // Attachments hang off contacts and opportunities only.
+    assert!(
+        serde_json::from_value::<AddAttachmentRequest>(serde_json::json!({
+            "parentType": "company", "parentId": "company-1", "sourcePath": "/tmp/quote.pdf"
+        }))
+        .is_err()
+    );
+    // Adds default to the user actor recorded in the command log.
+    let defaulted: AddAttachmentRequest = serde_json::from_value(serde_json::json!({
+        "parentType": "contact", "parentId": "contact-1", "sourcePath": "/tmp/quote.pdf"
+    }))
+    .expect("actor is optional");
+    assert_eq!(
+        serde_json::to_value(defaulted.actor).expect("serialize actor"),
+        "user"
+    );
+    assert!(
+        serde_json::from_value::<RemoveAttachmentRequest>(serde_json::json!({
+            "attachmentId": "attachment-1"
+        }))
+        .is_err()
+    );
 }
 
 #[test]

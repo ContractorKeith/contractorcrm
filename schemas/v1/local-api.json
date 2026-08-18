@@ -75,7 +75,11 @@
     {"name":"export_opportunities_csv","mode":"write","input":[{"name":"path","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"CsvExportReport"},
     {"name":"export_archive","mode":"write","input":[{"name":"path","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"ArchiveExportReport"},
     {"name":"preview_archive_import","mode":"read","input":[{"name":"path","type":"string","required":true}],"output":"ArchiveImportPreview"},
-    {"name":"import_archive","mode":"write","input":[{"name":"path","type":"string","required":true}],"output":"ArchiveImportReport"}
+    {"name":"import_archive","mode":"write","input":[{"name":"path","type":"string","required":true}],"output":"ArchiveImportReport"},
+    {"name":"add_attachment","mode":"write","input":[{"name":"request","type":"AddAttachmentRequest","required":true}],"output":"Attachment"},
+    {"name":"list_attachments","mode":"read","input":[{"name":"parentType","type":"AttachmentParentType","required":true},{"name":"parentId","type":"string","required":true}],"output":"Attachment[]"},
+    {"name":"remove_attachment","mode":"write","input":[{"name":"request","type":"RemoveAttachmentRequest","required":true}],"output":"AttachmentRemoval"},
+    {"name":"attachment_path","mode":"read","input":[{"name":"attachmentId","type":"string","required":true}],"output":"AttachmentLocation"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
@@ -153,6 +157,12 @@
     "ArchiveExportReport": {"type":"object","additionalProperties":false,"required":["path","recordCounts","fileCount"],"properties":{"path":{"type":"string"},"recordCounts":{"type":"ArchiveRecordCounts"},"fileCount":{"type":"integer"}}},
     "ArchiveImportPreview": {"type":"object","additionalProperties":false,"required":["schemaVersion","product","exportedAt","databaseMigrationVersion","recordCounts","issues"],"properties":{"schemaVersion":{"type":"integer"},"product":{"type":"ProductInfo"},"exportedAt":{"type":"string"},"databaseMigrationVersion":{"type":"integer"},"recordCounts":{"type":"ArchiveRecordCounts"},"issues":{"type":"ArchiveIssue[]"}}},
     "ArchiveImportReport": {"type":"object","additionalProperties":false,"required":["recordCounts","safetyBackupPath"],"properties":{"recordCounts":{"type":"ArchiveRecordCounts"},"safetyBackupPath":{"type":"string"}}},
+    "AttachmentParentType": {"enum":["contact","opportunity"]},
+    "Attachment": {"type":"object","additionalProperties":false,"required":["id","parentType","parentId","fileName","mediaType","sizeBytes","sha256","createdAt","version"],"properties":{"id":{"type":"string"},"parentType":{"type":"AttachmentParentType"},"parentId":{"type":"string"},"fileName":{"type":"string","description":"sanitized display name; also the managed file name"},"mediaType":{"type":["string","null"]},"sizeBytes":{"type":"integer"},"sha256":{"type":"string"},"createdAt":{"type":"string"},"version":{"type":"integer"}}},
+    "AddAttachmentRequest": {"type":"object","additionalProperties":false,"required":["parentType","parentId","sourcePath"],"properties":{"actor":{"type":"Actor"},"parentType":{"type":"AttachmentParentType"},"parentId":{"type":"string"},"sourcePath":{"type":"string"}}},
+    "RemoveAttachmentRequest": {"type":"object","additionalProperties":false,"required":["attachmentId","expectedVersion"],"properties":{"actor":{"type":"Actor"},"attachmentId":{"type":"string"},"expectedVersion":{"type":"integer"}}},
+    "AttachmentRemoval": {"type":"object","additionalProperties":false,"required":["fileRemoved"],"properties":{"fileRemoved":{"type":"boolean"}}},
+    "AttachmentLocation": {"type":"object","additionalProperties":false,"required":["path","exists"],"properties":{"path":{"type":"string","description":"absolute path of the managed file"},"exists":{"type":"boolean"}}},
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",

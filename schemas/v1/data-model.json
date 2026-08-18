@@ -1,7 +1,7 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 9,
+  "databaseMigrationVersion": 10,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
@@ -11,9 +11,17 @@
     { "version": 6, "name": "fts5_search_projection" },
     { "version": 7, "name": "saved_views" },
     { "version": 8, "name": "tags_custom_fields" },
-    { "version": 9, "name": "contact_external_ids" }
+    { "version": 9, "name": "contact_external_ids" },
+    { "version": 10, "name": "attachments" }
   ],
   "tables": {
+    "attachments": {
+      "columns": {"id":"TEXT","parent_type":"TEXT","parent_id":"TEXT","file_name":"TEXT","relative_path":"TEXT","media_type":"TEXT","size_bytes":"INTEGER","sha256":"TEXT","created_at":"TEXT","version":"INTEGER"},
+      "required": ["parent_type","parent_id","file_name","relative_path","size_bytes","sha256","created_at","version"],
+      "primaryKey": ["id"],
+      "indexes": [{"name":"attachments_parent","unique":false,"columns":["parent_type","parent_id","created_at"]}],
+      "sqlChecks": ["parent_type IN ('contact', 'opportunity')", "size_bytes >= 0", "version > 0"]
+    },
     "activities": {
       "columns": {"id":"TEXT","parent_type":"TEXT","parent_id":"TEXT","kind":"TEXT","direction":"TEXT","occurred_at":"TEXT","summary":"TEXT","body":"TEXT","actor":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
       "required": ["parent_type","parent_id","kind","direction","occurred_at","summary","actor","created_at","updated_at","version"],
@@ -113,7 +121,7 @@
     "custom_field_options": {"columns":{"id":"TEXT","definition_id":"TEXT","label":"TEXT","sort_key":"INTEGER"},"required":["definition_id","label","sort_key"],"primaryKey":["id"],"foreignKeys":[{"from":"definition_id","table":"custom_field_defs","to":"id","onDelete":"RESTRICT"}],"indexes":[{"name":"custom_field_options_definition_label_unique","unique":true,"columns":["definition_id","label"]},{"name":"custom_field_options_definition_sort","unique":false,"columns":["definition_id","sort_key","id"]}],"sqlChecks":["length(trim(label)) BETWEEN 1 AND 120","sort_key >= 0"]},
     "custom_field_values": {"columns":{"id":"TEXT","definition_id":"TEXT","entity_type":"TEXT","record_id":"TEXT","text_value":"TEXT","number_value":"REAL","date_value":"TEXT","option_id":"TEXT","created_at":"TEXT","updated_at":"TEXT"},"required":["definition_id","entity_type","record_id","created_at","updated_at"],"primaryKey":["id"],"foreignKeys":[{"from":"definition_id","table":"custom_field_defs","to":"id","onDelete":"RESTRICT"},{"from":"option_id","table":"custom_field_options","to":"id","onDelete":"RESTRICT"}],"indexes":[{"name":"custom_field_values_definition_record_unique","unique":true,"columns":["definition_id","entity_type","record_id"]},{"name":"custom_field_values_record","unique":false,"columns":["entity_type","record_id"]},{"name":"custom_field_values_definition_text","unique":false,"columns":["definition_id","text_value"]},{"name":"custom_field_values_definition_number","unique":false,"columns":["definition_id","number_value"]},{"name":"custom_field_values_definition_date","unique":false,"columns":["definition_id","date_value"]},{"name":"custom_field_values_definition_option","unique":false,"columns":["definition_id","option_id"]}],"sqlChecks":["entity_type IN ('contact', 'company', 'opportunity')","(text_value IS NOT NULL) + (number_value IS NOT NULL) + (date_value IS NOT NULL) + (option_id IS NOT NULL) = 1"]}
   },
-  "triggers": ["record_tags_owner_insert","record_tags_owner_update","custom_field_values_valid_insert","custom_field_values_valid_update","contacts_metadata_delete","companies_metadata_delete","opportunities_metadata_delete"],
+  "triggers": ["record_tags_owner_insert","record_tags_owner_update","custom_field_values_valid_insert","custom_field_values_valid_update","contacts_metadata_delete","companies_metadata_delete","opportunities_metadata_delete","attachments_owner_insert","attachments_owner_update","contacts_attachments_delete","opportunities_attachments_delete"],
   "recordVersions": {
     "initial": 1,
     "strategy": "positive_integer_incremented_by_version_checked_writes"
