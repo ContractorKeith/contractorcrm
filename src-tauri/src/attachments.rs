@@ -167,17 +167,7 @@ impl AttachmentStore {
     /// Refuses anything that could address outside the root — a stored value
     /// is data, never a path the filesystem gets to interpret.
     pub(crate) fn file_path(&self, relative_path: &str) -> Result<PathBuf, ApplicationError> {
-        let components: Vec<&str> = relative_path.split('/').collect();
-        if components.len() != 2 || !components.iter().copied().all(valid_path_component) {
-            return Err(ApplicationError::InvalidStoredData(format!(
-                "attachment path \"{relative_path}\" is not a managed <id>/<file name> pair"
-            )));
-        }
-        let mut path = self.absolute_root();
-        for component in components {
-            path.push(component);
-        }
-        Ok(path)
+        file_path_under(&self.absolute_root(), relative_path)
     }
 
     /// Directory holding one attachment's file.
@@ -504,16 +494,83 @@ fn copy_into_management(
     ))
 }
 
-/// One managed path segment: never empty, never a dot form, no separators or
-/// control characters. Shared by the store, the archive verifier, and the
-/// cleanup path so no stored value can steer the filesystem.
+/// Build `<root>/<id>/<file name>` from a stored relative path, validating
+/// every segment first. Used for the managed root and for the import staging
+/// directory, so neither ever folds a stored string straight into a path.
+pub(crate) fn file_path_under(
+    root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, ApplicationError> {
+    let components: Vec<&str> = relative_path.split('/').collect();
+    if components.len() != 2 || !components.iter().copied().all(valid_path_component) {
+        return Err(ApplicationError::InvalidStoredData(format!(
+            "attachment path \"{relative_path}\" is not a managed <id>/<file name> pair"
+        )));
+    }
+    let mut path = root.to_path_buf();
+    for component in components {
+        path.push(component);
+    }
+    Ok(path)
+}
+
+/// One managed path segment: never empty, never a dot form, no separators,
+/// control characters, or invisible format characters. Shared by the store,
+/// the archive verifier, and the cleanup path so no stored value can steer the
+/// filesystem or disguise what a file is called.
 pub(crate) fn valid_path_component(component: &str) -> bool {
     !component.is_empty()
         && component != "."
         && component != ".."
-        && !component
-            .chars()
-            .any(|character| matches!(character, '/' | '\\') || character.is_control())
+        && !component.chars().any(|character| {
+            matches!(character, '/' | '\\')
+                || character.is_control()
+                || is_format_character(character)
+        })
+}
+
+/// Invisible formatting characters (Unicode general category Cf plus the
+/// zero-width space): they render as nothing or reorder what follows, so
+/// "photo\u{202e}fdp.exe" can pose as "photo exe.pdf". Listed explicitly
+/// because std does not expose Unicode general categories.
+fn is_format_character(character: char) -> bool {
+    matches!(character,
+        '\u{00ad}'
+        | '\u{0600}'..='\u{0605}'
+        | '\u{061c}'
+        | '\u{06dd}'
+        | '\u{070f}'
+        | '\u{08e2}'
+        | '\u{180e}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206f}'
+        | '\u{feff}'
+        | '\u{fff9}'..='\u{fffb}'
+        | '\u{110bd}'
+        | '\u{1d173}'..='\u{1d17a}'
+        | '\u{e0001}'
+        | '\u{e0020}'..='\u{e007f}')
+}
+
+/// Clear leftover import staging directories from the managed root. A crash
+/// between the import transaction and the file swap can strand one; the
+/// database is authoritative, so the staged bytes are simply discarded.
+/// Best effort — housekeeping never fails the command that triggered it.
+pub(crate) fn sweep_import_staging(store: &AttachmentStore) {
+    let Ok(entries) = std::fs::read_dir(store.absolute_root()) else {
+        return; // no root yet, nothing to sweep
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(IMPORT_STAGING_PREFIX)
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Best-effort removal of one attachment's directory; true when nothing is
@@ -551,6 +608,7 @@ pub fn sanitized_file_name(raw: &str) -> Result<String, ApplicationError> {
         .chars()
         .filter(|character| {
             !character.is_control()
+                && !is_format_character(*character)
                 && !matches!(
                     character,
                     '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'

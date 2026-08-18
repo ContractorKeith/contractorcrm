@@ -190,6 +190,20 @@ fn file_names_are_sanitized_into_a_safe_managed_layout() {
             "{raw} must be guarded"
         );
     }
+    // Invisible format characters are stripped: a right-to-left override can
+    // make an executable render as a PDF.
+    assert_eq!(
+        sanitized_file_name("photo\u{202e}fdp.exe").unwrap(),
+        "photofdp.exe"
+    );
+    assert_eq!(
+        sanitized_file_name("in\u{200b}voice\u{feff}.pdf").unwrap(),
+        "invoice.pdf"
+    );
+    assert_eq!(
+        sanitized_file_name("\u{202e}\u{200b}").unwrap_err().kind(),
+        "invalid_input"
+    );
     assert_eq!(sanitized_file_name("contract.pdf").unwrap(), "contract.pdf");
     // Long names are capped in bytes but keep their extension.
     let long = format!("{}.pdf", "a".repeat(400));
@@ -216,6 +230,16 @@ fn a_sanitized_name_is_what_lands_on_disk() {
 
     assert_eq!(attachment.file_name, "_CON.txt");
     assert!(store.root().join(&attachment.id).join("_CON.txt").is_file());
+    // A spoofed name lands on disk without its override character.
+    let spoofed = source_file(temp.path(), "photo\u{202e}fdp.exe", b"MZ");
+    let attachment = add(&mut storage, &store, "contact", &dana, &spoofed).unwrap();
+    assert_eq!(attachment.file_name, "photofdp.exe");
+    assert!(store
+        .root()
+        .join(&attachment.id)
+        .join("photofdp.exe")
+        .is_file());
+
     let unicode = source_file(temp.path(), "見積 2026.pdf", b"%PDF-1.4");
     let attachment = add(&mut storage, &store, "contact", &dana, &unicode).unwrap();
     assert_eq!(attachment.file_name, "見積 2026.pdf");

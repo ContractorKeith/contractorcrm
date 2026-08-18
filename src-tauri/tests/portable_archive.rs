@@ -1391,3 +1391,121 @@ fn a_poisoned_relative_path_never_escapes_the_attachments_root() {
 
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
 }
+
+#[test]
+fn a_stranded_import_staging_directory_is_swept() {
+    let (temp, path, mut source) = exported();
+
+    // A crash between the import transaction and the file swap leaves one of
+    // these behind; the next import clears it.
+    let target_store = attachments(temp.path(), "target");
+    std::fs::create_dir_all(target_store.root()).unwrap();
+    let stranded = target_store.root().join(".import-staging-crashed");
+    std::fs::create_dir_all(stranded.join("attachment-1")).unwrap();
+    std::fs::write(stranded.join("attachment-1/orphan.txt"), b"stale").unwrap();
+
+    let mut target = storage(temp.path(), "target");
+    import_archive(&mut target, &target_store, path.to_str().unwrap()).unwrap();
+    assert!(!stranded.exists(), "a stale staging directory is swept");
+
+    // Exports sweep too, so nothing has to wait for the next import.
+    let source_store = attachments(temp.path(), "source");
+    let stale = source_store.root().join(".import-staging-older");
+    std::fs::create_dir_all(&stale).unwrap();
+    export_archive(
+        &mut source,
+        &source_store,
+        temp.path().join("again.zip").to_str().unwrap(),
+        false,
+    )
+    .unwrap();
+    assert!(!stale.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_post_commit_file_swap_still_reports_the_import() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (temp, path, _source) = exported();
+    let store = attachments(temp.path(), "target");
+    std::fs::create_dir_all(store.root()).unwrap();
+    // A read-only directory whose child cannot be unlinked: the swap fails
+    // both times, after the import transaction has already committed.
+    let stubborn = store.root().join("stubborn-attachment");
+    std::fs::create_dir_all(stubborn.join("locked")).unwrap();
+    std::fs::set_permissions(&stubborn, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let mut target = storage(temp.path(), "target");
+    let report = import_archive(&mut target, &store, path.to_str().unwrap()).unwrap();
+
+    // The database is authoritative: the import is reported, backup path and
+    // all, and the attachments simply have no file yet.
+    assert!(Path::new(&report.safety_backup_path).is_file());
+    assert_eq!(report.record_counts["attachments"], 2);
+    for id in ids(&target, "SELECT id FROM attachments ORDER BY created_at") {
+        let location =
+            contractorcrm_lib::attachments::attachment_path(&target, &store, &id).unwrap();
+        assert!(!location.exists, "{location:?}");
+    }
+    // Let the temporary directory clean itself up.
+    std::fs::set_permissions(&stubborn, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn an_export_past_the_archive_size_limit_is_refused_before_it_is_built() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut source = storage(temp.path(), "source");
+    let store = attachments(temp.path(), "source");
+    populated(&mut source, &store, &temp.path().join("inbox"));
+    // A row claiming more than the archive limit; the size comes from the row,
+    // so no oversized file has to exist for the export to refuse.
+    source
+        .connection()
+        .execute(
+            "UPDATE attachments SET size_bytes = 2147483648
+             WHERE id = (SELECT id FROM attachments ORDER BY created_at LIMIT 1)",
+            [],
+        )
+        .unwrap();
+
+    let path = temp.path().join("too-big.zip");
+    let error = export_archive(&mut source, &store, path.to_str().unwrap(), false).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("archive limit"), "{error}");
+    assert!(!path.exists(), "a refused export writes nothing");
+}
+
+#[test]
+fn an_attachment_row_with_an_invisible_file_name_is_refused() {
+    let (temp, path, _source) = exported();
+    // A right-to-left override makes "cedar\u{202e}fdp.exe" render as an
+    // innocent PDF; the row is refused rather than written to disk.
+    let spoofed = "cedar\u{202e}fdp.exe";
+    let tampered = repack(temp.path(), &path, "bidi.zip", |entries| {
+        let mut rows = table_rows(entries, "attachments");
+        let id = rows[0]["id"].as_str().unwrap().to_owned();
+        let original = rows[0]["fileName"].as_str().unwrap().to_owned();
+        rows[0]["fileName"] = json!(spoofed);
+        rows[0]["relativePath"] = json!(format!("{id}/{spoofed}"));
+        set_table(entries, "attachments", &rows);
+        let bytes = entries.remove(&format!("assets/{id}/{original}")).unwrap();
+        entries.insert(format!("assets/{id}/{spoofed}"), bytes);
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let before = dump(&target);
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"invalid_value"),
+        "{preview:?}"
+    );
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before);
+}

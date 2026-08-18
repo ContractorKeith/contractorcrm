@@ -19,7 +19,9 @@ use crate::application::{
     check_export_destination, csv_bytes, immediate, log_command, rebuild_search_index,
     write_contacts_csv, write_export_file, write_opportunities_csv, ProductInfo,
 };
-use crate::attachments::{AttachmentStore, IMPORT_STAGING_PREFIX};
+use crate::attachments::{
+    file_path_under, sweep_import_staging, AttachmentStore, IMPORT_STAGING_PREFIX,
+};
 use crate::domain::Actor;
 use crate::error::ApplicationError;
 use crate::storage::{self, now_utc, Storage};
@@ -284,6 +286,9 @@ pub fn export_archive(
     overwrite: bool,
 ) -> Result<ArchiveExportReport, ApplicationError> {
     let path = check_export_destination(storage, path, overwrite)?;
+    // Housekeeping first: a crashed import can strand a staging directory in
+    // the managed root, and nothing else ever clears it.
+    sweep_import_staging(store);
     let connection = storage.connection();
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -293,10 +298,19 @@ pub fn export_archive(
         record_counts.insert((*table).to_owned(), count);
         files.push((format!("data/{table}.json"), rows));
     }
+    // The archive is assembled in memory (streaming is a later change), so the
+    // total is tracked as it grows: an archive past the import limit could
+    // never be read back, and the attachment sizes are known from their rows
+    // before a single byte is read.
+    let mut total_bytes: u64 = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
     // Managed attachment files travel with their rows; a row whose file is
     // gone would produce an archive that can never be imported, so it is an
     // error here rather than a surprise on the other side.
-    for (id, file_name, relative_path) in attachment_files(connection)? {
+    for (id, file_name, relative_path, size_bytes) in attachment_files(connection)? {
+        total_bytes = total_bytes.saturating_add(size_bytes.max(0) as u64);
+        if total_bytes > MAX_ARCHIVE_BYTES {
+            return Err(archive_too_large());
+        }
         let managed = store.file_path(&relative_path)?;
         let bytes =
             std::fs::read(&managed).map_err(|error| ApplicationError::ValidationFailed {
@@ -320,6 +334,14 @@ pub fn export_archive(
         "csv/opportunities.csv".to_owned(),
         csv_bytes(opportunities_csv)?,
     ));
+    if files
+        .iter()
+        .map(|(_, bytes)| bytes.len() as u64)
+        .sum::<u64>()
+        > MAX_ARCHIVE_BYTES
+    {
+        return Err(archive_too_large());
+    }
 
     let manifest = ArchiveManifest {
         schema_version: ARCHIVE_SCHEMA_VERSION,
@@ -406,16 +428,33 @@ fn export_table(connection: &Connection, table: &str) -> Result<(Vec<u8>, i64), 
     Ok((json, count))
 }
 
-/// Every attachment's id, display name, and managed relative path.
+/// Every attachment's id, display name, managed relative path, and size.
 fn attachment_files(
     connection: &Connection,
-) -> Result<Vec<(String, String, String)>, ApplicationError> {
-    let mut statement = connection
-        .prepare("SELECT id, file_name, relative_path FROM attachments ORDER BY created_at, id")?;
+) -> Result<Vec<(String, String, String, i64)>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, file_name, relative_path, size_bytes
+         FROM attachments ORDER BY created_at, id",
+    )?;
     let rows = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// One archive has to fit inside the limit import will read it back under.
+fn archive_too_large() -> ApplicationError {
+    ApplicationError::ValidationFailed {
+        code: "archive_too_large",
+        field: "path".into(),
+        message: format!(
+            "this database's records and attachments are larger than the \
+             {MAX_ARCHIVE_BYTES} byte archive limit; remove some attachments \
+             and export again"
+        ),
+    }
 }
 
 /// Stored value to archive JSON. Blobs never appear in the CRM schema, so one
@@ -1451,7 +1490,9 @@ pub fn import_archive(
 
     // Attachment bytes land in a staging directory first: everything that can
     // fail on the filesystem fails before the database transaction, and the
-    // swap afterwards is only renames.
+    // swap afterwards is only renames. Any staging directory a previous run
+    // left behind is cleared before this one starts.
+    sweep_import_staging(store);
     let staging = stage_assets(store, &verified.assets)?;
 
     // Only now, with nothing left to reject, is the live database touched.
@@ -1506,10 +1547,16 @@ pub fn import_archive(
     )?;
     transaction.commit()?;
 
-    // Ordering is deliberate: the database is authoritative, so the managed
-    // files are swapped only after the rows they belong to are committed. A
-    // failure here is reported, but the import itself already happened.
-    swap_staged_assets(store, &staging)?;
+    // Ordering contract: the database is authoritative and the transaction has
+    // committed, so the import has happened whatever the filesystem does next.
+    // The swap gets one retry (a transient lock or a stray file handle is the
+    // realistic failure), and a still-failing swap is not an error the caller
+    // sees — surfacing one would throw away the safety backup path they need.
+    // The attachments simply report `exists: false` until the archive is
+    // imported again.
+    if swap_staged_assets(store, &staging).is_err() {
+        let _ = swap_staged_assets(store, &staging);
+    }
 
     Ok(ArchiveImportReport {
         record_counts,
@@ -1531,9 +1578,9 @@ fn stage_assets(
     let staged = (|| -> Result<(), ApplicationError> {
         std::fs::create_dir_all(&staging)?;
         for (relative_path, bytes) in assets {
-            let destination = relative_path
-                .split('/')
-                .fold(staging.clone(), |path, component| path.join(component));
+            // Same validated segment rules as the managed root: a stored path
+            // is never folded into a filesystem path unchecked.
+            let destination = file_path_under(&staging, relative_path)?;
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)?;
             }
