@@ -5691,3 +5691,1027 @@ fn log_command(
     )?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// CSV import/export
+// ---------------------------------------------------------------------------
+
+/// Sample rows returned by the import preview.
+const IMPORT_SAMPLE_ROWS: usize = 50;
+/// Default contact kind when the CSV has no usable kind column.
+const IMPORT_DEFAULT_KIND: &str = "client";
+
+/// Import targets in mapping order with the header aliases the auto-guess
+/// accepts. Aliases are normalized (lowercase, alphanumeric only) and the
+/// first alias that matches an unclaimed header wins.
+const IMPORT_TARGETS: &[(&str, &[&str])] = &[
+    (
+        "externalId",
+        &["externalid", "externalref", "sourceid", "recordid", "id"],
+    ),
+    ("firstName", &["firstname", "first", "givenname"]),
+    ("lastName", &["lastname", "last", "surname", "familyname"]),
+    (
+        "displayName",
+        &["displayname", "fullname", "contactname", "name"],
+    ),
+    ("role", &["role", "title", "jobtitle"]),
+    ("kind", &["kind", "contacttype", "partykind", "type"]),
+    (
+        "preferredContactMethod",
+        &[
+            "preferredcontactmethod",
+            "preferredmethod",
+            "contactmethod",
+            "preferredcontact",
+        ],
+    ),
+    (
+        "addressLine1",
+        &[
+            "addressline1",
+            "address1",
+            "streetaddress",
+            "street",
+            "address",
+        ],
+    ),
+    (
+        "addressLine2",
+        &["addressline2", "address2", "suite", "unit"],
+    ),
+    ("city", &["city", "town"]),
+    ("state", &["state", "province", "region"]),
+    ("postalCode", &["postalcode", "zipcode", "zip", "postcode"]),
+    ("propertyType", &["propertytype", "property"]),
+    ("notes", &["notes", "note", "comments", "description"]),
+    (
+        "company",
+        &[
+            "companyname",
+            "company",
+            "organization",
+            "organisation",
+            "account",
+            "business",
+        ],
+    ),
+    (
+        "email",
+        &["emailaddress", "email", "primaryemail", "email1"],
+    ),
+    (
+        "phone",
+        &[
+            "phonenumber",
+            "phone",
+            "primaryphone",
+            "mobile",
+            "cell",
+            "telephone",
+            "tel",
+        ],
+    ),
+    ("tags", &["tags", "tag", "labels"]),
+];
+
+/// CSV column mapping: each importable contact target names the CSV header it
+/// reads from. Unset targets are simply not imported.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct ContactImportMapping {
+    pub external_id: Option<String>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub kind: Option<String>,
+    pub preferred_contact_method: Option<String>,
+    pub address_line1: Option<String>,
+    pub address_line2: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub postal_code: Option<String>,
+    pub property_type: Option<String>,
+    pub notes: Option<String>,
+    pub company: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub tags: Option<String>,
+}
+
+impl ContactImportMapping {
+    /// Header currently mapped to a target key from `IMPORT_TARGETS`.
+    fn header_for(&self, target: &str) -> Option<&str> {
+        let value = match target {
+            "externalId" => &self.external_id,
+            "firstName" => &self.first_name,
+            "lastName" => &self.last_name,
+            "displayName" => &self.display_name,
+            "role" => &self.role,
+            "kind" => &self.kind,
+            "preferredContactMethod" => &self.preferred_contact_method,
+            "addressLine1" => &self.address_line1,
+            "addressLine2" => &self.address_line2,
+            "city" => &self.city,
+            "state" => &self.state,
+            "postalCode" => &self.postal_code,
+            "propertyType" => &self.property_type,
+            "notes" => &self.notes,
+            "company" => &self.company,
+            "email" => &self.email,
+            "phone" => &self.phone,
+            "tags" => &self.tags,
+            _ => unreachable!("unknown import target"),
+        };
+        value.as_deref()
+    }
+
+    fn set(&mut self, target: &str, header: String) {
+        let slot = match target {
+            "externalId" => &mut self.external_id,
+            "firstName" => &mut self.first_name,
+            "lastName" => &mut self.last_name,
+            "displayName" => &mut self.display_name,
+            "role" => &mut self.role,
+            "kind" => &mut self.kind,
+            "preferredContactMethod" => &mut self.preferred_contact_method,
+            "addressLine1" => &mut self.address_line1,
+            "addressLine2" => &mut self.address_line2,
+            "city" => &mut self.city,
+            "state" => &mut self.state,
+            "postalCode" => &mut self.postal_code,
+            "propertyType" => &mut self.property_type,
+            "notes" => &mut self.notes,
+            "company" => &mut self.company,
+            "email" => &mut self.email,
+            "phone" => &mut self.phone,
+            "tags" => &mut self.tags,
+            _ => unreachable!("unknown import target"),
+        };
+        *slot = Some(header);
+    }
+}
+
+/// One row the import refused, identified by its 1-based CSV line number.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContactImportIssue {
+    pub line: u64,
+    pub reason: String,
+}
+
+/// Read-only look at a CSV file before anything is written.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContactImportPreview {
+    pub headers: Vec<String>,
+    pub row_count: usize,
+    /// Effective mapping: the caller's when given, otherwise the auto-guess.
+    pub mapping: ContactImportMapping,
+    /// Up to `IMPORT_SAMPLE_ROWS` data rows in file order.
+    pub sample_rows: Vec<Vec<String>>,
+    /// Validation problems found in the sampled rows under the mapping.
+    pub issues: Vec<ContactImportIssue>,
+}
+
+/// Apply a mapped CSV file to the contact table in one transaction.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportContactsRequest {
+    /// Imports log as `import` unless the caller says otherwise.
+    #[serde(default = "import_actor")]
+    pub actor: Actor,
+    pub path: String,
+    pub mapping: ContactImportMapping,
+}
+
+fn import_actor() -> Actor {
+    Actor::Import
+}
+
+/// What an import did; skipped rows carry their line and reason.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContactImportSummary {
+    pub created: usize,
+    pub updated: usize,
+    pub skipped: Vec<ContactImportIssue>,
+}
+
+/// Where a CSV export landed and how many records it holds.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CsvExportReport {
+    pub path: String,
+    pub row_count: usize,
+}
+
+/// A prepared import row: validated contact fields plus the side references
+/// resolved against the database while applying.
+struct PreparedImportRow {
+    fields: ValidContactFields,
+    external_id: Option<String>,
+    company_name: Option<String>,
+    tags: Vec<String>,
+}
+
+/// Parse a CSV file's header and rows without touching the database.
+pub fn preview_contact_import(
+    path: &str,
+    mapping: Option<ContactImportMapping>,
+) -> Result<ContactImportPreview, ApplicationError> {
+    let (headers, records) = read_csv_records(path)?;
+    let mapping = match mapping {
+        Some(mapping) => mapping,
+        None => guess_contact_mapping(&headers),
+    };
+    let indexes = mapping_indexes(&headers, &mapping)?;
+
+    let mut sample_rows = Vec::new();
+    let mut issues = Vec::new();
+    for (line, record) in records.iter().take(IMPORT_SAMPLE_ROWS) {
+        sample_rows.push(record.iter().map(str::to_owned).collect::<Vec<_>>());
+        if let Err(reason) = prepare_import_row(*line, record, &indexes) {
+            issues.push(reason);
+        }
+    }
+    Ok(ContactImportPreview {
+        headers,
+        row_count: records.len(),
+        mapping,
+        sample_rows,
+        issues,
+    })
+}
+
+/// Apply a whole mapped CSV file: valid rows are created or updated by external
+/// id, invalid rows are skipped and reported. One immediate transaction covers
+/// the file, so a failure leaves the database untouched.
+pub fn import_contacts(
+    storage: &mut Storage,
+    request: ImportContactsRequest,
+) -> Result<ContactImportSummary, ApplicationError> {
+    let (headers, records) = read_csv_records(&request.path)?;
+    let indexes = mapping_indexes(&headers, &request.mapping)?;
+
+    let mut prepared = Vec::new();
+    let mut skipped = Vec::new();
+    for (line, record) in &records {
+        match prepare_import_row(*line, record, &indexes) {
+            Ok(row) => prepared.push(row),
+            Err(issue) => skipped.push(issue),
+        }
+    }
+
+    let actor = request.actor;
+    let mut created = 0usize;
+    let mut updated = 0usize;
+    let transaction = immediate(storage)?;
+    for row in prepared {
+        let company_id = match &row.company_name {
+            Some(name) => Some(resolve_import_company(&transaction, name, actor)?),
+            None => None,
+        };
+        let mut fields = row.fields;
+        fields.company_id = company_id;
+        match find_contact_for_import(&transaction, row.external_id.as_deref())? {
+            Some(contact_id) => {
+                update_imported_contact(&transaction, &contact_id, &fields, actor)?;
+                apply_import_tags(&transaction, &contact_id, &row.tags, actor)?;
+                updated += 1;
+            }
+            None => {
+                let contact_id = insert_imported_contact(
+                    &transaction,
+                    &fields,
+                    row.external_id.as_deref(),
+                    actor,
+                )?;
+                apply_import_tags(&transaction, &contact_id, &row.tags, actor)?;
+                created += 1;
+            }
+        }
+    }
+    transaction.commit()?;
+    Ok(ContactImportSummary {
+        created,
+        updated,
+        skipped,
+    })
+}
+
+/// Write every active contact to a CSV file, one column per contact custom
+/// field definition. The `external_id` column falls back to the record id so an
+/// exported file re-imports onto the same records.
+pub fn export_contacts_csv(
+    storage: &Storage,
+    path: &str,
+) -> Result<CsvExportReport, ApplicationError> {
+    let connection = storage.connection();
+    let definitions = export_custom_field_defs(connection, "contact")?;
+    let values = export_custom_field_values(connection, "contact")?;
+
+    let mut headers = vec![
+        "id",
+        "external_id",
+        "first_name",
+        "last_name",
+        "display_name",
+        "role",
+        "kind",
+        "preferred_contact_method",
+        "address_line1",
+        "address_line2",
+        "city",
+        "state",
+        "postal_code",
+        "property_type",
+        "notes",
+        "favorite",
+        "company",
+        "email",
+        "phone",
+        "tags",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    headers.extend(definitions.iter().map(|(_, label)| label.clone()));
+    headers.push("created_at".into());
+    headers.push("updated_at".into());
+
+    let mut statement = connection.prepare(
+        "SELECT c.id, COALESCE(c.external_id, c.id), c.first_name, c.last_name, c.display_name,
+                c.role, c.kind, c.preferred_contact_method, c.address_line1, c.address_line2,
+                c.city, c.state, c.postal_code, c.property_type, c.notes, c.favorite,
+                co.name,
+                (SELECT cc.value FROM contact_channels cc
+                  WHERE cc.contact_id = c.id AND cc.kind = 'email'
+                  ORDER BY cc.preferred DESC, cc.sort_key, cc.id LIMIT 1),
+                (SELECT cc.value FROM contact_channels cc
+                  WHERE cc.contact_id = c.id AND cc.kind = 'phone'
+                  ORDER BY cc.preferred DESC, cc.sort_key, cc.id LIMIT 1),
+                c.created_at, c.updated_at
+         FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
+         WHERE c.archived_at IS NULL
+         ORDER BY c.display_name, c.id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            let mut cells = Vec::with_capacity(headers.len());
+            for index in 0..16 {
+                cells.push(match index {
+                    15 => {
+                        let favorite: bool = row.get(15)?;
+                        favorite.to_string()
+                    }
+                    _ => row.get::<_, Option<String>>(index)?.unwrap_or_default(),
+                });
+            }
+            for index in 16..19 {
+                cells.push(row.get::<_, Option<String>>(index)?.unwrap_or_default());
+            }
+            Ok((
+                row.get::<_, String>(0)?,
+                cells,
+                row.get::<_, String>(19)?,
+                row.get::<_, String>(20)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let tags = export_tags(connection, "contact")?;
+    let mut writer = open_csv_writer(path)?;
+    writer.write_record(&headers).map_err(csv_error)?;
+    let row_count = rows.len();
+    for (id, mut cells, created_at, updated_at) in rows {
+        cells.push(tags.get(&id).cloned().unwrap_or_default());
+        for (definition_id, _) in &definitions {
+            cells.push(
+                values
+                    .get(&(id.clone(), definition_id.clone()))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        cells.push(created_at);
+        cells.push(updated_at);
+        writer.write_record(&cells).map_err(csv_error)?;
+    }
+    writer.flush()?;
+    Ok(CsvExportReport {
+        path: path.to_owned(),
+        row_count,
+    })
+}
+
+/// Write every active opportunity to a CSV file; money is exported in major
+/// units with a separate currency column.
+pub fn export_opportunities_csv(
+    storage: &Storage,
+    path: &str,
+) -> Result<CsvExportReport, ApplicationError> {
+    let connection = storage.connection();
+    let definitions = export_custom_field_defs(connection, "opportunity")?;
+    let values = export_custom_field_values(connection, "opportunity")?;
+
+    let mut headers = vec![
+        "id",
+        "name",
+        "contact_display_name",
+        "company",
+        "stage",
+        "value",
+        "currency_code",
+        "probability_percent",
+        "expected_close_date",
+        "source",
+        "source_label",
+        "tags",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    headers.extend(definitions.iter().map(|(_, label)| label.clone()));
+    headers.push("created_at".into());
+    headers.push("updated_at".into());
+
+    let mut statement = connection.prepare(
+        "SELECT o.id, o.name, c.display_name, co.name, s.name, o.value_minor, o.currency_code,
+                o.probability_percent, o.expected_close_date, o.source, o.source_label,
+                o.created_at, o.updated_at
+         FROM opportunities o
+         JOIN stages s ON s.id = o.stage_id
+         LEFT JOIN contacts c ON c.id = o.contact_id
+         LEFT JOIN companies co ON co.id = o.company_id
+         WHERE o.archived_at IS NULL
+         ORDER BY o.name, o.id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            let value_minor: i64 = row.get(5)?;
+            let probability: Option<i64> = row.get(7)?;
+            let cells = vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                row.get::<_, String>(4)?,
+                format!("{:.2}", value_minor as f64 / 100.0),
+                row.get::<_, String>(6)?,
+                probability
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+            ];
+            Ok((
+                row.get::<_, String>(0)?,
+                cells,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let tags = export_tags(connection, "opportunity")?;
+    let mut writer = open_csv_writer(path)?;
+    writer.write_record(&headers).map_err(csv_error)?;
+    let row_count = rows.len();
+    for (id, mut cells, created_at, updated_at) in rows {
+        cells.push(tags.get(&id).cloned().unwrap_or_default());
+        for (definition_id, _) in &definitions {
+            cells.push(
+                values
+                    .get(&(id.clone(), definition_id.clone()))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        cells.push(created_at);
+        cells.push(updated_at);
+        writer.write_record(&cells).map_err(csv_error)?;
+    }
+    writer.flush()?;
+    Ok(CsvExportReport {
+        path: path.to_owned(),
+        row_count,
+    })
+}
+
+/// Effective column positions for the mapped targets, resolved once per file.
+type MappingIndexes = std::collections::BTreeMap<&'static str, usize>;
+
+fn csv_error(error: csv::Error) -> ApplicationError {
+    ApplicationError::Io(std::io::Error::other(error.to_string()))
+}
+
+/// A parsed CSV file: header names plus each data record with its line number.
+type CsvFile = (Vec<String>, Vec<(u64, csv::StringRecord)>);
+
+/// Read a CSV file into its headers plus every data record with its line
+/// number. Ragged rows are tolerated; missing cells read as empty.
+fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
+    let path = required_text("path", path.to_owned(), 4096)?;
+    let file = std::fs::File::open(&path).map_err(|error| ApplicationError::InvalidInput {
+        field: "path".into(),
+        message: format!("cannot open \"{path}\": {error}"),
+    })?;
+    let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(file);
+    let headers = reader
+        .headers()
+        .map_err(csv_error)?
+        .iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(csv_error)?;
+        // Skip rows that are entirely blank — trailing newlines are common.
+        if record.iter().all(|cell| cell.trim().is_empty()) {
+            continue;
+        }
+        let line = record.position().map(csv::Position::line).unwrap_or(0);
+        records.push((line, record));
+    }
+    Ok((headers, records))
+}
+
+/// Normalize a header for fuzzy matching: lowercase, alphanumerics only.
+fn normalize_header(header: &str) -> String {
+    header
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Guess a mapping from the file's headers; each header is claimed by at most
+/// one target and the first matching alias wins.
+fn guess_contact_mapping(headers: &[String]) -> ContactImportMapping {
+    let normalized = headers
+        .iter()
+        .map(|header| normalize_header(header))
+        .collect::<Vec<_>>();
+    let mut claimed = vec![false; headers.len()];
+    let mut mapping = ContactImportMapping::default();
+    for (target, aliases) in IMPORT_TARGETS {
+        'target: for alias in *aliases {
+            for (index, candidate) in normalized.iter().enumerate() {
+                if !claimed[index] && candidate == alias {
+                    mapping.set(target, headers[index].clone());
+                    claimed[index] = true;
+                    break 'target;
+                }
+            }
+        }
+    }
+    mapping
+}
+
+/// Resolve mapped header names to column positions; an unknown header is a
+/// caller error, not a per-row problem.
+fn mapping_indexes(
+    headers: &[String],
+    mapping: &ContactImportMapping,
+) -> Result<MappingIndexes, ApplicationError> {
+    let mut indexes = MappingIndexes::new();
+    for (target, _) in IMPORT_TARGETS {
+        let Some(header) = mapping.header_for(target) else {
+            continue;
+        };
+        let index = headers
+            .iter()
+            .position(|candidate| candidate == header)
+            .ok_or_else(|| ApplicationError::InvalidInput {
+                field: format!("mapping.{target}"),
+                message: format!("column \"{header}\" is not in the file"),
+            })?;
+        indexes.insert(target, index);
+    }
+    Ok(indexes)
+}
+
+/// Trimmed cell for a mapped target, or None when unmapped or blank.
+fn mapped_cell(
+    record: &csv::StringRecord,
+    indexes: &MappingIndexes,
+    target: &str,
+) -> Option<String> {
+    let index = *indexes.get(target)?;
+    let value = record.get(index)?.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Validate one CSV row into contact fields, reusing the shared contact
+/// validation so imports cannot drift from interactive writes.
+fn prepare_import_row(
+    line: u64,
+    record: &csv::StringRecord,
+    indexes: &MappingIndexes,
+) -> Result<PreparedImportRow, ContactImportIssue> {
+    let issue = |error: ApplicationError| ContactImportIssue {
+        line,
+        reason: error.to_string(),
+    };
+    let mut channels = Vec::new();
+    if let Some(email) = mapped_cell(record, indexes, "email") {
+        channels.push(ChannelInput {
+            kind: "email".into(),
+            label: None,
+            value: email,
+            preferred: true,
+        });
+    }
+    if let Some(phone) = mapped_cell(record, indexes, "phone") {
+        channels.push(ChannelInput {
+            kind: "phone".into(),
+            label: None,
+            value: phone,
+            preferred: true,
+        });
+    }
+    let patch = ContactPatch {
+        company_id: None, // resolved by name while applying
+        first_name: mapped_cell(record, indexes, "firstName"),
+        last_name: mapped_cell(record, indexes, "lastName"),
+        display_name: mapped_cell(record, indexes, "displayName"),
+        role: mapped_cell(record, indexes, "role"),
+        kind: mapped_cell(record, indexes, "kind")
+            .unwrap_or_else(|| IMPORT_DEFAULT_KIND.to_owned()),
+        preferred_contact_method: mapped_cell(record, indexes, "preferredContactMethod"),
+        address_line1: mapped_cell(record, indexes, "addressLine1"),
+        address_line2: mapped_cell(record, indexes, "addressLine2"),
+        city: mapped_cell(record, indexes, "city"),
+        state: mapped_cell(record, indexes, "state"),
+        postal_code: mapped_cell(record, indexes, "postalCode"),
+        property_type: mapped_cell(record, indexes, "propertyType"),
+        notes: mapped_cell(record, indexes, "notes"),
+        favorite: false,
+        channels,
+    };
+    let fields = validate_contact_patch(patch).map_err(issue)?;
+    let external_id = match mapped_cell(record, indexes, "externalId") {
+        None => None,
+        Some(value) => Some(required_text("externalId", value, 200).map_err(issue)?),
+    };
+    let company_name = match mapped_cell(record, indexes, "company") {
+        None => None,
+        Some(value) => Some(required_text("company", value, 200).map_err(issue)?),
+    };
+    let mut tags = Vec::new();
+    if let Some(value) = mapped_cell(record, indexes, "tags") {
+        for label in value.split(';') {
+            let label = label.trim();
+            if label.is_empty() {
+                continue;
+            }
+            let label = required_text("tags", label.to_owned(), 80).map_err(issue)?;
+            if !tags.iter().any(|existing| existing == &label) {
+                tags.push(label);
+            }
+        }
+    }
+    Ok(PreparedImportRow {
+        fields,
+        external_id,
+        company_name,
+        tags,
+    })
+}
+
+/// Find a company by exact name (case-insensitive), creating it when missing.
+fn resolve_import_company(
+    transaction: &Transaction<'_>,
+    name: &str,
+    actor: Actor,
+) -> Result<String, ApplicationError> {
+    let existing: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM companies WHERE trim(name) = trim(?1) COLLATE NOCASE
+             ORDER BY archived_at IS NOT NULL, created_at, id LIMIT 1",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let id = new_id();
+    let now = now_utc();
+    transaction.execute(
+        "INSERT INTO companies (id, name, kind, created_at, updated_at, version)
+         VALUES (?1, ?2, ?3, ?4, ?4, 1)",
+        params![id, name, IMPORT_DEFAULT_KIND, now],
+    )?;
+    refresh_search_projection(transaction, "company", &id)?;
+    log_command(
+        transaction,
+        actor,
+        "company",
+        &id,
+        &format!("imported company \"{name}\""),
+    )?;
+    Ok(id)
+}
+
+/// Match an incoming row to an existing contact: external id first, then the
+/// record id so an exported file re-imports onto the same contacts.
+fn find_contact_for_import(
+    transaction: &Transaction<'_>,
+    external_id: Option<&str>,
+) -> Result<Option<String>, ApplicationError> {
+    let Some(external_id) = external_id else {
+        return Ok(None);
+    };
+    let by_external: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM contacts WHERE external_id = ?1",
+            [external_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if by_external.is_some() {
+        return Ok(by_external);
+    }
+    Ok(transaction
+        .query_row(
+            "SELECT id FROM contacts WHERE id = ?1",
+            [external_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Insert one imported contact with its channels, projection, and log row.
+fn insert_imported_contact(
+    transaction: &Transaction<'_>,
+    fields: &ValidContactFields,
+    external_id: Option<&str>,
+    actor: Actor,
+) -> Result<String, ApplicationError> {
+    let contact_id = new_id();
+    let now = now_utc();
+    transaction.execute(
+        "INSERT INTO contacts (
+            id, company_id, first_name, last_name, display_name, role, kind,
+            preferred_contact_method, address_line1, address_line2, city, state,
+            postal_code, property_type, notes, favorite, external_id,
+            archived_at, created_at, updated_at, version
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                   ?15, ?16, ?17, NULL, ?18, ?18, 1)",
+        params![
+            contact_id,
+            fields.company_id,
+            fields.first_name,
+            fields.last_name,
+            fields.display_name,
+            fields.role.map(ContactRole::as_database_value),
+            fields.kind.as_database_value(),
+            fields.preferred_contact_method,
+            fields.address_line1,
+            fields.address_line2,
+            fields.city,
+            fields.state,
+            fields.postal_code,
+            fields.property_type,
+            fields.notes,
+            fields.favorite,
+            external_id,
+            now,
+        ],
+    )?;
+    insert_channels(transaction, &contact_id, &fields.channels)?;
+    refresh_search_projection(transaction, "contact", &contact_id)?;
+    log_command(
+        transaction,
+        actor,
+        "contact",
+        &contact_id,
+        &format!("imported contact \"{}\"", fields.display_name),
+    )?;
+    Ok(contact_id)
+}
+
+/// Update a matched contact the way `update_contact` does — full editable set,
+/// version bump — but only replaces channel kinds the CSV actually carries.
+fn update_imported_contact(
+    transaction: &Transaction<'_>,
+    contact_id: &str,
+    fields: &ValidContactFields,
+    actor: Actor,
+) -> Result<(), ApplicationError> {
+    let existing = require_contact(transaction, contact_id)?;
+    transaction.execute(
+        "UPDATE contacts SET
+            company_id = ?2, first_name = ?3, last_name = ?4, display_name = ?5,
+            role = ?6, kind = ?7, preferred_contact_method = ?8,
+            address_line1 = ?9, address_line2 = ?10, city = ?11, state = ?12,
+            postal_code = ?13, property_type = ?14, notes = ?15,
+            updated_at = ?16, version = ?17
+         WHERE id = ?1",
+        params![
+            existing.id,
+            fields.company_id,
+            fields.first_name,
+            fields.last_name,
+            fields.display_name,
+            fields.role.map(ContactRole::as_database_value),
+            fields.kind.as_database_value(),
+            fields.preferred_contact_method,
+            fields.address_line1,
+            fields.address_line2,
+            fields.city,
+            fields.state,
+            fields.postal_code,
+            fields.property_type,
+            fields.notes,
+            now_utc(),
+            existing.version + 1,
+        ],
+    )?;
+    let first_sort_key: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sort_key), -1) + 1 FROM contact_channels WHERE contact_id = ?1",
+        [&existing.id],
+        |row| row.get(0),
+    )?;
+    for (offset, channel) in fields.channels.iter().enumerate() {
+        let sort_key = first_sort_key + offset as i64;
+        transaction.execute(
+            "DELETE FROM contact_channels WHERE contact_id = ?1 AND kind = ?2",
+            params![existing.id, channel.kind.as_database_value()],
+        )?;
+        transaction.execute(
+            "INSERT INTO contact_channels (id, contact_id, kind, label, value, preferred, sort_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                new_id(),
+                existing.id,
+                channel.kind.as_database_value(),
+                channel.label,
+                channel.value,
+                channel.preferred,
+                sort_key,
+            ],
+        )?;
+    }
+    refresh_search_projection(transaction, "contact", &existing.id)?;
+    log_command(
+        transaction,
+        actor,
+        "contact",
+        &existing.id,
+        &format!("imported update to contact \"{}\"", fields.display_name),
+    )?;
+    Ok(())
+}
+
+/// Add the row's tags to a contact, creating tags that do not exist yet.
+/// Existing tags on the contact are kept — imports add, never remove.
+fn apply_import_tags(
+    transaction: &Transaction<'_>,
+    contact_id: &str,
+    labels: &[String],
+    actor: Actor,
+) -> Result<(), ApplicationError> {
+    for label in labels {
+        let existing: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM tags WHERE label = ?1 COLLATE NOCASE",
+                [label],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let tag_id = match existing {
+            Some(id) => id,
+            None => {
+                let count: i64 =
+                    transaction.query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))?;
+                if count >= MAX_TAGS {
+                    return Err(limit_error("tag_limit_reached", "tags", MAX_TAGS));
+                }
+                let id = new_id();
+                let now = now_utc();
+                transaction.execute(
+                    "INSERT INTO tags (id, label, color_role, created_at, updated_at, version)
+                     VALUES (?1, ?2, NULL, ?3, ?3, 1)",
+                    params![id, label, now],
+                )?;
+                log_command(transaction, actor, "tag", &id, "imported tag")?;
+                id
+            }
+        };
+        transaction.execute(
+            "INSERT OR IGNORE INTO record_tags (tag_id, entity_type, record_id, created_at)
+             VALUES (?1, 'contact', ?2, ?3)",
+            params![tag_id, contact_id, now_utc()],
+        )?;
+    }
+    Ok(())
+}
+
+/// Active custom field definitions for an entity type as (id, label) in the
+/// order their columns appear in an export.
+fn export_custom_field_defs(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+) -> Result<Vec<(String, String)>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, label FROM custom_field_defs
+         WHERE entity_type = ?1 AND archived_at IS NULL ORDER BY sort_key, id",
+    )?;
+    let rows = statement
+        .query_map([entity_type], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Custom field values keyed by (record id, definition id), already rendered
+/// as export text.
+fn export_custom_field_values(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+) -> Result<std::collections::HashMap<(String, String), String>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT v.record_id, v.definition_id, v.text_value, v.number_value, v.date_value, o.label
+         FROM custom_field_values v
+         LEFT JOIN custom_field_options o ON o.id = v.option_id
+         WHERE v.entity_type = ?1",
+    )?;
+    let rows = statement
+        .query_map([entity_type], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(record_id, definition_id, text, number, date, option_label)| {
+                let value = text
+                    .or_else(|| number.map(format_export_number))
+                    .or(date)
+                    .or(option_label)
+                    .unwrap_or_default();
+                ((record_id, definition_id), value)
+            },
+        )
+        .collect())
+}
+
+/// Semicolon-joined tag labels per record, keyed by record id.
+fn export_tags(
+    connection: &rusqlite::Connection,
+    entity_type: &str,
+) -> Result<std::collections::HashMap<String, String>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT rt.record_id, t.label FROM record_tags rt JOIN tags t ON t.id = rt.tag_id
+         WHERE rt.entity_type = ?1 ORDER BY rt.record_id, t.label COLLATE NOCASE",
+    )?;
+    let rows = statement
+        .query_map([entity_type], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut grouped: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (record_id, label) in rows {
+        let entry = grouped.entry(record_id).or_default();
+        if !entry.is_empty() {
+            entry.push(';');
+        }
+        entry.push_str(&label);
+    }
+    Ok(grouped)
+}
+
+/// Render a custom field number without a trailing ".0" for whole values.
+fn format_export_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
+    }
+}
+
+/// Open a CSV writer at `path`, creating missing parent directories.
+fn open_csv_writer(path: &str) -> Result<csv::Writer<std::fs::File>, ApplicationError> {
+    let path = required_text("path", path.to_owned(), 4096)?;
+    let destination = std::path::Path::new(&path);
+    if let Some(parent) = destination.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let file = std::fs::File::create(destination)?;
+    Ok(csv::Writer::from_writer(file))
+}

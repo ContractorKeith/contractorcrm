@@ -1,7 +1,7 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 8,
+  "databaseMigrationVersion": 9,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
@@ -10,7 +10,8 @@
     { "version": 5, "name": "tasks" },
     { "version": 6, "name": "fts5_search_projection" },
     { "version": 7, "name": "saved_views" },
-    { "version": 8, "name": "tags_custom_fields" }
+    { "version": 8, "name": "tags_custom_fields" },
+    { "version": 9, "name": "contact_external_ids" }
   ],
   "tables": {
     "activities": {
@@ -44,10 +45,11 @@
       "sqlChecks": ["preferred IN (0, 1)", "sort_key >= 0"]
     },
     "contacts": {
-      "columns": {"id":"TEXT","company_id":"TEXT","first_name":"TEXT","last_name":"TEXT","display_name":"TEXT","role":"TEXT","kind":"TEXT","preferred_contact_method":"TEXT","address_line1":"TEXT","address_line2":"TEXT","city":"TEXT","state":"TEXT","postal_code":"TEXT","property_type":"TEXT","notes":"TEXT","favorite":"INTEGER","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
+      "columns": {"id":"TEXT","company_id":"TEXT","first_name":"TEXT","last_name":"TEXT","display_name":"TEXT","role":"TEXT","kind":"TEXT","preferred_contact_method":"TEXT","address_line1":"TEXT","address_line2":"TEXT","city":"TEXT","state":"TEXT","postal_code":"TEXT","property_type":"TEXT","notes":"TEXT","favorite":"INTEGER","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER","external_id":"TEXT"},
       "required": ["display_name","kind","favorite","created_at","updated_at","version"],
       "primaryKey": ["id"],
       "foreignKeys": [{"from":"company_id","table":"companies","to":"id","onDelete":"RESTRICT"}],
+      "indexes": [{"name":"contacts_external_id_unique","unique":true,"columns":["external_id"]}],
       "sqlChecks": ["favorite IN (0, 1)", "version > 0"]
     },
     "lost_reasons": {
