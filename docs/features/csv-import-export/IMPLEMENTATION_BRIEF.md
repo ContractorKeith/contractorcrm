@@ -2,7 +2,7 @@
 
 Issue: #19
 Status: implemented
-Updated: 2026-08-18
+Updated: 2026-08-18 (review round: patch-semantics import, guarded exports)
 
 ## Boundary
 
@@ -40,9 +40,6 @@ of custom field values.
 - **Tags are additive.** Import never removes a contact's existing tags;
   labels from the CSV `tags` column (semicolon-separated) are added, creating
   new tags as needed, subject to the existing tag cap.
-- **Channels replace only mapped kinds.** Updating a matched contact replaces
-  `email` and/or `phone` channels only for the kinds actually present in the
-  mapping/row; channel kinds the file doesn't carry are left alone.
 - **Custom fields are export-only in v1.** Exports add one column per active
   custom field definition (rendered as text/number/date/option label); import
   does not read or write custom field values. Deferred rather than dropped —
@@ -51,6 +48,42 @@ of custom field values.
   50 sample rows, returns the effective mapping (caller-supplied or
   auto-guessed from a fixed header-alias table) and validation issues for the
   sampled rows, and never touches SQLite.
+- **Updates are patches, not replacements (review-round fix).** A matched
+  contact's stored value is kept for any column the file does not map and for
+  any mapped cell that is blank — import v1 has no way to clear a field. `kind`
+  only changes when the file maps a non-blank `kind` cell for that row; the
+  `client` default applies only to newly created contacts. The company link
+  only changes when the row's `company` cell is non-blank; a blank or unmapped
+  `company` cell leaves the existing link alone. `favorite` is never touched by
+  import, matched or created.
+- **Channels are additive, never replaced (review-round fix).** Adding a
+  matched contact's mapped `email`/`phone` cells only inserts a channel when
+  that exact kind+value pair isn't already on the record; nothing is ever
+  deleted. This replaced the original "delete-then-replace by kind" behavior,
+  which discarded secondary phones/emails on every re-import. The first
+  channel of a kind for a contact still claims `preferred`; an existing
+  preferred channel keeps that status.
+- **Archived contacts are never resurrected by import (review-round fix).** A
+  row whose `external_id`/id matches an archived contact is skipped with a
+  reason instead of being written to (which would have silently un-hidden
+  stale data without an explicit unarchive).
+- **Export destination guard and audit (review-round fix).** Both CSV exports
+  now take a required `overwrite` boolean, mirroring
+  `export_handoff_envelope`/`backup_database`: an existing file at `path`
+  without `overwrite: true` fails `validation_failed` / `destination_exists`
+  instead of silently clobbering it. Each export writes one `command_log` row
+  (`entity_type: "export"`, actor `user`) so exports are auditable like every
+  other write.
+- **Formula-injection guard on export (review-round fix).** A cell whose first
+  character is `=`, `+`, `-`, `@`, a tab, or a carriage return is prefixed with
+  `'` before writing, so a malicious or auto-generated field value can't
+  execute as a formula when the CSV is opened in Excel/Sheets.
+- **Header and encoding validation (review-round fix).** Reading a CSV file
+  (preview or import) rejects duplicate or empty header names as
+  `invalid_input` — a duplicate header would silently lose data because only
+  its first column is ever read by name. Non-UTF-8/malformed files fail as
+  `invalid_input` with re-save-as-UTF-8 guidance instead of surfacing as an
+  opaque IO error.
 
 ## Persistence contract
 
@@ -71,8 +104,8 @@ The versioned local API adds four commands (`schemas/v1/local-api.json`):
 - `import_contacts(request: ImportContactsRequest)` — write; `request` is
   `{ actor?, path, mapping }` (actor defaults to the `import` actor). Returns
   `ContactImportSummary`: `{ created, updated, skipped: ContactImportIssue[] }`.
-- `export_contacts_csv(path)` — write; returns `CsvExportReport { path, rowCount }`.
-- `export_opportunities_csv(path)` — write; returns `CsvExportReport { path, rowCount }`.
+- `export_contacts_csv(path, overwrite)` — write; returns `CsvExportReport { path, rowCount }`.
+- `export_opportunities_csv(path, overwrite)` — write; returns `CsvExportReport { path, rowCount }`.
 
 `ContactImportMapping` names, per import target (`externalId`, `firstName`,
 `lastName`, `displayName`, `role`, `kind`, `preferredContactMethod`,
@@ -80,8 +113,15 @@ The versioned local API adds four commands (`schemas/v1/local-api.json`):
 `propertyType`, `notes`, `company`, `email`, `phone`, `tags`), the CSV header
 it reads from; unset targets are simply not imported. An unknown header in an
 explicit mapping is a caller (`invalid_input`) error, not a per-row problem.
-Each imported row is validated through the same contact validation interactive
-writes use, so imports cannot drift from the UI's rules.
+Reading a file (preview or import) also rejects duplicate or empty headers,
+and non-UTF-8/malformed content, as `invalid_input`.
+
+For a new contact, each row is validated through the same contact validation
+interactive writes use, with `kind` defaulting to `client` when unmapped, so
+creates cannot drift from the UI's rules. For a matched existing contact, the
+row's mapped, non-blank cells are overlaid onto the stored contact (see
+patch-semantics decision above) and the merged result is validated the same
+way before writing.
 
 Contact export columns, in order: `id`, `external_id`, `first_name`,
 `last_name`, `display_name`, `role`, `kind`, `preferred_contact_method`,
@@ -98,8 +138,10 @@ opportunity custom field definition (ordered by sort key), `created_at`,
 derived from `value_minor`.
 
 Both exports include only active (non-archived) records, ordered by
-name/display name then id, and create missing parent directories for the
-destination path.
+name/display name then id, create missing parent directories for the
+destination path, reject an existing destination unless `overwrite` is true
+(`validation_failed` / `destination_exists`), sanitize formula-triggering
+cells, and log one `command_log` row (`entity_type: "export"`) per run.
 
 ## Verification
 
@@ -107,12 +149,16 @@ destination path.
 
 - Preview: mapping auto-guess plus reported row issues without writing;
   honoring an explicit mapping and rejecting unknown columns; sampling at most
-  50 rows while still counting all of them.
+  50 rows while still counting all of them; duplicate/empty headers rejected;
+  non-UTF-8 files reported as an encoding error rather than a storage failure.
 - Import: creating contacts, companies, and tags with `import`-actor command
   log rows; updating matched contacts by external id while skipping invalid
   rows; atomicity (a forced failure leaves nothing behind); RFC 4180 edge
-  cases (quoted commas, embedded newlines, blank rows).
+  cases (quoted commas, embedded newlines, blank rows); updates are patches
+  that never clear unmapped or blank fields; rows matching archived contacts
+  are skipped and the archived contact is left untouched.
 - Export: contact export carries metadata columns and round-trips without
   creating duplicates on re-import; opportunity export writes major-unit
-  values, stage names, and metadata columns; exporting to a missing directory
-  creates it, and exporting again overwrites the existing file.
+  values, stage names, and metadata columns; exports create missing
+  directories and refuse to clobber an existing file without `overwrite`;
+  exports neutralize spreadsheet-formula-triggering cells.
