@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { CoreClient } from "../api/client";
+import { isCommandError } from "../api/types";
 import type {
   ChannelKind,
   Company,
@@ -90,7 +91,8 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     void Promise.all([client.listTags(true), client.listCustomFieldDefs("contact", true)])
       .then(([nextTags, nextDefinitions]) => { setTags(nextTags); setFieldDefinitions(nextDefinitions); })
       .catch(() => setFilterError("Tags and custom-field filters could not be loaded."));
-  }, [client]);
+    // reloadToken re-runs this after an import, so imported tags show up in filters.
+  }, [client, reloadToken]);
 
   const companyName = (companyId: string | null) =>
     companies.find((company) => company.id === companyId)?.name ?? "—";
@@ -124,24 +126,36 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
   const pickImportFile = async () => {
     setCsvError(null);
     setCsvStatus("");
-    const picked = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv"] }] });
-    if (typeof picked === "string") setImportPath(picked);
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof picked === "string") setImportPath(picked);
+    } catch (rejection) {
+      setCsvError(
+        isCommandError(rejection) ? rejection.message : "The file picker could not be opened.",
+      );
+    }
   };
 
-  // Pick a destination, then write every contact to it.
+  // Pick a destination, then write every contact to it. The native save dialog
+  // already confirms replacement, so the export overwrites without asking again.
   const exportCsv = async () => {
     setCsvError(null);
     setCsvStatus("");
-    const destination = await save({
-      defaultPath: "contacts.csv",
-      filters: [{ name: "CSV", extensions: ["csv"] }],
-    });
-    if (typeof destination !== "string") return;
     try {
-      const report = await client.exportContactsCsv(destination);
+      const destination = await save({
+        defaultPath: "contacts.csv",
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof destination !== "string") return;
+      const report = await client.exportContactsCsv(destination, true);
       setCsvStatus(`Exported ${report.rowCount} contacts to ${report.path}.`);
-    } catch {
-      setCsvError("The contacts could not be exported.");
+    } catch (rejection) {
+      setCsvError(
+        isCommandError(rejection) ? rejection.message : "The contacts could not be exported.",
+      );
     }
   };
 

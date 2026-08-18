@@ -521,9 +521,27 @@ describe("opportunity detail and stage moves", () => {
     await openPipeline(user);
     await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
 
-    expect(client.exportOpportunitiesCsv).toHaveBeenCalledWith("/tmp/opportunities.csv");
+    expect(client.exportOpportunitiesCsv).toHaveBeenCalledWith("/tmp/opportunities.csv", true);
     expect(
       await screen.findByText("Exported 5 opportunities to /tmp/opportunities.csv."),
     ).toBeVisible();
+  });
+
+  it("surfaces the core's message when the pipeline export fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(save).mockResolvedValue("/tmp/opportunities.csv");
+    const client = stubClient({
+      exportOpportunitiesCsv: vi.fn().mockRejectedValue({
+        kind: "invalid_input",
+        message: "/tmp/opportunities.csv already exists",
+        field: "path",
+      }),
+    });
+
+    render(<App client={client} />);
+    await openPipeline(user);
+    await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
+
+    expect(await screen.findByText("/tmp/opportunities.csv already exists")).toBeVisible();
   });
 });

@@ -134,8 +134,8 @@ export interface CoreClient {
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
   previewContactImport(path: string, mapping?: ContactImportMapping | null): Promise<ContactImportPreview>;
   importContacts(request: ImportContactsRequest): Promise<ContactImportSummary>;
-  exportContactsCsv(path: string): Promise<CsvExportReport>;
-  exportOpportunitiesCsv(path: string): Promise<CsvExportReport>;
+  exportContactsCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
+  exportOpportunitiesCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -208,6 +208,7 @@ export const tauriCoreClient: CoreClient = {
   setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),
   previewContactImport: (path, mapping) => invoke("preview_contact_import", { path, mapping }),
   importContacts: (request) => invoke("import_contacts", { request }),
-  exportContactsCsv: (path) => invoke("export_contacts_csv", { path }),
-  exportOpportunitiesCsv: (path) => invoke("export_opportunities_csv", { path }),
+  exportContactsCsv: (path, overwrite) => invoke("export_contacts_csv", { path, overwrite }),
+  exportOpportunitiesCsv: (path, overwrite) =>
+    invoke("export_opportunities_csv", { path, overwrite }),
 };

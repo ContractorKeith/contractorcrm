@@ -100,6 +100,43 @@ describe("CsvImportDialog", () => {
     expect(client.importContacts).not.toHaveBeenCalled();
   });
 
+  it("surfaces a rejected preview and keeps the import disabled", async () => {
+    const client = stubClient({
+      previewContactImport: vi.fn().mockRejectedValue({
+        kind: "invalid_input",
+        message: "CSV header \"Name\" appears more than once",
+        field: "headers",
+      }),
+    });
+
+    render(<CsvImportDialog client={client} path="/tmp/leads.csv" onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText('CSV header "Name" appears more than once'),
+    ).toBeVisible();
+    expect(screen.queryByRole("table", { name: "Column mapping" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+  });
+
+  it("keys mapping rows by column so repeated header text still renders", async () => {
+    const client = stubClient({
+      previewContactImport: vi.fn().mockResolvedValue(
+        preview({
+          headers: ["Name", "Name", ""],
+          mapping: { displayName: "Name" },
+          sampleRows: [["Dana Ruiz", "Ruiz", "x"]],
+        }),
+      ),
+    });
+
+    render(<CsvImportDialog client={client} path="/tmp/leads.csv" onClose={vi.fn()} />);
+
+    const mappingTable = await screen.findByRole("table", { name: "Column mapping" });
+    // Header row plus one row per column, duplicates and blanks included.
+    expect(within(mappingTable).getAllByRole("row")).toHaveLength(4);
+    expect(within(mappingTable).getAllByRole("combobox")).toHaveLength(3);
+  });
+
   it("focuses the dialog on open and closes on Escape without importing", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

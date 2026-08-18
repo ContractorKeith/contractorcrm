@@ -80,6 +80,9 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
         setMapping(next.mapping);
         setError(null);
       } catch (rejection) {
+        // A rejected preview (duplicate or empty headers, unreadable file) leaves
+        // nothing safe to import, so the mapping table is cleared with it.
+        setPreview(null);
         setError(
           isCommandError(rejection) ? rejection.message : "That CSV file could not be read.",
         );
@@ -95,10 +98,14 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
   }, [loadPreview]);
 
   // Focus the dialog on open and hand focus back to the trigger on close.
+  // The restore runs on the next frame — macOS needs the dialog gone first.
   useEffect(() => {
     restoreFocusRef.current = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
-    return () => restoreFocusRef.current?.focus();
+    return () => {
+      const invoker = restoreFocusRef.current;
+      requestAnimationFrame(() => invoker?.focus());
+    };
   }, []);
 
   const changeMapping = (header: string, target: ContactImportTarget | "") => {
@@ -173,8 +180,8 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
             </p>
             {summary.skipped.length > 0 ? (
               <ul aria-label="Skipped rows">
-                {summary.skipped.map((issue) => (
-                  <li key={issue.line}>
+                {summary.skipped.map((issue, index) => (
+                  <li key={index}>
                     Line {issue.line}: {issue.reason}
                   </li>
                 ))}
@@ -196,8 +203,8 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
                 </tr>
               </thead>
               <tbody>
-                {preview.headers.map((header) => (
-                  <tr key={header}>
+                {preview.headers.map((header, columnIndex) => (
+                  <tr key={columnIndex}>
                     <th scope="row">{header}</th>
                     <td>
                       <select
@@ -225,8 +232,8 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
                 <caption>Sample rows</caption>
                 <thead>
                   <tr>
-                    {preview.headers.map((header) => (
-                      <th key={header} scope="col">
+                    {preview.headers.map((header, columnIndex) => (
+                      <th key={columnIndex} scope="col">
                         {header}
                       </th>
                     ))}
@@ -235,8 +242,8 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
                 <tbody>
                   {preview.sampleRows.map((row, rowIndex) => (
                     <tr key={rowIndex}>
-                      {preview.headers.map((header, cellIndex) => (
-                        <td key={header}>{row[cellIndex] ?? ""}</td>
+                      {preview.headers.map((_header, cellIndex) => (
+                        <td key={cellIndex}>{row[cellIndex] ?? ""}</td>
                       ))}
                     </tr>
                   ))}
@@ -246,8 +253,8 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
 
             {preview.issues.length > 0 ? (
               <ul aria-label="Import issues">
-                {preview.issues.map((issue) => (
-                  <li key={issue.line}>
+                {preview.issues.map((issue, index) => (
+                  <li key={index}>
                     Line {issue.line}: {issue.reason}
                   </li>
                 ))}

@@ -296,7 +296,7 @@ describe("contact list and detail", () => {
     render(<App client={client} />);
     await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
 
-    expect(client.exportContactsCsv).toHaveBeenCalledWith("/tmp/contacts.csv");
+    expect(client.exportContactsCsv).toHaveBeenCalledWith("/tmp/contacts.csv", true);
     expect(
       await screen.findByText("Exported 12 contacts to /tmp/contacts.csv."),
     ).toBeVisible();
@@ -311,6 +311,35 @@ describe("contact list and detail", () => {
     await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
 
     expect(client.exportContactsCsv).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the core's message when an export fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(save).mockResolvedValue("/tmp/contacts.csv");
+    const client = stubClient({
+      exportContactsCsv: vi.fn().mockRejectedValue({
+        kind: "invalid_input",
+        message: "/tmp/contacts.csv already exists",
+        field: "path",
+      }),
+    });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Export CSV…" }));
+
+    expect(await screen.findByText("/tmp/contacts.csv already exists")).toBeVisible();
+  });
+
+  it("reports a file picker failure instead of failing silently", async () => {
+    const user = userEvent.setup();
+    vi.mocked(open).mockRejectedValue(new Error("no window handle"));
+    const client = stubClient();
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Import CSV…" }));
+
+    expect(await screen.findByText("The file picker could not be opened.")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("opens the mapping wizard for a picked CSV and reloads contacts after import", async () => {
@@ -344,5 +373,44 @@ describe("contact list and detail", () => {
       mapping: { displayName: "Name" },
     });
     expect(await screen.findByText("Dana Ruiz")).toBeVisible();
+  });
+
+  it("refreshes tag filters after an import so imported tags are selectable", async () => {
+    const user = userEvent.setup();
+    vi.mocked(open).mockResolvedValue("/tmp/leads.csv" as never);
+    const listTags = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          id: "tag-1",
+          label: "Imported lead",
+          colorRole: null,
+          archivedAt: null,
+          createdAt: "2026-08-18T12:00:00Z",
+          updatedAt: "2026-08-18T12:00:00Z",
+          version: 1,
+        },
+      ]);
+    const client = stubClient({
+      listTags,
+      previewContactImport: vi.fn().mockResolvedValue({
+        headers: ["Name", "Tags"],
+        rowCount: 1,
+        mapping: { displayName: "Name", tags: "Tags" },
+        sampleRows: [["Dana Ruiz", "Imported lead"]],
+        issues: [],
+      }),
+      importContacts: vi.fn().mockResolvedValue({ created: 1, updated: 0, skipped: [] }),
+    });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Import CSV…" }));
+    await user.click(await screen.findByRole("button", { name: "Import" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+
+    const tagPicker = await screen.findByRole("listbox", { name: "Tags (all must match)" });
+    expect(await within(tagPicker).findByRole("option", { name: "Imported lead" })).toBeVisible();
+    expect(listTags).toHaveBeenCalledTimes(2);
   });
 });

@@ -192,20 +192,23 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [csvStatus, setCsvStatus] = useState("");
   const [csvError, setCsvError] = useState<string | null>(null);
 
-  // Pick a destination, then write every opportunity to it.
+  // Pick a destination, then write every opportunity to it. The native save
+  // dialog already confirms replacement, so the export overwrites directly.
   const exportCsv = async () => {
     setCsvError(null);
     setCsvStatus("");
-    const destination = await save({
-      defaultPath: "opportunities.csv",
-      filters: [{ name: "CSV", extensions: ["csv"] }],
-    });
-    if (typeof destination !== "string") return;
     try {
-      const report = await client.exportOpportunitiesCsv(destination);
+      const destination = await save({
+        defaultPath: "opportunities.csv",
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (typeof destination !== "string") return;
+      const report = await client.exportOpportunitiesCsv(destination, true);
       setCsvStatus(`Exported ${report.rowCount} opportunities to ${report.path}.`);
-    } catch {
-      setCsvError("The pipeline could not be exported.");
+    } catch (rejection) {
+      setCsvError(
+        isCommandError(rejection) ? rejection.message : "The pipeline could not be exported.",
+      );
     }
   };
 
