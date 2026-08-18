@@ -2,7 +2,7 @@
 
 Issue: #21
 Status: implemented
-Updated: 2026-08-18
+Updated: 2026-08-18 (path validation, staging recovery, export size cap, format-character stripping)
 
 ## Boundary
 
@@ -29,12 +29,24 @@ database backup/restore (`backup_to`/`restore_from` remain database-file only).
   `opportunities_attachments_delete` triggers block deleting a parent that still has attachments —
   the same pattern migration 8 established for tags and custom fields.
 - **Sanitized file name doubles as the on-disk name.** `sanitized_file_name` strips path
-  separators and control characters, trims trailing dots/spaces, caps length at 120 bytes
-  (preserving the extension), and prefixes Windows reserved device names (`CON`, `PRN`, `NUL`,
-  `COM1`…, `LPT1`…) with `_` so an archive stays portable even though the app only ships for
-  macOS/Windows today. The internal `relative_path` (`<id>/<file_name>`) is `UNIQUE` and never
-  crosses the wire — callers resolve a file through `attachment_path`, never by building a path
-  themselves.
+  separators, control characters, and invisible Unicode format characters (bidi overrides,
+  zero-width spaces/joiners, variation selectors, and similar `Cf`-category codepoints, listed
+  explicitly since `std` doesn't expose Unicode general categories) — a right-to-left override like
+  `photo\u{202e}fdp.exe` would otherwise render as `photo...exe.pdf` while the bytes on disk stay an
+  executable. It also trims trailing dots/spaces, caps length at 120 bytes (preserving the
+  extension), and prefixes Windows reserved device names (`CON`, `PRN`, `NUL`, `COM1`…, `LPT1`…)
+  with `_` so an archive stays portable even though the app only ships for macOS/Windows today. The
+  internal `relative_path` (`<id>/<file_name>`) is `UNIQUE` and never crosses the wire — callers
+  resolve a file through `attachment_path`, never by building a path themselves.
+- **Every stored path is validated before it touches the filesystem.** `valid_path_component`
+  (never empty, never `.`/`..`, no separators, control characters, or format characters) and
+  `file_path_under` (exactly two validated segments — `<id>/<file_name>` — joined onto a root) are
+  the only way a `relative_path` becomes a filesystem path anywhere in the codebase: the managed
+  store (`AttachmentStore::file_path`), import staging (`stage_assets`), and removal
+  (`remove_managed_directory`) all go through them. A stored value is data, never something the
+  filesystem gets to interpret — this closed a gap where a hand-edited archive row could otherwise
+  smuggle a traversal segment through `relative_path` even though `id` and `file_name` were each
+  individually safe.
 - **256 MiB cap shared with the archive.** `MAX_ATTACHMENT_BYTES` is literally
   `archive::MAX_ENTRY_BYTES`, so nothing that can be attached is too large to also travel in a
   portable archive later. The cap is enforced twice: once against the source file's `metadata().len()`
@@ -56,23 +68,41 @@ database backup/restore (`backup_to`/`restore_from` remain database-file only).
   `tauri-plugin-opener` dependency to launch the OS default handler. `exists: false` is not an
   error — it's how a caller learns a managed file is missing (e.g., after restoring a database
   backup, which never touches attachment files).
-- **Archive carries real files, verified two ways.** `attachments` joins `ARCHIVE_TABLES` as the
+- **Archive carries real files, verified three ways.** `attachments` joins `ARCHIVE_TABLES` as the
   17th canonical table, and export writes each managed file to `assets/<attachment id>/<file name>`
   reading it fresh from disk — refusing the whole export (`attachment_file_missing`) if a
   referenced file is gone, since an archive that can't be imported is worse than no archive.
-  Verification checks every asset twice: once as an ordinary manifest-listed file (size + SHA-256
-  against `manifest.json`, same as every other archived file), and again against the owning row's
-  own `size_bytes`/`sha256` (`attachment_size_mismatch`, `attachment_checksum_mismatch`) — the row
-  is what the live database will trust after import, so it gets its own check independent of
-  whatever the manifest claims. A file under `assets/` with no claiming row is `unexpected_asset`.
-- **Stage, commit, swap — never a half-imported managed file.** `import_archive` writes verified
-  attachment bytes into a fresh `.import-staging-<id>` directory under the attachments root
-  *before* the database transaction runs, so anything that can fail on the filesystem (disk full,
-  permissions) fails before the live database is touched. Only after the transaction commits does
-  `swap_staged_assets` clear the old managed directories and rename the staged files into place — the
-  database is authoritative, so files never move ahead of the rows that describe them. A refused
-  import (verification fails) never creates or touches the staging directory at all; a failure
-  between staging and swap is reported but the already-committed row replace stands.
+  Verification checks every attachment row and its asset in three steps: first that the row's `id`
+  and `file_name` are each a safe path segment and its `relative_path` actually equals
+  `<id>/<file_name>` (`invalid_value` for an unsafe id/file name, `attachment_path_mismatch` for a
+  mismatched `relative_path` — see the path-validation decision above; a row that fails this check
+  is never handed to the filesystem at all), then as an ordinary manifest-listed file (size +
+  SHA-256 against `manifest.json`, same as every other archived file), and finally against the
+  owning row's own `size_bytes`/`sha256` (`attachment_size_mismatch`, `attachment_checksum_mismatch`)
+  — the row is what the live database will trust after import, so it gets its own check independent
+  of whatever the manifest claims. A file under `assets/` with no claiming row is `unexpected_asset`.
+- **Export capped at the same ~1 GiB import reads under.** `export_archive` sums the archived table
+  JSON, the CSV convenience copies, and every attachment's `size_bytes` (from its row, not a re-read
+  of the file) as it assembles the archive in memory, refusing (`validation_failed` /
+  `archive_too_large`) the moment the running total would exceed `MAX_ARCHIVE_BYTES` — before the
+  ZIP is written, not after. Without this, a database with enough attachments could produce an
+  archive that `import_archive`'s own untrusted-input cap would then refuse to read back.
+- **Stage, commit, swap, sweep — a crash never strands staged bytes forever.** `import_archive`
+  writes verified attachment bytes into a fresh `.import-staging-<id>` directory under the
+  attachments root *before* the database transaction runs, so anything that can fail on the
+  filesystem (disk full, permissions) fails before the live database is touched. Once the
+  transaction commits, the import is done as far as the database is concerned — irreversible from
+  there regardless of what the filesystem does next. `swap_staged_assets` (clear the old managed
+  directories, rename the staged files into place) is attempted, retried once on failure, and then
+  abandoned silently: `import_archive` always returns its `ArchiveImportReport` with the safety
+  backup path rather than surfacing a post-commit filesystem error the caller has no way to undo. A
+  swap that never completes leaves the affected attachment rows reporting `exists: false` from
+  `attachment_path` until the same archive is imported again, which re-stages and re-attempts the
+  swap from scratch. There is no directory-level recovery of a half-swapped state — `sweep_import_staging`
+  (called by both `export_archive` and `import_archive` before they touch the attachments root)
+  only ever *discards* a leftover `.import-staging-*` directory it finds, it never resumes or
+  replays one. A refused import (verification fails) never creates or touches the staging directory
+  at all.
 - **Forward compatibility for whole tables, not just columns.** `TABLE_INTRODUCED_IN` maps each
   canonical table to the migration that created it; a missing `data/<table>.json` is tolerated as
   zero rows only when the archive's `databaseMigrationVersion` predates that table's introduction.
@@ -121,9 +151,11 @@ See `docs/DATA_MODEL.md` "attachments" and "Archive contract" for the on-disk la
 - **Round trip.** A file is copied under management, listed, and removed; removal deletes the row
   and best-effort the file, reporting `fileRemoved`.
 - **Not found.** Removing an unknown attachment id is `not_found`.
-- **Sanitization.** Path separators, control characters, trailing dots/spaces, an overlong name,
-  and a Windows reserved device name all land as a safe on-disk name — and that sanitized name is
-  what's actually on disk, not just what the row claims.
+- **Sanitization.** Path separators, control characters, invisible format characters (a
+  right-to-left override and zero-width space/joiner cases), trailing dots/spaces, an overlong
+  name, and a Windows reserved device name all land as a safe on-disk name — and that sanitized
+  name is what's actually on disk, not just what the row claims. A name that is nothing but format
+  characters once stripped is `invalid_input`, not an empty file name.
 - **Size cap.** A file over 256 MiB is refused before anything is copied.
 - **Parent requirements.** Attaching needs an existing, active (non-archived) parent and a
   readable source file.
@@ -135,7 +167,10 @@ See `docs/DATA_MODEL.md` "attachments" and "Archive contract" for the on-disk la
   migration 010.
 - **Trigger enforcement.** The owner trigger refuses a row without a live parent.
 
-`src-tauri/tests/portable_archive.rs` gained 5 attachment-specific tests on top of its existing 20:
+`src-tauri/tests/portable_archive.rs` grew from its pre-attachments 20 tests to 31, in three
+rounds:
+
+Attachment round trip and archive contract (+5):
 
 - **Round trip.** An archive carrying managed attachment files replaces the target database's
   managed files along with its rows.
@@ -148,3 +183,26 @@ See `docs/DATA_MODEL.md` "attachments" and "Archive contract" for the on-disk la
   `data/attachments.json`) still imports cleanly.
 - **Export guard.** `export_archive` refuses to write an archive when a referenced managed file is
   missing from disk.
+
+Path safety, closing the traversal gap (+2):
+
+- **Foreign path.** An `attachments` row whose `relative_path` doesn't equal `<id>/<file_name>` is
+  refused (`attachment_path_mismatch`).
+- **Poisoned path.** A live database row whose `relative_path` is hand-edited to a traversal
+  segment (`../../outside.txt`) is refused by every consumer that resolves it —
+  `attachment_path` fails `invalid_stored_data` rather than resolving outside the root, and
+  removal only ever touches the managed `<root>/<id>` directory, so it succeeds without following
+  the poisoned path.
+
+Staging recovery, export cap, and format-character stripping (+4):
+
+- **Stranded staging.** A leftover `.import-staging-*` directory from a crashed prior import is
+  swept (deleted) before the next import or export touches the attachments root.
+- **Post-commit swap failure.** A swap failure after the import transaction has committed still
+  returns the successful `ArchiveImportReport` — the commit is authoritative, not the filesystem
+  step after it.
+- **Export size cap.** An export whose records and attachments would exceed the ~1 GiB archive
+  limit is refused (`archive_too_large`) before the ZIP is built.
+- **Invisible file name.** An `attachments` row whose `file_name` contains an invisible format
+  character (a right-to-left override making `cedar\u{202e}fdp.exe` render as a PDF) is refused
+  during archive verification (`invalid_value`).

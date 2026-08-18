@@ -134,8 +134,9 @@ user's file taken under application management, laid out on disk as
   parent must exist and not be archived, and a parent cannot be deleted while it still has
   attachments
 - `file_name` — sanitized display name, which is also the on-disk file name (traversal/control
-  characters stripped, Windows reserved device names prefixed with `_`, length capped at 120
-  bytes with the extension preserved)
+  characters and invisible Unicode format characters — bidi overrides, zero-width spaces, variation
+  selectors — stripped so a right-to-left override can't disguise an executable as a PDF, Windows
+  reserved device names prefixed with `_`, length capped at 120 bytes with the extension preserved)
 - `relative_path` — internal, `UNIQUE`, `<id>/<file_name>`; never exposed over the wire, only used
   to resolve the managed file path
 - `media_type` nullable — looked up from a small file-extension map, `application/octet-stream`
@@ -225,6 +226,13 @@ The portable archive (issue #20, extended with attachments in issue #21) is a ve
   never claim a file it doesn't actually carry. The directory entry is always
   present, even with zero attachments, so the layout is stable.
 
+Export enforces the same ~1 GiB total-uncompressed cap import reads against (`MAX_ARCHIVE_BYTES`):
+before building the ZIP, `export_archive` sums the archived table JSON, the CSV convenience copies,
+and every attachment's `size_bytes` (from its row, not a re-read of the file) as it goes, and
+refuses (`validation_failed` / `archive_too_large`) the moment the running total would exceed the
+limit — an archive too large to ever be imported back is refused at export time instead of being
+written and only failing later.
+
 Attachment files are cross-checked against their row on top of the manifest's own per-file
 checksum: every `attachments` row must have a matching `assets/<id>/<file_name>` entry
 (`attachment_file_missing`), whose byte count and SHA-256 must match the row's `size_bytes` and
@@ -232,13 +240,11 @@ checksum: every `attachments` row must have a matching `assets/<id>/<file_name>`
 that no row claims is `unexpected_asset`. Only once every attachment file verifies clean are its
 bytes handed on to import.
 
-On import, verified attachment bytes are written into a fresh staging directory under the
-attachments root before the database transaction runs — everything that can fail on the
-filesystem fails there, so the swap afterward is only renames. Once the transaction commits, the
-old managed directories are cleared and the staged files are moved into place; a crash between
-those two steps leaves the next import's or launch's cleanup to find and skip or replace the
-staging directory (`.import-staging-<id>` prefix), never a half-written managed file the database
-already believes exists.
+On import, verified attachment bytes are written into a fresh `.import-staging-<id>` directory
+under the attachments root before the database transaction runs, then swapped into place after the
+transaction commits — see "A successful import..." below for the full stage/commit/swap/sweep
+sequence and its honest recovery story (there is no directory-swap recovery; a stranded staging
+directory is only ever swept and discarded, never resumed).
 
 Archive schema version and database migration version are tracked
 independently. Verification (shared by `preview_archive_import` and
@@ -281,7 +287,13 @@ succeed) never writes to the live database and runs, in order:
    `NULL`). `app_settings`/needs-attention thresholds never travel in the
    archive at all, since that table is excluded entirely.
    Attachment files under `assets/` are then cross-checked against the
-   `attachments` rows (`attachment_file_missing`, `attachment_size_mismatch`,
+   `attachments` rows. Each row's `id` and `file_name` must be safe,
+   validated path segments and its `relative_path` must equal
+   `<id>/<file_name>` (`invalid_value` for an unsafe id or file name,
+   `attachment_path_mismatch` for a `relative_path` that doesn't match) —
+   a hostile archive can never plant a row that addresses anything outside
+   the attachments root. Only once a row passes that check is its asset file
+   verified (`attachment_file_missing`, `attachment_size_mismatch`,
    `attachment_checksum_mismatch`, `unexpected_asset` — see "Archive
    contract" above).
 4. **Record counts.** The manifest's claimed `recordCounts` are compared
@@ -306,22 +318,32 @@ succeed) never writes to the live database and runs, in order:
    `constraint_violation`. This is what makes "empty issues" true by
    construction rather than by hope.
 
-A successful import stages the verified attachment files into a fresh directory under the
-attachments root, then takes its timestamped safety backup (`<database>.pre-import-<stamp>.bak`)
-only after verification passes with no issues, then replaces every canonical row — delete all 17
-tables in reverse dependency order, insert from the archive in dependency order, rebuild the FTS
-index — in one transaction. Only once that transaction commits does the swap from the staging
-directory into the live attachments root happen, clearing the old managed files first. If the real
-row-replace apply somehow fails despite the dry run having passed, the transaction rolls back, the
-orphaned safety backup and staging directory are removed, and the failure is reported as
-`validation_failed` / `archive_invalid` — the live database and filesystem are left exactly as they
-were. Only full replace is supported in v1; merge-import is out of scope. Export and import each
-write one `command_log` row (`export`/`archive` and `import`/`archive`).
+A successful import sweeps any `.import-staging-*` directory a previous crashed import left
+behind, stages the verified attachment files into a fresh staging directory under the attachments
+root, then takes its timestamped safety backup (`<database>.pre-import-<stamp>.bak`) only after
+verification passes with no issues, then replaces every canonical row — delete all 17 tables in
+reverse dependency order, insert from the archive in dependency order, rebuild the FTS index — in
+one transaction. If the real row-replace apply somehow fails despite the dry run having passed,
+the transaction rolls back, the orphaned safety backup and staging directory are removed, and the
+failure is reported as `validation_failed` / `archive_invalid` — the live database and filesystem
+are left exactly as they were. Only full replace is supported in v1; merge-import is out of scope.
 
-`export_archive` (and the CSV exports) refuse to write onto the live
-database file itself or its `-wal`/`-shm` sidecars and `.bak` safety copies
-(`destination_is_database`), so an export can never overwrite the data it
-was meant to preserve.
+Once the transaction commits, the import is committed and done as far as the database is
+concerned — the row replace is irreversible from here, whatever happens next. The swap from the
+staging directory into the live attachments root (clear the old managed files, move the staged
+ones in) is attempted, retried once on failure, and then abandoned silently if it still fails:
+`import_archive` always returns its `ArchiveImportReport` (with the safety backup path) rather
+than surfacing a post-commit filesystem error the caller can't undo anyway. A swap that never
+completes leaves some attachment rows pointing at files that aren't there yet; `attachment_path`
+reports those as `exists: false` until the archive is imported again, which re-stages and
+re-attempts the swap from scratch. Export and import each write one `command_log` row
+(`export`/`archive` and `import`/`archive`).
+
+`export_archive` also sweeps any leftover `.import-staging-*` directory before it reads the
+attachments root, since export is the other routine opportunity (besides the next import) to clear
+bytes a crashed import stranded. `export_archive` (and the CSV exports) refuse to write onto the
+live database file itself or its `-wal`/`-shm` sidecars and `.bak` safety copies
+(`destination_is_database`), so an export can never overwrite the data it was meant to preserve.
 
 Backup/restore (`backup_to` / `restore_from`) is a separate, database-file-only mechanism — it
 never copies or restores attachment files. Restoring a database backup can leave `attachments`
