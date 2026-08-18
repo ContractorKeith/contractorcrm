@@ -1,7 +1,7 @@
 # Local agent API
 
 Status: v1 application command contract implemented; MCP adapter planned
-Updated: 2026-08-18 (portable archive export/import)
+Updated: 2026-08-18 (attachments as managed files)
 
 The implemented command registry, named inputs, outputs, foundational wire
 types, and stable error kinds are published in `schemas/v1/local-api.json` and
@@ -30,6 +30,8 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 - `get_attention_flags(asOfDate?)` — deterministic stale-lead / overdue / no-response flags
 - `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
 - `list_tags(includeArchived)`, `list_custom_field_defs(entityType, includeArchived)`, `get_record_metadata(entityType, recordId)`, and `match_saved_view(entityType, definition)`
+- `list_attachments(parentType, parentId)` — every managed file on a contact or opportunity, oldest first; each returns `id`, `fileName`, `mediaType`, `sizeBytes`, `sha256`, `createdAt`, `version` (never the internal `relative_path`)
+- `attachment_path(attachmentId)` — resolves a managed file's absolute path and whether it still exists on disk (`AttachmentLocation { path, exists }`), for the frontend to hand to the OS opener; `exists: false` after a database restore means the row survived but its bytes did not
 - `preview_contact_import(path, mapping?)` — parses a CSV file's headers and sample rows without writing; returns the effective mapping (caller's or auto-guessed from header aliases) and per-row validation issues, but does not touch the database. A trailing empty header column (and its cells) is dropped and tolerated; an interior blank header, a duplicate header, or a non-UTF-8/malformed file fails as `invalid_input` (the encoding case with re-save-as-UTF-8 guidance) rather than a partial read.
 - `preview_archive_import(path)` — reads a portable archive ZIP and fully
   verifies it without writing anything: untrusted-input size bounds (256 MiB
@@ -37,7 +39,7 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
   checksums, `schemaVersion`, `databaseMigrationVersion`, per-row column
   shape against the live schema, the manifest's `recordCounts` against the
   rows actually parsed, referential integrity and structural minimums
-  (at least one pipeline with open/won/lost stages) across all 16 archived
+  (at least one pipeline with open/won/lost stages) across all 17 archived
   tables, and finally a dry-run apply into a throwaway in-memory database
   that exercises every `UNIQUE`/`CHECK` constraint and the search rebuild.
   Because that dry run is the last step, an empty `issues` list means
@@ -77,19 +79,24 @@ Proposal tools return a typed diff, warnings, affected versions, and an opaque p
 - `link_job(opportunityId, jobRef, expectedVersion)` — records the ContractorProject hand-off result
 - `create_saved_view(request)` / `update_saved_view(request)` / `delete_saved_view(request)` — version-checked local list configuration; definitions are validated, bounded, and never interpreted as SQL
 - `create_tag` / `update_tag` / `archive_tag` / `unarchive_tag`, matching custom-field-definition lifecycle commands, and `set_record_metadata(request)` — typed, optimistic, audited local metadata writes; identical metadata replacement is a no-op
+- `add_attachment(parentType, parentId, sourcePath)` — copies a file from `sourcePath` into the managed attachments store and records it against a contact or opportunity that must exist and not be archived. Refuses a `sourcePath` that already resolves inside the managed root (attaching a managed file to itself). The file name is sanitized (path separators and control characters stripped, trailing dots/spaces trimmed, Windows reserved device names prefixed with `_`, length capped at 120 bytes with the extension preserved) and becomes both the stored display name and the on-disk file name; `mediaType` is looked up from the file extension. Files over 256 MiB fail `validation_failed` / `file_too_large`. The file is copied and hashed before the row is written; a failed write removes the copy so a managed file never outlives a failed command. Returns `Attachment`.
+- `remove_attachment(attachmentId, expectedVersion)` — version-checked; deletes the row, then best-effort deletes the managed file. Returns `AttachmentRemoval { fileRemoved }` — `false` means the row is gone but its bytes could not be cleaned up, which is harmless since nothing lists or exports an attachment with no row.
 - `import_contacts(request)` — applies a mapped CSV file in one transaction; rows match an existing contact by `external_id` then record id. Matched updates are patches: columns the file does not map, and mapped cells that are blank, never overwrite a stored value; `kind` and company link only change when the file carries a non-blank cell for them; `favorite` is never touched by import. A mapped first/last-name cell only re-derives `display_name` when the stored `display_name` was itself derived from the stored name parts — a curated (hand-edited) display name is never overwritten by a name column. Channels (email/phone) are additive — a value not already on the record is inserted, never deleted or replaced; a leading `'` that only exists to defuse a formula trigger (see export below) is stripped from a mapped cell before it's read, so a file this app exported round-trips byte-for-byte instead of storing an escaped value. Tags are additive. Rows matching an archived contact are skipped and reported, never mutated. Invalid rows (including interior blank or duplicate CSV headers, which fail the whole file as `invalid_input`) are skipped and reported as `{line, reason}`; a trailing empty header column is tolerated and dropped rather than rejected. Command log rows use the `import` actor.
 - `export_contacts_csv(path, overwrite)` / `export_opportunities_csv(path, overwrite)` — write every active contact or opportunity to a CSV file, including tags and custom field columns. An existing file at `path` without `overwrite: true` fails `validation_failed` with code `destination_exists`; a `path` that resolves to the live database file, one of its `-wal`/`-shm` sidecars, or a `<database>.*.bak` safety copy fails `validation_failed` with code `destination_is_database`, so an export can never overwrite the data it's meant to preserve. Cells beginning with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with exactly one `'` to block spreadsheet formula injection; `import_contacts` strips that same single leading quote back off, so the guard round-trips safely instead of accumulating quotes on repeated export/import cycles. Each export writes one `command_log` row with `entity_type` `"export"`.
 - `export_archive(path, overwrite)` — writes a versioned portable archive ZIP
-  (`manifest.json`, `data/<table>.json` for all 16 canonical tables,
-  `csv/contacts.csv` + `csv/opportunities.csv` convenience copies, and an
-  empty `assets/` directory reserved for issue #21) of every canonical
-  record, active or archived. Same destination guards as the CSV exports:
-  an existing file at `path` without `overwrite: true` fails
-  `validation_failed` / `destination_exists`; the live database file (or a
-  `-wal`/`-shm`/`.bak` sibling) fails `validation_failed` /
-  `destination_is_database`. Returns `ArchiveExportReport { path,
-  recordCounts, fileCount }`. Writes one `command_log` row
-  (`entity_type: "export"`, `entity_id: "archive"`, actor `user`).
+  (`manifest.json`, `data/<table>.json` for all 17 canonical tables,
+  `csv/contacts.csv` + `csv/opportunities.csv` convenience copies, and
+  `assets/<attachment id>/<file name>` for every managed attachment file) of
+  every canonical record, active or archived. Refuses (`validation_failed` /
+  `attachment_file_missing`) if a referenced attachment's managed file is no
+  longer on disk, rather than exporting an archive that can never be
+  imported. Same destination guards as the CSV exports: an existing file at
+  `path` without `overwrite: true` fails `validation_failed` /
+  `destination_exists`; the live database file (or a `-wal`/`-shm`/`.bak`
+  sibling) fails `validation_failed` / `destination_is_database`. Returns
+  `ArchiveExportReport { path, recordCounts, fileCount }`. Writes one
+  `command_log` row (`entity_type: "export"`, `entity_id: "archive"`, actor
+  `user`).
 - `import_archive(path)` — verifies the archive exactly as
   `preview_archive_import` does (culminating in the dry-run apply into a
   throwaway in-memory database) and fails `validation_failed` /
@@ -103,8 +110,11 @@ Proposal tools return a typed diff, warnings, affected versions, and an opaque p
   removed, and the failure is reported as `validation_failed` /
   `archive_invalid` — the live database is left exactly as it was.
   `command_log`, `app_settings`, and `schema_migrations` are untouched by
-  import. Returns `ArchiveImportReport { recordCounts, safetyBackupPath }`.
-  Writes one
+  import. Verified attachment files are staged under the attachments root
+  before the transaction (so a filesystem failure never touches the live
+  database) and swapped into place — old managed directories cleared, staged
+  files moved in — only after the transaction commits. Returns
+  `ArchiveImportReport { recordCounts, safetyBackupPath }`. Writes one
   `command_log` row (`entity_type: "import"`, `entity_id: "archive"`, actor
   `user`) naming the safety backup path. Full replace only in v1 —
   merge-import is out of scope.
