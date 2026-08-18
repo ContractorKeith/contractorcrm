@@ -32,13 +32,24 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 - `list_tags(includeArchived)`, `list_custom_field_defs(entityType, includeArchived)`, `get_record_metadata(entityType, recordId)`, and `match_saved_view(entityType, definition)`
 - `preview_contact_import(path, mapping?)` — parses a CSV file's headers and sample rows without writing; returns the effective mapping (caller's or auto-guessed from header aliases) and per-row validation issues, but does not touch the database. A trailing empty header column (and its cells) is dropped and tolerated; an interior blank header, a duplicate header, or a non-UTF-8/malformed file fails as `invalid_input` (the encoding case with re-save-as-UTF-8 guidance) rather than a partial read.
 - `preview_archive_import(path)` — reads a portable archive ZIP and fully
-  verifies it (entry paths, checksums, `schemaVersion`, `databaseMigrationVersion`,
-  per-row column shape against the live schema, and referential integrity
-  across all 16 archived tables) without writing anything. Returns
-  `ArchiveImportPreview`: `schemaVersion`, `product`, `exportedAt`,
-  `databaseMigrationVersion`, `recordCounts`, and `issues: ArchiveIssue[]`
-  (`{code, message}`). An empty `issues` list means `import_archive` would
-  succeed. An unreadable file (missing, corrupt, no `manifest.json`) is a
+  verifies it without writing anything: untrusted-input size bounds (256 MiB
+  per entry, 1 GiB total uncompressed), entry paths, a foreign-product check,
+  checksums, `schemaVersion`, `databaseMigrationVersion`, per-row column
+  shape against the live schema, the manifest's `recordCounts` against the
+  rows actually parsed, referential integrity and structural minimums
+  (at least one pipeline with open/won/lost stages) across all 16 archived
+  tables, and finally a dry-run apply into a throwaway in-memory database
+  that exercises every `UNIQUE`/`CHECK` constraint and the search rebuild.
+  Because that dry run is the last step, an empty `issues` list means
+  `import_archive` will succeed — it is not just a best-effort prediction.
+  Returns `ArchiveImportPreview`: `schemaVersion`, `product`, `exportedAt`,
+  `databaseMigrationVersion`, `recordCounts` (the *parsed* counts, verified
+  against the manifest's claim), and `issues: ArchiveIssue[]` (`{code,
+  message}`, capped at 100 with a trailing `too_many_issues` summary).
+  Referential and structural checks — and the dry run — are skipped once an
+  earlier stage already reported an issue, so fixing the reported problems
+  and re-previewing the same file can surface new issues that were hidden
+  behind them. An unreadable file (missing, corrupt, no `manifest.json`) is a
   caller `invalid_input` error rather than a reported issue, since it cannot
   be attributed to a record.
 
@@ -67,25 +78,33 @@ Proposal tools return a typed diff, warnings, affected versions, and an opaque p
 - `create_saved_view(request)` / `update_saved_view(request)` / `delete_saved_view(request)` — version-checked local list configuration; definitions are validated, bounded, and never interpreted as SQL
 - `create_tag` / `update_tag` / `archive_tag` / `unarchive_tag`, matching custom-field-definition lifecycle commands, and `set_record_metadata(request)` — typed, optimistic, audited local metadata writes; identical metadata replacement is a no-op
 - `import_contacts(request)` — applies a mapped CSV file in one transaction; rows match an existing contact by `external_id` then record id. Matched updates are patches: columns the file does not map, and mapped cells that are blank, never overwrite a stored value; `kind` and company link only change when the file carries a non-blank cell for them; `favorite` is never touched by import. A mapped first/last-name cell only re-derives `display_name` when the stored `display_name` was itself derived from the stored name parts — a curated (hand-edited) display name is never overwritten by a name column. Channels (email/phone) are additive — a value not already on the record is inserted, never deleted or replaced; a leading `'` that only exists to defuse a formula trigger (see export below) is stripped from a mapped cell before it's read, so a file this app exported round-trips byte-for-byte instead of storing an escaped value. Tags are additive. Rows matching an archived contact are skipped and reported, never mutated. Invalid rows (including interior blank or duplicate CSV headers, which fail the whole file as `invalid_input`) are skipped and reported as `{line, reason}`; a trailing empty header column is tolerated and dropped rather than rejected. Command log rows use the `import` actor.
-- `export_contacts_csv(path, overwrite)` / `export_opportunities_csv(path, overwrite)` — write every active contact or opportunity to a CSV file, including tags and custom field columns. An existing file at `path` without `overwrite: true` fails `validation_failed` with code `destination_exists`. Cells beginning with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with exactly one `'` to block spreadsheet formula injection; `import_contacts` strips that same single leading quote back off, so the guard round-trips safely instead of accumulating quotes on repeated export/import cycles. Each export writes one `command_log` row with `entity_type` `"export"`.
+- `export_contacts_csv(path, overwrite)` / `export_opportunities_csv(path, overwrite)` — write every active contact or opportunity to a CSV file, including tags and custom field columns. An existing file at `path` without `overwrite: true` fails `validation_failed` with code `destination_exists`; a `path` that resolves to the live database file, one of its `-wal`/`-shm` sidecars, or a `<database>.*.bak` safety copy fails `validation_failed` with code `destination_is_database`, so an export can never overwrite the data it's meant to preserve. Cells beginning with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with exactly one `'` to block spreadsheet formula injection; `import_contacts` strips that same single leading quote back off, so the guard round-trips safely instead of accumulating quotes on repeated export/import cycles. Each export writes one `command_log` row with `entity_type` `"export"`.
 - `export_archive(path, overwrite)` — writes a versioned portable archive ZIP
   (`manifest.json`, `data/<table>.json` for all 16 canonical tables,
   `csv/contacts.csv` + `csv/opportunities.csv` convenience copies, and an
   empty `assets/` directory reserved for issue #21) of every canonical
-  record, active or archived. An existing file at `path` without
-  `overwrite: true` fails `validation_failed` / `destination_exists`, matching
-  the CSV exports. Returns `ArchiveExportReport { path, recordCounts,
-  fileCount }`. Writes one `command_log` row (`entity_type: "export"`,
-  `entity_id: "archive"`, actor `user`).
+  record, active or archived. Same destination guards as the CSV exports:
+  an existing file at `path` without `overwrite: true` fails
+  `validation_failed` / `destination_exists`; the live database file (or a
+  `-wal`/`-shm`/`.bak` sibling) fails `validation_failed` /
+  `destination_is_database`. Returns `ArchiveExportReport { path,
+  recordCounts, fileCount }`. Writes one `command_log` row
+  (`entity_type: "export"`, `entity_id: "archive"`, actor `user`).
 - `import_archive(path)` — verifies the archive exactly as
-  `preview_archive_import` does and fails `validation_failed` /
-  `archive_invalid` (naming the first reported issue) if any issue is found;
-  otherwise takes a timestamped safety backup of the live database
-  (`<database>.pre-import-<stamp>.bak`) and, in a single transaction, deletes
-  every canonical table in reverse dependency order, inserts every archived
-  row in dependency order, and rebuilds the FTS index. `command_log`,
-  `app_settings`, and `schema_migrations` are untouched by import. Returns
-  `ArchiveImportReport { recordCounts, safetyBackupPath }`. Writes one
+  `preview_archive_import` does (culminating in the dry-run apply into a
+  throwaway in-memory database) and fails `validation_failed` /
+  `archive_invalid` (naming the first reported issue) if any issue is found.
+  Only once verification passes with no issues does it take a timestamped
+  safety backup of the live database (`<database>.pre-import-<stamp>.bak`)
+  and, in a single transaction, delete every canonical table in reverse
+  dependency order, insert every archived row in dependency order, and
+  rebuild the FTS index. If that real apply unexpectedly fails despite the
+  dry run passing, the transaction rolls back, the orphaned safety backup is
+  removed, and the failure is reported as `validation_failed` /
+  `archive_invalid` — the live database is left exactly as it was.
+  `command_log`, `app_settings`, and `schema_migrations` are untouched by
+  import. Returns `ArchiveImportReport { recordCounts, safetyBackupPath }`.
+  Writes one
   `command_log` row (`entity_type: "import"`, `entity_id: "archive"`, actor
   `user`) naming the safety backup path. Full replace only in v1 —
   merge-import is out of scope.

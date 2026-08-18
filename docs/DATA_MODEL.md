@@ -187,30 +187,82 @@ The portable archive (issue #20, implemented) is a versioned ZIP:
   database, not the archive.
 - `csv/contacts.csv` and `csv/opportunities.csv` — human-readable convenience
   copies of the CSV export; `import_archive` ignores them.
-- `assets/` — a directory entry reserved for attachments; empty until
-  issue #21 ships managed files.
+- `assets/` — an empty directory entry reserved for attachments. Any file
+  under `assets/` is refused (`unexpected_asset`) until issue #21 defines a
+  checksummed, size-bounded attachment format; a placeholder directory entry
+  with no files is fine.
 
 Archive schema version and database migration version are tracked
-independently. `import_archive` verifies the whole archive before writing
-anything: entry-path validation (no absolute paths, backslashes, `.`/`..`
-traversal, unknown files, or a duplicate entry the central directory
-collapsed), per-file size and SHA-256 checksum against the manifest,
-`schemaVersion == 1`, and `databaseMigrationVersion <= supported` (an older
-archive imports forward; a newer one is rejected until the app is updated).
-Every row is then checked against the live schema read via `PRAGMA
-table_info` (unknown/missing columns, type/nullability mismatches, blank
-ids, invalid versions, duplicate primary keys — `record_tags` keys on
-`(tag_id, entity_type, record_id)`, every other table on `id`) and
-referential integrity is checked in memory across all 16 tables, including
-polymorphic `parent_type`/`parent_id` and `entity_type`/`record_id`
-ownership. A column missing from an older archive is allowed when it is
-nullable, so forward-compatible archives import cleanly. Any issue reported
-by `preview_archive_import` blocks `import_archive`.
+independently. Verification (shared by `preview_archive_import` and
+`import_archive`, so a preview with no issues really does mean import will
+succeed) never writes to the live database and runs, in order:
 
-A successful import takes a timestamped safety backup first
-(`<database>.pre-import-<stamp>.bak`), then replaces every canonical row —
-delete all 16 tables in reverse dependency order, insert from the archive in
-dependency order, rebuild the FTS index — in one transaction, so a failure
-leaves the live database untouched. Only full replace is supported in v1;
-merge-import is out of scope. Export and import each write one
-`command_log` row (`export`/`archive` and `import`/`archive`).
+1. **Untrusted-input bounds.** Each entry is read through a 256 MiB per-entry
+   cap and a 1 GiB total-uncompressed cap (`entry_too_large`,
+   `archive_too_large`); an aborted read still spends its budget, so a
+   compression-ratio bomb can't buy unbounded work. Entry-path validation
+   rejects absolute paths, backslashes, `.`/`..` traversal, and unknown files
+   (`entry_path_absolute`, `entry_path_backslash`, `entry_path_traversal`,
+   `unknown_file`), and a duplicate entry the ZIP central directory collapsed
+   is caught by comparing declared vs. unique entry counts
+   (`duplicate_entry`). Issue reporting stops at 100 problems, with a
+   trailing `too_many_issues` summarizing how many more were found.
+2. **Product and version gates.** An archive from a different product
+   (`wrong_product`) short-circuits the rest of verification — one clear
+   problem instead of sixteen missing table files. Otherwise
+   `schemaVersion == 1` (`unsupported_schema_version`) and
+   `databaseMigrationVersion <= supported` (`unsupported_migration_version`;
+   an older archive imports forward, a newer one is rejected until the app is
+   updated) are checked next.
+3. **Checksums and row shape.** Every manifest-listed file must be present
+   with a matching size and SHA-256 (`missing_file`, `size_mismatch`,
+   `checksum_mismatch`), every entry in the archive must be listed
+   (`unlisted_file`), and all 16 table files must be present — an archive
+   from before a table existed does not import (`missing_table_file`).
+   Every row is checked against the live schema read via `PRAGMA
+   table_info` (unknown/missing columns, type/nullability mismatches, blank
+   ids, invalid versions, duplicate primary keys — `record_tags` keys on
+   `(tag_id, entity_type, record_id)`, every other table on `id`). A column
+   *missing* from an older archive's row is allowed only when the live
+   column is nullable (defaults to `NULL`) — this is the only forward-
+   compatibility mechanism; a whole missing table file is not tolerated, and
+   `app_settings`/needs-attention thresholds never travel in the archive at
+   all, since that table is excluded entirely.
+4. **Record counts.** The manifest's claimed `recordCounts` are compared
+   against the rows actually parsed per table (`record_count_mismatch`) —
+   an inflated manifest count over an emptied data file would otherwise
+   import as a silent wipe. `preview_archive_import` reports the *parsed*
+   counts, not the manifest's claim.
+5. **References and structure** (only once every row parsed cleanly —
+   referential and structural checks are skipped when earlier issues exist,
+   so fixing those issues and re-previewing the file can surface new ones).
+   Referential integrity is checked in memory across all 16 tables,
+   including polymorphic `parent_type`/`parent_id` and
+   `entity_type`/`record_id` ownership (`missing_reference`,
+   `unknown_parent_type`). Structurally, the archive must contain at least
+   one pipeline with stages covering the `open`, `won`, and `lost` kinds —
+   the app can't function without one (`missing_pipeline`,
+   `missing_stage_kind`).
+6. **Dry-run apply.** Only once every earlier check passes, verification
+   applies the full delete-and-replace into a throwaway in-memory database
+   (never committed) — exercising every `UNIQUE`/`CHECK` constraint, trigger,
+   and the search-index rebuild — and reports any failure as
+   `constraint_violation`. This is what makes "empty issues" true by
+   construction rather than by hope.
+
+A successful import takes its timestamped safety backup
+(`<database>.pre-import-<stamp>.bak`) only after verification passes with no
+issues, then replaces every canonical row — delete all 16 tables in reverse
+dependency order, insert from the archive in dependency order, rebuild the
+FTS index — in one transaction. If that real apply somehow fails despite the
+dry run having passed, the transaction rolls back and the orphaned safety
+backup is removed, and the failure is reported as `validation_failed` /
+`archive_invalid` — the live database and filesystem are left exactly as
+they were. Only full replace is supported in v1; merge-import is out of
+scope. Export and import each write one `command_log` row (`export`/`archive`
+and `import`/`archive`).
+
+`export_archive` (and the CSV exports) refuse to write onto the live
+database file itself or its `-wal`/`-shm` sidecars and `.bak` safety copies
+(`destination_is_database`), so an export can never overwrite the data it
+was meant to preserve.
