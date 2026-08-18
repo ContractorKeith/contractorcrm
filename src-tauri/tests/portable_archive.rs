@@ -1302,3 +1302,92 @@ fn ids(storage: &Storage, sql: &str) -> Vec<String> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap()
 }
+
+#[test]
+fn an_archive_whose_row_records_a_foreign_path_is_refused() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "poisoned-path.zip", |entries| {
+        let mut rows = table_rows(entries, "attachments");
+        rows[0]["relativePath"] = serde_json::json!("../../outside.txt");
+        set_table(entries, "attachments", &rows);
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let before = dump(&target);
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"attachment_path_mismatch"),
+        "{preview:?}"
+    );
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before);
+}
+
+#[test]
+fn a_poisoned_relative_path_never_escapes_the_attachments_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut source = storage(temp.path(), "source");
+    let store = attachments(temp.path(), "source");
+    populated(&mut source, &store, &temp.path().join("inbox"));
+
+    // A sentinel outside the managed root that a poisoned row points at.
+    let sentinel = temp.path().join("outside.txt");
+    std::fs::write(&sentinel, b"keep me").unwrap();
+    source
+        .connection()
+        .execute(
+            "UPDATE attachments SET relative_path = '../../outside.txt'
+             WHERE id = (SELECT id FROM attachments ORDER BY id LIMIT 1)",
+            [],
+        )
+        .unwrap();
+    let (id, version): (String, i64) = source
+        .connection()
+        .query_row(
+            "SELECT id, version FROM attachments WHERE relative_path = '../../outside.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    // Every consumer of the stored path refuses instead of leaving the root.
+    let location = contractorcrm_lib::attachments::attachment_path(&source, &store, &id);
+    assert_eq!(location.unwrap_err().kind(), "invalid_stored_data");
+    // Removal only ever touches the managed <root>/<id> directory, so it
+    // succeeds without following the poisoned path.
+    contractorcrm_lib::attachments::remove_attachment(
+        &mut source,
+        &store,
+        contractorcrm_lib::attachments::RemoveAttachmentRequest {
+            actor: Default::default(),
+            attachment_id: id,
+            expected_version: version,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
+    // Re-poison another row so export still has one to trip over.
+    source
+        .connection()
+        .execute(
+            "UPDATE attachments SET relative_path = '../../outside.txt'
+             WHERE id = (SELECT id FROM attachments ORDER BY id LIMIT 1)",
+            [],
+        )
+        .unwrap();
+    let export = export_archive(
+        &mut source,
+        &store,
+        temp.path().join("poisoned-export.zip").to_str().unwrap(),
+        false,
+    );
+    assert_eq!(export.unwrap_err().kind(), "invalid_stored_data");
+
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
+}

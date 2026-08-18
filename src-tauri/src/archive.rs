@@ -297,7 +297,7 @@ pub fn export_archive(
     // gone would produce an archive that can never be imported, so it is an
     // error here rather than a surprise on the other side.
     for (id, file_name, relative_path) in attachment_files(connection)? {
-        let managed = store.file_path(&relative_path);
+        let managed = store.file_path(&relative_path)?;
         let bytes =
             std::fs::read(&managed).map_err(|error| ApplicationError::ValidationFailed {
                 code: "attachment_file_missing",
@@ -1193,7 +1193,32 @@ fn verify_assets(
         ) else {
             continue; // both columns are NOT NULL, so parsing already reported this
         };
+        // The id and file name become on-disk path segments, and the stored
+        // relative_path is what every later command hands to the filesystem —
+        // all three are validated here so a hostile archive can never plant a
+        // row that addresses anything outside the attachments root.
+        if !crate::attachments::valid_path_component(&id)
+            || crate::attachments::sanitized_file_name(&file_name)
+                .ok()
+                .as_deref()
+                != Some(file_name.as_str())
+        {
+            issues.push(
+                "invalid_value",
+                format!("attachments row {index} has an unsafe id or file name"),
+            );
+            continue;
+        }
         let relative_path = format!("{id}/{file_name}");
+        if cell(&specs, "attachments", row, "relative_path").as_deref()
+            != Some(relative_path.as_str())
+        {
+            issues.push(
+                "attachment_path_mismatch",
+                format!("attachments row {index} records a path other than \"{relative_path}\""),
+            );
+            continue;
+        }
         let entry_name = format!("{ASSET_PREFIX}{relative_path}");
         expected.insert(entry_name.clone());
         let Some(content) = entries.get(&entry_name) else {

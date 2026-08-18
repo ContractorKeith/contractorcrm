@@ -164,12 +164,20 @@ impl AttachmentStore {
     }
 
     /// Absolute path of one managed file from its stored relative path.
-    pub(crate) fn file_path(&self, relative_path: &str) -> PathBuf {
+    /// Refuses anything that could address outside the root — a stored value
+    /// is data, never a path the filesystem gets to interpret.
+    pub(crate) fn file_path(&self, relative_path: &str) -> Result<PathBuf, ApplicationError> {
+        let components: Vec<&str> = relative_path.split('/').collect();
+        if components.len() != 2 || !components.iter().copied().all(valid_path_component) {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "attachment path \"{relative_path}\" is not a managed <id>/<file name> pair"
+            )));
+        }
         let mut path = self.absolute_root();
-        for component in relative_path.split('/') {
+        for component in components {
             path.push(component);
         }
-        path
+        Ok(path)
     }
 
     /// Directory holding one attachment's file.
@@ -232,7 +240,7 @@ pub fn add_attachment(
 
     let id = new_id();
     let relative_path = format!("{id}/{file_name}");
-    let destination = store.file_path(&relative_path);
+    let destination = store.file_path(&relative_path)?;
     std::fs::create_dir_all(store.directory(&id))?;
     let copied = copy_into_management(&source, &destination);
     let (size_bytes, sha256) = match copied {
@@ -381,7 +389,7 @@ pub fn attachment_path(
         resource: "attachment",
         id: attachment_id.into(),
     })?;
-    let path = store.file_path(&relative_path);
+    let path = store.file_path(&relative_path)?;
     Ok(AttachmentLocation {
         exists: path.is_file(),
         path: path.to_string_lossy().into_owned(),
@@ -496,9 +504,25 @@ fn copy_into_management(
     ))
 }
 
+/// One managed path segment: never empty, never a dot form, no separators or
+/// control characters. Shared by the store, the archive verifier, and the
+/// cleanup path so no stored value can steer the filesystem.
+pub(crate) fn valid_path_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && !component
+            .chars()
+            .any(|character| matches!(character, '/' | '\\') || character.is_control())
+}
+
 /// Best-effort removal of one attachment's directory; true when nothing is
-/// left behind (including when it was already gone).
+/// left behind (including when it was already gone). An id that is not a
+/// valid path segment is never handed to the filesystem.
 pub(crate) fn remove_managed_directory(store: &AttachmentStore, attachment_id: &str) -> bool {
+    if !valid_path_component(attachment_id) {
+        return false;
+    }
     let directory = store.directory(attachment_id);
     if !directory.exists() {
         return true;
