@@ -1,7 +1,7 @@
 # Hand-off envelope and link commands
 
-Status: implemented v1
-Updated: 2026-08-14
+Status: implemented v1 — exercised end to end 2026-08-19
+Updated: 2026-08-19
 
 How an opportunity leaves ContractorCRM: an exported JSON envelope carries the
 context, and link commands record where the resulting quote or job lives. The
@@ -77,6 +77,29 @@ the record version, and writes a command-log row; the actor defaults to
 - `link_job(opportunityId, jobRef, expectedVersion)` — records the
   ContractorProject job created from this opportunity.
 - `unlink_job(opportunityId, expectedVersion)` — clears the job reference.
+
+## Exercised end to end
+
+The envelope file is the entire interface — neither module links against the
+other's code, and neither writes into the other's database. The flow, verified
+on 2026-08-19:
+
+1. CRM: create the contact and opportunity, move it into the `won` stage.
+2. CRM: `export_handoff_envelope` writes the schemaVersion 1 JSON file.
+3. ContractorProject: its `handoff-import` binary
+   (`--envelope <path> --database <path> [--timezone <tz>]`) validates
+   `schemaVersion` and `kind`, ignores unknown fields, creates a job named
+   from the opportunity, and prints one JSON line:
+   `{"jobId","jobName","createdAt"}`.
+4. CRM: `link_job(opportunityId, { tool: "contractorproject", externalId:
+   jobId, label: jobName }, expectedVersion)` records where the job lives.
+
+Run it with `scripts/handoff_e2e.sh` (set `CONTRACTORPROJECT_DIR` when the
+sibling checkout is not at `../contractorproject`). The script builds the
+sibling binary, exports `HANDOFF_IMPORT_BIN`, and runs
+`src-tauri/tests/handoff_e2e.rs`. That test is `#[ignore]`d and skips when the
+variable is unset, so CI never needs the sibling repository. Imports are not
+deduplicated: importing the same envelope twice creates two jobs.
 
 ## Won-stage rule
 
