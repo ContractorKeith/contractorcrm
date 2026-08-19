@@ -27,6 +27,7 @@ use serde_json::Value;
 
 const DATA_MODEL_SCHEMA: &str = include_str!("../../schemas/v1/data-model.json");
 const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
+const HANDOFF_ENVELOPE_SCHEMA: &str = include_str!("../../schemas/v1/handoff-envelope.json");
 
 fn string_array(value: &Value, field: &str) -> Vec<String> {
     value[field]
@@ -1212,5 +1213,375 @@ fn preview_context_publishes_one_arm_per_ai_backed_feature() {
                 label: "Dana Ruiz".into(),
             }],
         },
+    );
+}
+
+// Hand-off envelope contract (schemas/v1/handoff-envelope.json)
+
+/// Compare one exported object against a named manifest type. Manifest fields
+/// are required and unknown exported fields fail, so any envelope addition has
+/// to be a deliberate manifest edit.
+fn assert_envelope_type(types: &Value, type_name: &str, value: &Value, path: &str) {
+    let definition = &types[type_name];
+    assert!(
+        definition.is_object(),
+        "{path}: the manifest declares no type {type_name}"
+    );
+    assert_eq!(
+        definition["additionalProperties"], false,
+        "{type_name} must reject unknown fields"
+    );
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("{path} must be a JSON object"));
+    let mut actual_fields = object.keys().cloned().collect::<Vec<_>>();
+    actual_fields.sort();
+    let mut expected_fields = string_array(definition, "required");
+    expected_fields.sort();
+    assert_eq!(
+        actual_fields, expected_fields,
+        "{path} fields must match the {type_name} manifest exactly"
+    );
+    let properties = definition["properties"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{type_name} must declare properties"));
+    let mut described_fields = properties.keys().cloned().collect::<Vec<_>>();
+    described_fields.sort();
+    assert_eq!(
+        described_fields, expected_fields,
+        "{type_name} must describe every required field"
+    );
+    for (field, property) in properties {
+        assert_envelope_value(types, property, &object[field], &format!("{path}.{field}"));
+    }
+}
+
+/// Check one exported value against its manifest property description.
+fn assert_envelope_value(types: &Value, property: &Value, value: &Value, path: &str) {
+    let declared = property["type"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{path} needs a declared manifest type"));
+    if value.is_null() {
+        assert_eq!(
+            property["nullable"],
+            Value::Bool(true),
+            "{path} is not nullable in the manifest"
+        );
+        return;
+    }
+    match declared {
+        "string" => {
+            assert!(value.is_string(), "{path} must be a string");
+            if let Some(allowed) = property.get("enum") {
+                assert!(
+                    allowed
+                        .as_array()
+                        .expect("enum is an array")
+                        .iter()
+                        .any(|candidate| candidate == value),
+                    "{path} value {value} is outside the pinned enum"
+                );
+            }
+        }
+        "integer" => assert!(value.is_i64(), "{path} must be an integer"),
+        "boolean" => assert!(value.is_boolean(), "{path} must be a boolean"),
+        "array" => {
+            for (index, item) in value
+                .as_array()
+                .unwrap_or_else(|| panic!("{path} must be an array"))
+                .iter()
+                .enumerate()
+            {
+                assert_envelope_value(types, &property["items"], item, &format!("{path}[{index}]"));
+            }
+        }
+        type_name => assert_envelope_type(types, type_name, value, path),
+    }
+    if let Some(constant) = property.get("const") {
+        assert_eq!(value, constant, "{path} is pinned to {constant}");
+    }
+}
+
+#[test]
+fn handoff_envelope_v1_matches_the_frozen_manifest() {
+    use contractorcrm_lib::application::{
+        create_company, create_contact, create_opportunity, export_handoff_envelope, link_job,
+        link_quote, list_stages, move_opportunity_stage, ChannelInput, CompanyPatch, ContactPatch,
+        CreateCompanyRequest, CreateContactRequest, CreateOpportunityRequest, HandoffRefInput,
+        LinkJobRequest, LinkQuoteRequest, MoveOpportunityStageRequest, OpportunityPatch,
+        HANDOFF_SCHEMA_VERSION,
+    };
+    use contractorcrm_lib::domain::{Actor, StageKind};
+
+    let schema: Value =
+        serde_json::from_str(HANDOFF_ENVELOPE_SCHEMA).expect("valid hand-off envelope schema");
+    assert_eq!(schema["contract"], "contractorcrm-handoff-envelope");
+    assert_eq!(schema["envelopeVersion"], HANDOFF_SCHEMA_VERSION);
+    assert_eq!(schema["root"], "HandoffEnvelope");
+    let types = &schema["types"];
+
+    let temp = tempfile::tempdir().expect("create temporary app data");
+    let mut storage = storage::Storage::open_in_app_data(temp.path()).expect("open storage");
+
+    // A fully populated opportunity so every non-null arm of the manifest is
+    // exercised: company, contact with channels, money, refs, stage name.
+    let company = create_company(
+        &mut storage,
+        CreateCompanyRequest {
+            actor: Actor::User,
+            company: CompanyPatch {
+                name: "Ruiz Property Group".into(),
+                kind: "client".into(),
+                phone: Some("555-0142".into()),
+                email: Some("office@example.com".into()),
+                website: Some("https://example.com".into()),
+                address_line1: Some("120 Palm Ave".into()),
+                address_line2: Some("Suite 3".into()),
+                city: Some("Orlando".into()),
+                state: Some("FL".into()),
+                postal_code: Some("32801".into()),
+                service_area: Some("Central Florida".into()),
+                license_notes: Some("CGC1500000".into()),
+                notes: Some("Repeat client".into()),
+            },
+        },
+    )
+    .expect("create company");
+    let contact = create_contact(
+        &mut storage,
+        CreateContactRequest {
+            actor: Actor::User,
+            contact: ContactPatch {
+                company_id: Some(company.id.clone()),
+                first_name: Some("Dana".into()),
+                last_name: Some("Ruiz".into()),
+                display_name: Some("Dana Ruiz".into()),
+                role: Some("owner".into()),
+                kind: "client".into(),
+                preferred_contact_method: Some("phone".into()),
+                address_line1: Some("120 Palm Ave".into()),
+                address_line2: Some("Suite 3".into()),
+                city: Some("Orlando".into()),
+                state: Some("FL".into()),
+                postal_code: Some("32801".into()),
+                property_type: Some("residential".into()),
+                notes: Some("Prefers mornings".into()),
+                favorite: true,
+                channels: vec![ChannelInput {
+                    kind: "phone".into(),
+                    label: Some("mobile".into()),
+                    value: "555-0100".into(),
+                    preferred: true,
+                }],
+            },
+        },
+    )
+    .expect("create contact");
+    let opportunity = create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Backyard privacy fence".into(),
+                contact_id: Some(contact.id.clone()),
+                company_id: Some(company.id.clone()),
+                value_minor: 250_000,
+                currency_code: "USD".into(),
+                probability_percent: Some(80),
+                expected_close_date: Some("2026-09-01".into()),
+                source: Some("referral".into()),
+                source_label: Some("Neighbor on Palm Ave".into()),
+                notes: Some("Six-foot board on board".into()),
+            },
+        },
+    )
+    .expect("create opportunity");
+    let won_stage = list_stages(&storage)
+        .expect("list stages")
+        .into_iter()
+        .find(|stage| stage.kind == StageKind::Won)
+        .expect("won stage seeded");
+    let opportunity = move_opportunity_stage(
+        &mut storage,
+        MoveOpportunityStageRequest {
+            actor: Actor::User,
+            opportunity_id: opportunity.id.clone(),
+            to_stage_id: won_stage.id,
+            lost_reason_id: None,
+            expected_version: opportunity.version,
+        },
+    )
+    .expect("move to won");
+    let opportunity = link_quote(
+        &mut storage,
+        LinkQuoteRequest {
+            actor: Actor::User,
+            opportunity_id: opportunity.id.clone(),
+            expected_version: opportunity.version,
+            quote_ref: HandoffRefInput {
+                tool: "quoter".into(),
+                external_id: "123".into(),
+                label: Some("Q-123".into()),
+            },
+        },
+    )
+    .expect("link quote");
+    let opportunity = link_job(
+        &mut storage,
+        LinkJobRequest {
+            actor: Actor::User,
+            opportunity_id: opportunity.id.clone(),
+            expected_version: opportunity.version,
+            job_ref: HandoffRefInput {
+                tool: "contractorproject".into(),
+                external_id: "job-1".into(),
+                label: Some("Backyard privacy fence".into()),
+            },
+        },
+    )
+    .expect("link job");
+
+    let destination = temp.path().join("full-handoff.json");
+    let report = export_handoff_envelope(
+        &mut storage,
+        &opportunity.id,
+        destination.to_str().expect("utf-8 path"),
+        false,
+    )
+    .expect("export the populated envelope");
+    assert_eq!(report.schema_version, HANDOFF_SCHEMA_VERSION);
+    let populated: Value =
+        serde_json::from_str(&std::fs::read_to_string(&destination).expect("read envelope"))
+            .expect("valid envelope JSON");
+    assert_envelope_type(types, "HandoffEnvelope", &populated, "envelope");
+    // The populated export really does fill the optional arms.
+    assert_eq!(populated["opportunity"]["stageName"], "Won");
+    assert_eq!(populated["opportunity"]["quoteRef"]["tool"], "quoter");
+    assert_eq!(
+        populated["opportunity"]["jobRef"]["tool"],
+        "contractorproject"
+    );
+    assert!(populated["contact"]["channels"][0].is_object());
+    assert_eq!(populated["company"]["name"], "Ruiz Property Group");
+
+    // A bare opportunity covers the null arms. Every opportunity needs a
+    // contact or a company, so the contact-only export nulls the company and
+    // the company-only export nulls the contact.
+    let bare_contact = create_contact(
+        &mut storage,
+        CreateContactRequest {
+            actor: Actor::User,
+            contact: ContactPatch {
+                display_name: Some("Walk-in".into()),
+                kind: "lead".into(),
+                ..ContactPatch::default()
+            },
+        },
+    )
+    .expect("create bare contact");
+    let minimal = create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Gate repair".into(),
+                contact_id: Some(bare_contact.id.clone()),
+                company_id: None,
+                value_minor: 0,
+                currency_code: "USD".into(),
+                probability_percent: None,
+                expected_close_date: None,
+                source: None,
+                source_label: None,
+                notes: None,
+            },
+        },
+    )
+    .expect("create minimal opportunity");
+    let minimal_destination = temp.path().join("minimal-handoff.json");
+    export_handoff_envelope(
+        &mut storage,
+        &minimal.id,
+        minimal_destination.to_str().expect("utf-8 path"),
+        false,
+    )
+    .expect("export the minimal envelope");
+    let bare: Value = serde_json::from_str(
+        &std::fs::read_to_string(&minimal_destination).expect("read envelope"),
+    )
+    .expect("valid envelope JSON");
+    assert_envelope_type(types, "HandoffEnvelope", &bare, "envelope");
+    assert!(bare["company"].is_null());
+    assert!(bare["opportunity"]["quoteRef"].is_null());
+    assert!(bare["opportunity"]["jobRef"].is_null());
+    assert!(bare["opportunity"]["source"].is_null());
+    assert!(bare["opportunity"]["expectedCloseDate"].is_null());
+
+    // Company-only work orders leave the contact null.
+    let company_only = create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Warehouse chain link".into(),
+                contact_id: None,
+                company_id: Some(company.id.clone()),
+                value_minor: 0,
+                currency_code: "USD".into(),
+                probability_percent: None,
+                expected_close_date: None,
+                source: None,
+                source_label: None,
+                notes: None,
+            },
+        },
+    )
+    .expect("create company-only opportunity");
+    let company_only_destination = temp.path().join("company-only-handoff.json");
+    export_handoff_envelope(
+        &mut storage,
+        &company_only.id,
+        company_only_destination.to_str().expect("utf-8 path"),
+        false,
+    )
+    .expect("export the company-only envelope");
+    let without_contact: Value = serde_json::from_str(
+        &std::fs::read_to_string(&company_only_destination).expect("read envelope"),
+    )
+    .expect("valid envelope JSON");
+    assert_envelope_type(types, "HandoffEnvelope", &without_contact, "envelope");
+    assert!(without_contact["contact"].is_null());
+
+    // An undocumented field is a contract change, not a free addition.
+    let mut with_extra = populated.clone();
+    with_extra["opportunity"]["timezone"] = Value::String("America/New_York".into());
+    assert!(
+        std::panic::catch_unwind(|| assert_envelope_type(
+            types,
+            "HandoffEnvelope",
+            &with_extra,
+            "envelope"
+        ))
+        .is_err(),
+        "an unpinned envelope field must fail the contract test"
+    );
+    // So is dropping a pinned one.
+    let mut missing_field = populated.clone();
+    missing_field["opportunity"]
+        .as_object_mut()
+        .expect("opportunity object")
+        .remove("stageName");
+    assert!(
+        std::panic::catch_unwind(|| assert_envelope_type(
+            types,
+            "HandoffEnvelope",
+            &missing_field,
+            "envelope"
+        ))
+        .is_err(),
+        "a removed envelope field must fail the contract test"
     );
 }

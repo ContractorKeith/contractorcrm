@@ -55,14 +55,46 @@ Field notes:
   (contact includes its channels), or `null` when the opportunity has none.
 - `quoteRef` / `jobRef` are the stored hand-off references, or `null`.
 
+The envelope is frozen in `schemas/v1/handoff-envelope.json` — a manifest
+pinning every field the exporter writes, including the nullable ones. The
+contract test `handoff_envelope_v1_matches_the_frozen_manifest` in
+`src-tauri/tests/schema_contracts.rs` exports real envelopes from a seeded
+database and compares them field for field: a field the manifest does not list
+fails the test, and so does a manifest field the export stops writing. Adding
+to the envelope is therefore always a deliberate edit of both.
+
 ## Versioning rule
 
 - Changes within a major `schemaVersion` are additive only — consumers must
   ignore unknown fields.
 - A breaking change (removing, renaming, or retyping a field) bumps
-  `schemaVersion`.
+  `schemaVersion` and ships with a migration note in this document.
 - Envelope versions are independent of the MCP API version and the archive
   format version (see docs/LOCAL_API.md).
+
+## Field ownership after hand-off
+
+The envelope is a snapshot, not a live link. Once ContractorProject creates the
+job, the two modules own different things and neither writes into the other:
+
+| Field | Owner after the job exists | Notes |
+| --- | --- | --- |
+| Opportunity name, value, stage, source, notes | ContractorCRM | The sales record stays the CRM's. Renaming it here does not rename the job. |
+| Contact and company records | ContractorCRM | The job carries a copy of what the envelope said at export time. |
+| `quoteRef`, `jobRef` on the opportunity | ContractorCRM | Bookmarks: tool, external id, label, linked timestamp. |
+| Job name, status, schedule, crew, costs | ContractorProject | From the moment the job is created, everything about running the work is the job's. |
+| Time zone, calendars, working days | ContractorProject | The envelope never carries them; the importer takes its own `--timezone`. |
+
+Practical rules:
+
+- Nothing syncs back automatically. Editing the opportunity does not touch the
+  job, and finishing the job does not move the opportunity.
+- Re-exporting and re-importing an envelope creates a second job — it is not an
+  update. Fix mistakes in whichever module owns the field.
+- If the job's name changes in ContractorProject and you want the CRM label to
+  match, re-run `link_job` with the new label. That is a CRM-side edit.
+- Breaking envelope changes bump `schemaVersion`; consumers pinned to v1 keep
+  working until they opt in.
 
 ## Link commands
 

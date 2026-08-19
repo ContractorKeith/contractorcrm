@@ -1,0 +1,137 @@
+{
+  "contract": "contractorcrm-handoff-envelope",
+  "envelopeVersion": 1,
+  "kind": "opportunity_handoff",
+  "producer": "export_handoff_envelope",
+  "root": "HandoffEnvelope",
+  "types": {
+    "HandoffEnvelope": {
+      "additionalProperties": false,
+      "required": ["schemaVersion","kind","exportedAt","product","opportunity","contact","company"],
+      "properties": {
+        "schemaVersion": {"type":"integer","const":1},
+        "kind": {"type":"string","const":"opportunity_handoff"},
+        "exportedAt": {"type":"string"},
+        "product": {"type":"ProductInfo"},
+        "opportunity": {"type":"EnvelopeOpportunity"},
+        "contact": {"type":"Contact","nullable":true},
+        "company": {"type":"Company","nullable":true}
+      }
+    },
+    "ProductInfo": {
+      "additionalProperties": false,
+      "required": ["name","version"],
+      "properties": {
+        "name": {"type":"string","const":"ContractorCRM"},
+        "version": {"type":"string"}
+      }
+    },
+    "EnvelopeOpportunity": {
+      "additionalProperties": false,
+      "required": ["id","name","contactId","companyId","stageId","stageName","value","probabilityPercent","expectedCloseDate","source","sourceLabel","lostReasonId","notes","quoteRef","jobRef","archivedAt","createdAt","updatedAt","version"],
+      "properties": {
+        "id": {"type":"string"},
+        "name": {"type":"string"},
+        "contactId": {"type":"string","nullable":true},
+        "companyId": {"type":"string","nullable":true},
+        "stageId": {"type":"string"},
+        "stageName": {"type":"string"},
+        "value": {"type":"Money"},
+        "probabilityPercent": {"type":"integer","nullable":true},
+        "expectedCloseDate": {"type":"string","nullable":true},
+        "source": {"type":"string","nullable":true,"enum":["referral","repeat_client","website","sign","other"]},
+        "sourceLabel": {"type":"string","nullable":true},
+        "lostReasonId": {"type":"string","nullable":true},
+        "notes": {"type":"string","nullable":true},
+        "quoteRef": {"type":"HandoffRef","nullable":true},
+        "jobRef": {"type":"HandoffRef","nullable":true},
+        "archivedAt": {"type":"string","nullable":true},
+        "createdAt": {"type":"string"},
+        "updatedAt": {"type":"string"},
+        "version": {"type":"integer"}
+      }
+    },
+    "Money": {
+      "additionalProperties": false,
+      "required": ["valueMinor","currencyCode"],
+      "properties": {
+        "valueMinor": {"type":"integer"},
+        "currencyCode": {"type":"string"}
+      }
+    },
+    "HandoffRef": {
+      "additionalProperties": false,
+      "required": ["tool","externalId","label","linkedAt"],
+      "properties": {
+        "tool": {"type":"string"},
+        "externalId": {"type":"string"},
+        "label": {"type":"string","nullable":true},
+        "linkedAt": {"type":"string"}
+      }
+    },
+    "Contact": {
+      "additionalProperties": false,
+      "required": ["id","companyId","firstName","lastName","displayName","role","kind","preferredContactMethod","addressLine1","addressLine2","city","state","postalCode","propertyType","notes","favorite","archivedAt","createdAt","updatedAt","version","channels"],
+      "properties": {
+        "id": {"type":"string"},
+        "companyId": {"type":"string","nullable":true},
+        "firstName": {"type":"string","nullable":true},
+        "lastName": {"type":"string","nullable":true},
+        "displayName": {"type":"string"},
+        "role": {"type":"string","nullable":true,"enum":["owner","estimator","site_contact","office","other"]},
+        "kind": {"type":"string","enum":["client","lead","sub","vendor","supplier","other"]},
+        "preferredContactMethod": {"type":"string","nullable":true},
+        "addressLine1": {"type":"string","nullable":true},
+        "addressLine2": {"type":"string","nullable":true},
+        "city": {"type":"string","nullable":true},
+        "state": {"type":"string","nullable":true},
+        "postalCode": {"type":"string","nullable":true},
+        "propertyType": {"type":"string","nullable":true},
+        "notes": {"type":"string","nullable":true},
+        "favorite": {"type":"boolean"},
+        "archivedAt": {"type":"string","nullable":true},
+        "createdAt": {"type":"string"},
+        "updatedAt": {"type":"string"},
+        "version": {"type":"integer"},
+        "channels": {"type":"array","items":{"type":"ContactChannel"}}
+      }
+    },
+    "ContactChannel": {
+      "additionalProperties": false,
+      "required": ["id","contactId","kind","label","value","preferred","sortKey"],
+      "properties": {
+        "id": {"type":"string"},
+        "contactId": {"type":"string"},
+        "kind": {"type":"string","enum":["phone","email"]},
+        "label": {"type":"string","nullable":true},
+        "value": {"type":"string"},
+        "preferred": {"type":"boolean"},
+        "sortKey": {"type":"integer"}
+      }
+    },
+    "Company": {
+      "additionalProperties": false,
+      "required": ["id","name","kind","phone","email","website","addressLine1","addressLine2","city","state","postalCode","serviceArea","licenseNotes","notes","archivedAt","createdAt","updatedAt","version"],
+      "properties": {
+        "id": {"type":"string"},
+        "name": {"type":"string"},
+        "kind": {"type":"string","enum":["client","lead","sub","vendor","supplier","other"]},
+        "phone": {"type":"string","nullable":true},
+        "email": {"type":"string","nullable":true},
+        "website": {"type":"string","nullable":true},
+        "addressLine1": {"type":"string","nullable":true},
+        "addressLine2": {"type":"string","nullable":true},
+        "city": {"type":"string","nullable":true},
+        "state": {"type":"string","nullable":true},
+        "postalCode": {"type":"string","nullable":true},
+        "serviceArea": {"type":"string","nullable":true},
+        "licenseNotes": {"type":"string","nullable":true},
+        "notes": {"type":"string","nullable":true},
+        "archivedAt": {"type":"string","nullable":true},
+        "createdAt": {"type":"string"},
+        "updatedAt": {"type":"string"},
+        "version": {"type":"integer"}
+      }
+    }
+  }
+}
