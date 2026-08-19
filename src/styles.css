@@ -649,6 +649,13 @@ h1 {
   overflow: auto;
 }
 
+/* "Verifying…" / "Replacing…" line shown while the core is working. */
+.archive-import__progress {
+  margin: 0 0 var(--space-4);
+  color: var(--color-neutral-500);
+  font-size: var(--font-size-label);
+}
+
 .archive-import__manifest {
   display: grid;
   grid-template-columns: auto 1fr;

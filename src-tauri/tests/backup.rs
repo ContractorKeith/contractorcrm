@@ -133,6 +133,51 @@ fn backup_refuses_to_overwrite_without_the_flag() {
     application::backup_database(&mut storage, backup_path, true).expect("overwrite backup");
 }
 
+/// A backup writes a database copy, so the destination looks legitimate — but
+/// the live database and its sidecars are never it, overwrite flag or not.
+#[test]
+fn backup_refuses_the_live_database_and_its_sidecars_as_the_destination() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let database = temp.path().join("crm.sqlite3");
+    let mut storage = Storage::open(&database).expect("open");
+    let (company, _) = seed_records(&mut storage);
+    let before = std::fs::read(&database).expect("read database");
+    std::fs::create_dir(temp.path().join("sub")).expect("sub dir");
+
+    for destination in [
+        database.clone(),
+        temp.path().join("crm.sqlite3-wal"),
+        temp.path().join("crm.sqlite3-shm"),
+        temp.path()
+            .join("crm.sqlite3.pre-restore-20260819T101010000Z.bak"),
+        // Same file reached the long way round.
+        temp.path().join("sub/../crm.sqlite3"),
+    ] {
+        for overwrite in [false, true] {
+            let error = application::backup_database(
+                &mut storage,
+                destination.to_str().unwrap(),
+                overwrite,
+            )
+            .expect_err("backup onto the live database must fail");
+            assert_eq!(error.kind(), "validation_failed", "{destination:?}");
+            assert!(
+                error.to_string().contains("live database"),
+                "{destination:?}: {error}"
+            );
+        }
+    }
+
+    // Nothing was written and the data is still readable.
+    assert_eq!(std::fs::read(&database).expect("read database"), before);
+    assert_eq!(
+        application::get_company(&storage, &company.id)
+            .expect("company survives")
+            .name,
+        company.name
+    );
+}
+
 #[test]
 fn restore_rejects_a_corrupted_file_and_leaves_the_live_database_untouched() {
     let temp = tempfile::tempdir().expect("temp dir");

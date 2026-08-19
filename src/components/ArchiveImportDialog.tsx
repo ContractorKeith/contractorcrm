@@ -168,6 +168,13 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
 
   const blocked = preview !== null && preview.issues.length > 0;
   const canImport = preview !== null && !blocked && report === null && !busy;
+  // Verifying a large archive takes seconds and replacing the database takes
+  // longer; say which one is running so the dialog never looks frozen.
+  const progress = importing
+    ? "Replacing your data — don't close this window…"
+    : busy
+      ? "Verifying archive…"
+      : null;
 
   return createPortal(
     <div className="global-search-backdrop">
@@ -176,11 +183,18 @@ export function ArchiveImportDialog({ client, path, onClose }: ArchiveImportDial
         role="dialog"
         aria-modal="true"
         aria-labelledby="archive-import-title"
+        aria-busy={busy}
         className="saved-views__dialog archive-import"
         onKeyDown={trapFocus}
       >
         <h2 id="archive-import-title">Import portable archive</h2>
         <p className="csv-import__path">{path}</p>
+
+        {progress ? (
+          <p role="status" aria-live="polite" className="archive-import__progress">
+            {progress}
+          </p>
+        ) : null}
 
         {error ? (
           <p role="alert" className="form-error">

@@ -306,6 +306,47 @@ fn envelope_export_refuses_an_existing_destination_without_overwrite() {
         .expect("export with overwrite");
 }
 
+/// Overwriting the live database with a JSON envelope would destroy the CRM,
+/// so the destination is refused however the caller spells it.
+#[test]
+fn envelope_export_refuses_the_live_database_as_a_destination() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Homeowner");
+    let opportunity = make_opportunity(&mut storage, "Backyard privacy fence", &contact.id);
+    let database = storage.database_path().to_path_buf();
+    let file_name = database
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("database file name")
+        .to_owned();
+    let before = std::fs::read(&database).expect("read database");
+
+    for destination in [
+        database.clone(),
+        database.with_file_name(format!("{file_name}-wal")),
+        database.with_file_name(format!("{file_name}-shm")),
+        database.with_file_name(format!("{file_name}.pre-import-20260819T101010000Z.bak")),
+    ] {
+        for overwrite in [false, true] {
+            let error = export_handoff_envelope(
+                &mut storage,
+                &opportunity.id,
+                destination.to_str().expect("utf-8 path"),
+                overwrite,
+            )
+            .expect_err("export onto the live database must fail");
+            assert_eq!(error.kind(), "validation_failed", "{destination:?}");
+            assert!(
+                error.to_string().contains("live database"),
+                "{destination:?}: {error}"
+            );
+        }
+    }
+
+    assert_eq!(std::fs::read(&database).expect("read database"), before);
+}
+
 // ---------------------------------------------------------------------------
 // Migration 003
 // ---------------------------------------------------------------------------

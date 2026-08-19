@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use contractorcrm_lib::archive::{export_archive, import_archive, preview_archive_import};
+use contractorcrm_lib::archive::{
+    export_archive, import_archive, preview_archive_import, MAX_ENTRY_BYTES,
+};
 use contractorcrm_lib::attachments::AttachmentStore;
 use contractorcrm_lib::storage::Storage;
 use rusqlite::types::Value;
@@ -875,8 +877,11 @@ fn constraint_violations_are_caught_by_the_preview_dry_run() {
     }
 }
 
+/// The refusal happens at the cap: the reader spends at most `MAX_ENTRY_BYTES`
+/// on the entry (it does buffer that much) and never expands the full bomb,
+/// the archive is rejected, and the live database is untouched.
 #[test]
-fn an_oversized_entry_is_refused_without_being_buffered() {
+fn an_oversized_entry_is_refused_at_the_cap_and_never_expanded_whole() {
     let (temp, path, _source) = exported();
     let mut entries = read_entries(&path);
     // Highly compressible, so the archive on disk stays tiny — the classic
@@ -890,10 +895,20 @@ fn an_oversized_entry_is_refused_without_being_buffered() {
     );
 
     let mut target = storage(temp.path(), "target");
+    let before = dump(&target);
     let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    let refusal = preview
+        .issues
+        .iter()
+        .find(|issue| issue.code == "entry_too_large")
+        .unwrap_or_else(|| panic!("{preview:?}"));
+    // The message names the per-entry cap, which is also the number of bytes
+    // the reader was willing to spend before giving up on the 257 MiB entry.
     assert!(
-        issue_codes(&preview).contains(&"entry_too_large"),
-        "{preview:?}"
+        refusal
+            .message
+            .contains(&format!("{MAX_ENTRY_BYTES} byte limit")),
+        "{refusal:?}"
     );
     let error = import_archive(
         &mut target,
@@ -902,6 +917,54 @@ fn an_oversized_entry_is_refused_without_being_buffered() {
     )
     .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before);
+}
+
+/// The `csv/` copies are hashed as they stream past instead of being retained,
+/// so a tampered CSV still fails its manifest checksum.
+#[test]
+fn a_tampered_csv_copy_still_fails_its_streamed_checksum() {
+    let (temp, path, _source) = exported();
+    // Rewritten in place, with the manifest left alone — re-signing would
+    // hide exactly what this test is checking.
+    let mut entries = read_entries(&path);
+    entries.insert(
+        "csv/contacts.csv".into(),
+        b"name,email\nmallory,evil\n".to_vec(),
+    );
+    let tampered = temp.path().join("csv.zip");
+    write_entries(&tampered, &entries);
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    let codes = issue_codes(&preview);
+    assert!(codes.contains(&"checksum_mismatch"), "{preview:?}");
+    assert!(codes.contains(&"size_mismatch"), "{preview:?}");
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+}
+
+/// An extra `csv/` entry is hash-only, so the unlisted-file check has to work
+/// from the digest index rather than the retained bytes.
+#[test]
+fn an_unlisted_csv_copy_is_still_reported() {
+    let (temp, path, _source) = exported();
+    let mut entries = read_entries(&path);
+    entries.insert("csv/notes.csv".into(), b"smuggled\n".to_vec());
+    let tampered = temp.path().join("extra-csv.zip");
+    write_entries(&tampered, &entries);
+
+    let target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"unlisted_file"),
+        "{preview:?}"
+    );
 }
 
 #[test]
@@ -1121,6 +1184,44 @@ fn another_products_archive_is_refused_with_one_clear_issue() {
     )
     .unwrap_err();
     assert_eq!(error.kind(), "validation_failed");
+    // The refusal names the one product name every export stamps, not the
+    // lowercase crate name.
+    assert!(
+        preview.issues[0].message.contains("not ContractorCRM"),
+        "{preview:?}"
+    );
+}
+
+/// Exports stamp "ContractorCRM"; the product check is case-insensitive so
+/// archives from builds that wrote the lowercase crate name still import.
+#[test]
+fn the_product_name_is_one_source_of_truth_and_older_casings_still_import() {
+    let (temp, path, source) = exported();
+    let expected = dump(&source);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&read_entries(&path)["manifest.json"]).unwrap();
+    assert_eq!(manifest["product"]["name"], json!("ContractorCRM"));
+
+    let legacy = repack(temp.path(), &path, "legacy-name.zip", |entries| {
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&entries["manifest.json"]).unwrap();
+        manifest["product"]["name"] = json!("contractorcrm");
+        entries.insert(
+            "manifest.json".into(),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        );
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, legacy.to_str().unwrap()).unwrap();
+    assert!(preview.issues.is_empty(), "{preview:?}");
+    import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        legacy.to_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(dump(&target), expected);
 }
 
 #[test]

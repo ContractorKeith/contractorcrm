@@ -144,6 +144,51 @@ describe("ArchiveImportDialog", () => {
     expect(onClose).toHaveBeenCalledWith(true);
   });
 
+  it("announces verifying and importing progress and marks the dialog busy", async () => {
+    const user = userEvent.setup();
+    let finishPreview = (_preview: ArchiveImportPreview) => {};
+    let finishImport = (_report: ArchiveImportReport) => {};
+    const client = stubClient({
+      previewArchiveImport: vi.fn().mockReturnValue(
+        new Promise<ArchiveImportPreview>((resolve) => {
+          finishPreview = resolve;
+        }),
+      ),
+      importArchive: vi.fn().mockReturnValue(
+        new Promise<ArchiveImportReport>((resolve) => {
+          finishImport = resolve;
+        }),
+      ),
+    });
+
+    render(<ArchiveImportDialog client={client} path="/tmp/crm.zip" onClose={vi.fn()} />);
+
+    // Verifying: busy, announced, and the destructive action is unavailable.
+    const dialog = screen.getByRole("dialog", { name: "Import portable archive" });
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Verifying archive…");
+    expect(screen.getByRole("button", { name: "Replace all data and import" })).toBeDisabled();
+
+    finishPreview(preview());
+    expect(
+      await screen.findByRole("button", { name: "Replace all data and import" }),
+    ).toBeEnabled();
+    expect(dialog).toHaveAttribute("aria-busy", "false");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    // Importing: busy again, with its own message, and both buttons inert.
+    await user.click(screen.getByRole("button", { name: "Replace all data and import" }));
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(/Replacing your data/);
+    expect(screen.getByRole("button", { name: "Replace all data and import" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+    finishImport({ recordCounts: { contacts: 12 }, safetyBackupPath: "/backups/pre.sqlite3" });
+    expect(await screen.findByText("Archive imported — 12 records restored.")).toBeVisible();
+    expect(dialog).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByRole("status")).toHaveTextContent("Archive imported — 12 records restored.");
+  });
+
   it("surfaces the core's message when the archive cannot be read at all", async () => {
     const client = stubClient({
       previewArchiveImport: vi.fn().mockRejectedValue({

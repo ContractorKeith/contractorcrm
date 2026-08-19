@@ -53,6 +53,12 @@ use tauri::{Manager, State};
 /// UI and future local-agent adapters.
 pub const LOCAL_API_VERSION: u64 = 1;
 
+/// The product name this build writes into every file it exports — health
+/// reports, hand-off envelopes, and archive manifests — and the name an
+/// archive must carry to be recognized as ours on import. Single source of
+/// truth: `CARGO_PKG_NAME` is the lowercase crate name, not the product name.
+pub const PRODUCT_NAME: &str = "ContractorCRM";
+
 macro_rules! with_local_api_v1_commands {
     ($callback:ident) => {
         $callback! {
@@ -182,7 +188,7 @@ pub struct HealthReport {
 /// Pure health logic, kept separate from the Tauri command so it is testable.
 fn health_report() -> HealthReport {
     HealthReport {
-        app: "ContractorCRM",
+        app: PRODUCT_NAME,
         version: env!("CARGO_PKG_VERSION"),
         status: "ok",
     }

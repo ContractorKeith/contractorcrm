@@ -3042,6 +3042,7 @@ pub fn export_handoff_envelope(
     overwrite: bool,
 ) -> Result<EnvelopeExportReport, ApplicationError> {
     let destination = required_text("destinationPath", destination_path.into(), 4096)?;
+    refuse_database_destination(storage, "destinationPath", &destination)?;
     let detail = get_opportunity(storage, opportunity_id)?;
     let opportunity = detail.opportunity;
 
@@ -3066,7 +3067,7 @@ pub fn export_handoff_envelope(
         kind: "opportunity_handoff".into(),
         exported_at: now_utc(),
         product: ProductInfo {
-            name: "ContractorCRM".into(),
+            name: crate::PRODUCT_NAME.into(),
             version: env!("CARGO_PKG_VERSION").into(),
         },
         opportunity: EnvelopeOpportunity {
@@ -3144,6 +3145,7 @@ pub fn backup_database(
     overwrite: bool,
 ) -> Result<DatabaseInfo, ApplicationError> {
     let destination = required_text("destinationPath", destination_path.into(), 4096)?;
+    refuse_database_destination(storage, "destinationPath", &destination)?;
     storage.backup_to(&destination, overwrite)?;
 
     let transaction = immediate(storage)?;
@@ -7007,14 +7009,8 @@ pub(crate) fn check_export_destination(
     overwrite: bool,
 ) -> Result<String, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
+    refuse_database_destination(storage, "path", &path)?;
     let destination = std::path::Path::new(&path);
-    if is_database_file(storage.database_path(), destination) {
-        return Err(ApplicationError::ValidationFailed {
-            code: "destination_is_database",
-            field: "path".into(),
-            message: format!("{path} belongs to the live database; pick another destination"),
-        });
-    }
     if destination.exists() && !overwrite {
         return Err(ApplicationError::ValidationFailed {
             code: "destination_exists",
@@ -7023,6 +7019,26 @@ pub(crate) fn check_export_destination(
         });
     }
     Ok(path)
+}
+
+/// Refuse a destination that is the live database or one of its sidecars.
+/// Shared by every export and by `backup_database`: a backup legitimately
+/// writes a database *copy*, but writing it onto the live file (or its
+/// WAL/SHM/.bak siblings) destroys the data it is meant to preserve.
+/// `field` names the request field so each caller reports its own contract.
+pub(crate) fn refuse_database_destination(
+    storage: &Storage,
+    field: &'static str,
+    path: &str,
+) -> Result<(), ApplicationError> {
+    if is_database_file(storage.database_path(), std::path::Path::new(path)) {
+        return Err(ApplicationError::ValidationFailed {
+            code: "destination_is_database",
+            field: field.into(),
+            message: format!("{path} belongs to the live database; pick another destination"),
+        });
+    }
+    Ok(())
 }
 
 /// True when `destination` is the database file, one of its WAL/SHM sidecars,

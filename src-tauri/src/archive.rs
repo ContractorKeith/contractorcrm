@@ -346,7 +346,7 @@ pub fn export_archive(
     let manifest = ArchiveManifest {
         schema_version: ARCHIVE_SCHEMA_VERSION,
         product: ProductInfo {
-            name: "ContractorCRM".into(),
+            name: crate::PRODUCT_NAME.into(),
             version: env!("CARGO_PKG_VERSION").into(),
         },
         exported_at: now_utc(),
@@ -472,8 +472,17 @@ fn value_to_json(value: ValueRef<'_>) -> rusqlite::Result<serde_json::Value> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex(Sha256::digest(bytes))
+}
+
+/// Lowercase hex of a finished digest, so one-shot and streamed hashes render
+/// the same way.
+fn hex(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn zip_write_error(error: zip::result::ZipError) -> ApplicationError {
@@ -611,18 +620,22 @@ fn verify_archive(
     };
 
     // A foreign product's archive is one clear problem, not sixteen missing
-    // table files, so it short-circuits the rest of verification.
+    // table files, so it short-circuits the rest of verification. The match is
+    // case-insensitive against the one product name every export writes, so
+    // archives written by older builds (which stamped the lowercase crate
+    // name) still import.
     if !verified
         .manifest
         .product
         .name
-        .eq_ignore_ascii_case(env!("CARGO_PKG_NAME"))
+        .eq_ignore_ascii_case(crate::PRODUCT_NAME)
     {
         issues.push(
             "wrong_product",
             format!(
-                "archive was written by \"{}\", not ContractorCRM",
-                verified.manifest.product.name
+                "archive was written by \"{}\", not {}",
+                verified.manifest.product.name,
+                crate::PRODUCT_NAME
             ),
         );
         verified.issues = issues.finish();
@@ -674,15 +687,53 @@ fn verify_archive(
     Ok(verified)
 }
 
-/// Read every acceptable entry into memory under the size caps. Files under
-/// `assets/` are attachment bytes: they are read like any other entry, so the
-/// manifest checksum and the owning attachments row both get to verify them.
+/// Size and checksum of one accepted entry, measured as it streamed past.
+struct EntryDigest {
+    bytes: u64,
+    sha256: String,
+}
+
+/// Every accepted entry, split by whether its bytes are still needed.
+struct ArchiveEntries {
+    /// Bytes of the entries verification actually reads: `manifest.json`,
+    /// `data/**`, and `assets/**`.
+    contents: BTreeMap<String, Vec<u8>>,
+    /// Size and checksum of every accepted entry, retained or not.
+    digests: BTreeMap<String, EntryDigest>,
+}
+
+impl ArchiveEntries {
+    fn get(&self, name: &str) -> Option<&Vec<u8>> {
+        self.contents.get(name)
+    }
+
+    /// Names of every accepted entry, in archive-path order.
+    fn names(&self) -> impl Iterator<Item = &String> {
+        self.digests.keys()
+    }
+}
+
+/// True for entries nothing downstream reads. The `csv/**` files are
+/// human-readable convenience copies that import ignores, so they are hashed
+/// as they stream past and never buffered — two cap-sized CSV files would
+/// otherwise add 256 MiB apiece to a hostile archive's peak memory.
+fn hash_only(name: &str) -> bool {
+    name.starts_with("csv/")
+}
+
+/// Read every acceptable entry under the size caps, checksumming as it goes.
+/// Files under `assets/` are attachment bytes: they are retained like any
+/// other data file, so the manifest checksum and the owning attachments row
+/// both get to verify them.
 fn read_entries<R: Read + std::io::Seek>(
     zip: &mut zip::ZipArchive<R>,
     path: &str,
     issues: &mut IssueLog,
-) -> Result<BTreeMap<String, Vec<u8>>, ApplicationError> {
-    let mut entries: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+) -> Result<ArchiveEntries, ApplicationError> {
+    let mut entries = ArchiveEntries {
+        contents: BTreeMap::new(),
+        digests: BTreeMap::new(),
+    };
     let mut total_bytes: u64 = 0;
     for index in 0..zip.len() {
         let mut entry = zip
@@ -709,23 +760,51 @@ fn read_entries<R: Read + std::io::Seek>(
             break;
         }
         let cap = MAX_ENTRY_BYTES.min(remaining);
+        let retain = !hash_only(&name);
         let mut content = Vec::new();
-        let read = entry
-            .by_ref()
-            .take(cap + 1)
-            .read_to_end(&mut content)
-            .map_err(|error| unreadable(path, error.to_string()))? as u64;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut limited = entry.by_ref().take(cap + 1);
+        let mut read: u64 = 0;
+        loop {
+            let filled = limited
+                .read(&mut buffer)
+                .map_err(|error| unreadable(path, error.to_string()))?;
+            if filled == 0 {
+                break;
+            }
+            read += filled as u64;
+            hasher.update(&buffer[..filled]);
+            // Past the cap the entry is already refused, so stop growing the
+            // buffer — only the byte count still matters.
+            if retain && read <= cap {
+                content.extend_from_slice(&buffer[..filled]);
+            }
+        }
         total_bytes += read;
         if read > cap {
             // Drop the partial read; the entry is refused, not truncated.
             drop(content);
+            // Quote the cap that actually bit: late in a big archive the
+            // remaining archive budget is smaller than the per-entry limit,
+            // and blaming MAX_ENTRY_BYTES would send the user hunting for an
+            // entry that is not there.
             issues.push(
                 "entry_too_large",
-                format!("entry \"{name}\" is larger than the {MAX_ENTRY_BYTES} byte limit"),
+                format!("entry \"{name}\" is larger than the {cap} byte limit"),
             );
             continue;
         }
-        entries.insert(name, content);
+        entries.digests.insert(
+            name.clone(),
+            EntryDigest {
+                bytes: read,
+                sha256: hex(hasher.finalize()),
+            },
+        );
+        if retain {
+            entries.contents.insert(name, content);
+        }
         if issues.is_full() {
             break;
         }
@@ -841,15 +920,11 @@ fn verify_manifest_versions(manifest: &ArchiveManifest, issues: &mut IssueLog) {
 
 /// Every listed file must be present and match its checksum, and every file
 /// present must be listed — nothing enters the import unchecksummed.
-fn verify_checksums(
-    manifest: &ArchiveManifest,
-    entries: &BTreeMap<String, Vec<u8>>,
-    issues: &mut IssueLog,
-) {
+fn verify_checksums(manifest: &ArchiveManifest, entries: &ArchiveEntries, issues: &mut IssueLog) {
     let mut listed = BTreeSet::new();
     for file in &manifest.files {
         listed.insert(file.path.clone());
-        let Some(content) = entries.get(&file.path) else {
+        let Some(digest) = entries.digests.get(&file.path) else {
             issues.push(
                 "missing_file",
                 format!(
@@ -859,18 +934,16 @@ fn verify_checksums(
             );
             continue;
         };
-        if content.len() as u64 != file.bytes {
+        if digest.bytes != file.bytes {
             issues.push(
                 "size_mismatch",
                 format!(
                     "\"{}\" is {} bytes but the manifest says {}",
-                    file.path,
-                    content.len(),
-                    file.bytes
+                    file.path, digest.bytes, file.bytes
                 ),
             );
         }
-        if sha256_hex(content) != file.sha256 {
+        if digest.sha256 != file.sha256 {
             issues.push(
                 "checksum_mismatch",
                 format!("\"{}\" does not match its manifest checksum", file.path),
@@ -880,7 +953,7 @@ fn verify_checksums(
             return;
         }
     }
-    for name in entries.keys() {
+    for name in entries.names() {
         if name == "manifest.json" || listed.contains(name) {
             continue;
         }
@@ -1216,7 +1289,7 @@ fn table_predates_archive(table: &str, archive_migration_version: i64) -> bool {
 fn verify_assets(
     connection: &Connection,
     tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
-    entries: &BTreeMap<String, Vec<u8>>,
+    entries: &ArchiveEntries,
     issues: &mut IssueLog,
 ) -> Result<BTreeMap<String, Vec<u8>>, ApplicationError> {
     let specs = all_table_columns(connection)?;
@@ -1292,7 +1365,7 @@ fn verify_assets(
         }
     }
 
-    for name in entries.keys() {
+    for name in entries.names() {
         if !name.starts_with(ASSET_PREFIX) || expected.contains(name) {
             continue;
         }
