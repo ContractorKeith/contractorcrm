@@ -84,6 +84,8 @@ import type {
   FollowupTemplates,
   HistorySummary,
   SetFollowupTemplatesRequest,
+  ContextPreview,
+  PreviewContextRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -196,6 +198,9 @@ export interface CoreClient {
     objective?: string,
     templateId?: string,
   ): Promise<FollowupDraft>;
+  // What an AI-backed feature would send, without sending it. Works with the
+  // assistant off and reaches no provider.
+  previewContext(request: PreviewContextRequest): Promise<ContextPreview>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -296,4 +301,5 @@ export const tauriCoreClient: CoreClient = {
     invoke("summarize_history", { parentType, parentId, window }),
   proposeFollowup: (parentType, parentId, objective, templateId) =>
     invoke("propose_followup", { parentType, parentId, objective, templateId }),
+  previewContext: (request) => invoke("preview_context", { request }),
 };

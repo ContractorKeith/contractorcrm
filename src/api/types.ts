@@ -947,6 +947,39 @@ export interface FollowupDraft {
   proposal: Proposal;
 }
 
+// ---------------------------------------------------------------------------
+// Context previews — "see what will be sent" before any provider call
+// ---------------------------------------------------------------------------
+
+// Which AI-backed feature to preview, plus that feature's own identifying
+// arguments. objective/templateId pick the wording rather than the projection,
+// so they are accepted and ignored — a caller can pass exactly what it means
+// to send.
+export type PreviewContextRequest =
+  | { tool: "summarize_history"; parentType: ParentType; parentId: string; window?: number }
+  | { tool: "explain_attention_flag"; flagId: string }
+  | {
+      tool: "propose_update";
+      entityType: ProposalEntityType;
+      entityId: string;
+      expectedVersion: number;
+    }
+  | {
+      tool: "propose_followup";
+      parentType: ParentType;
+      parentId: string;
+      objective?: string;
+      templateId?: string;
+    };
+
+// Exactly what would be sent to a model, without sending it. Available with
+// the assistant switched off; reads no credentials.
+export interface ContextPreview {
+  purpose: string;
+  contextText: string;
+  includedRecordRefs: RecordRef[];
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =

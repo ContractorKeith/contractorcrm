@@ -8,6 +8,7 @@ import {
   type HistorySummary,
   type ParentType,
 } from "../api/types";
+import { ContextDisclosure } from "./ContextDisclosure";
 import { ProposalDialog } from "./ProposalDialog";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +99,10 @@ export function HistorySummaryPanel({ client, parentType, parentId }: HistorySum
       >
         {state.status === "loading" ? "Summarizing…" : "Summarize"}
       </button>
+      <ContextDisclosure
+        client={client}
+        request={{ tool: "summarize_history", parentType, parentId }}
+      />
 
       {state.status === "loading" ? <p className="attention-ai__meta">Asking the model…</p> : null}
       {state.status === "error" ? (
@@ -229,6 +234,18 @@ export function FollowupDraftPanel({
           {busy ? "Drafting…" : enabled ? "Draft follow-up" : "Use a template"}
         </button>
       </div>
+
+      <ContextDisclosure
+        client={client}
+        request={{
+          tool: "propose_followup",
+          parentType,
+          parentId,
+          ...(objective.trim() === "" ? {} : { objective }),
+          ...(templateId === "" ? {} : { templateId }),
+        }}
+        label={enabled ? "See what will be sent" : "See what would be sent if the assistant is on"}
+      />
 
       {error ? (
         <p role="alert" className="saved-views__error">

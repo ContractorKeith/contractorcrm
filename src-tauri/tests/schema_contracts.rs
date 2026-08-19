@@ -19,7 +19,7 @@ use contractorcrm_lib::{
         ApplyProposalRequest, FieldChange, Proposal, ProposalApplied, ProposalEntityType,
         ProposalKind, ProposalUndone, RecordVersion, UndoProposalRequest,
     },
-    storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
+    storage, PreviewContextRequest, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -1128,4 +1128,89 @@ fn followup_commands_and_wire_types_match_the_published_v1_contract() {
         serde_json::json!({"templates": [], "force": true})
     )
     .is_err());
+}
+
+/// `preview_context` is the desktop's "see what will be sent" seam: one command
+/// covering every AI-backed feature, each arm parsed from the same arguments
+/// that feature's own command takes.
+#[test]
+fn preview_context_publishes_one_arm_per_ai_backed_feature() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let published = schema["commands"]
+        .as_array()
+        .expect("commands array")
+        .iter()
+        .find(|command| command["name"] == "preview_context")
+        .expect("preview_context must be published");
+    assert_eq!(published["mode"], "read");
+    assert_eq!(published["output"], "ContextPreview");
+    assert_eq!(published["input"][0]["name"], "request");
+    assert_eq!(published["input"][0]["type"], "PreviewContextRequest");
+
+    let mut published_tools = string_array(
+        &schema["wireTypes"]["PreviewContextRequest"]["properties"]["tool"],
+        "enum",
+    );
+    published_tools.sort();
+
+    // Every published arm round-trips from the wire shape a client sends.
+    let requests = [
+        serde_json::json!({
+            "tool": "summarize_history",
+            "parentType": "contact",
+            "parentId": "contact-1",
+            "window": 30,
+        }),
+        serde_json::json!({"tool": "explain_attention_flag", "flagId": "stale_lead:contact-1"}),
+        serde_json::json!({
+            "tool": "propose_update",
+            "entityType": "contact",
+            "entityId": "contact-1",
+            "expectedVersion": 3,
+        }),
+        serde_json::json!({
+            "tool": "propose_followup",
+            "parentType": "contact",
+            "parentId": "contact-1",
+            "objective": "chase the proposal",
+            "templateId": "proposal_chaser",
+        }),
+    ];
+    let mut round_tripped = Vec::new();
+    for request in requests {
+        let parsed: PreviewContextRequest =
+            serde_json::from_value(request.clone()).expect("a published arm parses");
+        let reserialized = serde_json::to_value(&parsed).expect("serialize the arm");
+        assert_eq!(reserialized, request, "{request} round trip");
+        round_tripped.push(request["tool"].as_str().expect("a tool name").to_owned());
+    }
+    round_tripped.sort();
+    assert_eq!(round_tripped, published_tools);
+
+    // The optional arguments really are optional, and an unknown tool is not
+    // silently treated as one of the four.
+    serde_json::from_value::<PreviewContextRequest>(serde_json::json!({
+        "tool": "summarize_history",
+        "parentType": "contact",
+        "parentId": "contact-1",
+    }))
+    .expect("window is optional");
+    assert!(serde_json::from_value::<PreviewContextRequest>(
+        serde_json::json!({"tool": "list_contacts"})
+    )
+    .is_err());
+
+    assert_published_shape(
+        &schema,
+        "ContextPreview",
+        &contractorcrm_lib::ai::ContextPreview {
+            purpose: "summarize_history".into(),
+            context_text: "Record: Dana Ruiz (contact contact-1)".into(),
+            included_record_refs: vec![RecordRef {
+                entity_type: "contact".into(),
+                entity_id: "contact-1".into(),
+                label: "Dana Ruiz".into(),
+            }],
+        },
+    );
 }

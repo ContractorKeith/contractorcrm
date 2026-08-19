@@ -13,7 +13,10 @@ pub mod storage;
 
 use std::sync::{Arc, Mutex};
 
-use ai::{AiSettings, CompletionProvider, CredentialStore, ProviderCheck, SetAiSettingsRequest};
+use ai::{
+    AiSettings, CompletionProvider, ContextPreview, CredentialStore, ProviderCheck,
+    SetAiSettingsRequest,
+};
 use application::{
     ArchiveRequest, CompleteTaskRequest, ContactImportMapping, ContactImportPreview,
     ContactImportSummary, ContactListItem, CreateCompanyRequest, CreateContactRequest,
@@ -42,7 +45,7 @@ use proposals::{
     ApplyProposalRequest, Proposal, ProposalApplied, ProposalEntityType, ProposalStore,
     ProposalUndone, UndoProposalRequest,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use storage::Storage;
 use tauri::{Manager, State};
 
@@ -144,6 +147,7 @@ macro_rules! with_local_api_v1_commands {
             set_followup_templates,
             summarize_history,
             propose_followup,
+            preview_context,
         }
     };
 }
@@ -1097,6 +1101,74 @@ fn propose_followup(
         template_id.as_deref(),
     )
     .map_err(Into::into)
+}
+
+/// Which AI-backed feature a context preview is for, plus that feature's own
+/// identifying arguments. Arguments that pick wording rather than shape the
+/// projection (`objective`, `templateId`) are accepted and ignored, so a caller
+/// can hand over exactly the arguments they are about to use.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "tool", rename_all = "snake_case")]
+pub enum PreviewContextRequest {
+    #[serde(rename_all = "camelCase")]
+    SummarizeHistory {
+        parent_type: String,
+        parent_id: String,
+        #[serde(default)]
+        window: Option<i64>,
+    },
+    #[serde(rename_all = "camelCase")]
+    ExplainAttentionFlag { flag_id: String },
+    #[serde(rename_all = "camelCase")]
+    ProposeUpdate {
+        entity_type: ProposalEntityType,
+        entity_id: String,
+        expected_version: i64,
+    },
+    #[serde(rename_all = "camelCase")]
+    ProposeFollowup {
+        parent_type: String,
+        parent_id: String,
+        /// Picks the wording, not the projection — accepted and ignored.
+        #[serde(default)]
+        objective: Option<String>,
+        #[serde(default)]
+        template_id: Option<String>,
+    },
+}
+
+/// Exactly what an AI-backed feature would send a model, without sending it.
+/// Works with the assistant switched off and reads no credentials, so the UI
+/// can offer "see what will be sent" before the user commits to a call.
+#[tauri::command]
+fn preview_context(
+    storage: State<'_, SharedStorage>,
+    request: PreviewContextRequest,
+) -> Result<ContextPreview, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    let preview = match request {
+        PreviewContextRequest::SummarizeHistory {
+            parent_type,
+            parent_id,
+            window,
+        } => followups::preview_history_context(&storage, &parent_type, &parent_id, window)?,
+        PreviewContextRequest::ExplainAttentionFlag { flag_id } => {
+            explain::preview_flag_context(&storage, &flag_id, None)?
+        }
+        PreviewContextRequest::ProposeUpdate {
+            entity_type,
+            entity_id,
+            expected_version,
+        } => {
+            proposals::preview_update_context(&storage, entity_type, &entity_id, expected_version)?
+        }
+        PreviewContextRequest::ProposeFollowup {
+            parent_type,
+            parent_id,
+            ..
+        } => followups::preview_followup_context(&storage, &parent_type, &parent_id)?,
+    };
+    Ok(preview)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

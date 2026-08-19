@@ -9,6 +9,7 @@ import {
   type ProposalEntityType,
   type ProposalUndone,
 } from "../api/types";
+import { ContextDisclosure } from "./ContextDisclosure";
 
 // Contractor-facing names for the fields a draft can touch.
 const FIELD_LABELS: Record<string, string> = {
@@ -365,6 +366,17 @@ export function AssistantPrompt({
       >
         Ask
       </button>
+      {target ? (
+        <ContextDisclosure
+          client={client}
+          request={{
+            tool: "propose_update",
+            entityType,
+            entityId: target.entityId,
+            expectedVersion: target.expectedVersion,
+          }}
+        />
+      ) : null}
       {error ? (
         <span role="alert" className="saved-views__error">
           {error}

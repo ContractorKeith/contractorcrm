@@ -1630,6 +1630,29 @@ h1 {
   color: var(--state-attention);
 }
 
+/* "See what will be sent" — collapsed by default, quiet, and never in the way
+   of the action it describes. */
+.context-disclosure {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-meta);
+}
+
+.context-disclosure__summary {
+  color: var(--color-action);
+  cursor: pointer;
+}
+
+.context-disclosure__text {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  max-height: 14rem;
+  overflow: auto;
+  background: var(--color-neutral-100);
+  color: var(--color-neutral-700);
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
 /* Follow-ups — the summarize affordance and the drafted follow-up panel. */
 .followup {
   margin-bottom: var(--space-4);

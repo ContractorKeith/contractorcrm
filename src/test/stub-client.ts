@@ -5,6 +5,7 @@ import type {
   Activity,
   Attachment,
   AttentionExplanation,
+  ContextPreview,
   FollowupDraft,
   FollowupTemplates,
   HistorySummary,
@@ -140,6 +141,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   setFollowupTemplates: vi.fn().mockResolvedValue(makeFollowupTemplates()),
   summarizeHistory: vi.fn().mockResolvedValue(makeHistorySummary()),
   proposeFollowup: vi.fn().mockResolvedValue(makeFollowupDraft()),
+  previewContext: vi.fn().mockResolvedValue(makeContextPreview()),
   ...overrides,
 });
 
@@ -360,6 +362,16 @@ export const makeFollowupTemplates = (
     { id: "proposal_chaser", name: "Proposal follow-up", body: "Checking in on the proposal." },
     { id: "site_visit_note", name: "Post-site-visit note", body: "Thanks for having me out." },
   ],
+  ...overrides,
+});
+
+export const makeContextPreview = (
+  overrides: Partial<ContextPreview> = {},
+): ContextPreview => ({
+  purpose: "summarize_history",
+  contextText:
+    "Record: Dana Ruiz (contact contact-1)\nActivity (newest first):\n- 2026-06-02 call: Walked the back fence line",
+  includedRecordRefs: [{ entityType: "contact", entityId: "contact-1", label: "Dana Ruiz" }],
   ...overrides,
 });
 

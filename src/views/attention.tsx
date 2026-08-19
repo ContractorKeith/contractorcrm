@@ -8,6 +8,7 @@ import {
   type AttentionRecordType,
   type AttentionThresholds,
 } from "../api/types";
+import { ContextDisclosure } from "../components/ContextDisclosure";
 import { Field, GeneralError, NO_SAVE_ERROR, saveErrorFrom, type SaveError } from "./form-support";
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,13 @@ export function AttentionView({ client, onOpenRecord }: AttentionViewProps) {
                     </button>
                   ) : null}
                 </div>
+
+                {aiEnabled ? (
+                  <ContextDisclosure
+                    client={client}
+                    request={{ tool: "explain_attention_flag", flagId: flag.id }}
+                  />
+                ) : null}
 
                 {state?.status === "loading" ? (
                   <p className="attention-ai__meta">Asking the model…</p>
