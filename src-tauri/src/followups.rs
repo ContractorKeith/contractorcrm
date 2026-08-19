@@ -25,7 +25,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{
@@ -155,6 +155,8 @@ pub fn default_templates() -> Vec<FollowupTemplate> {
 /// Read the template set, falling back to the built-ins when the user has
 /// never edited them.
 pub fn get_followup_templates(storage: &Storage) -> Result<FollowupTemplates, ApplicationError> {
+    // `.optional()` and not `.ok()`: "no row" means the built-ins, but a real
+    // database failure must surface instead of quietly looking unconfigured.
     let value: Option<String> = storage
         .connection()
         .query_row(
@@ -162,7 +164,7 @@ pub fn get_followup_templates(storage: &Storage) -> Result<FollowupTemplates, Ap
             [TEMPLATES_KEY],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
     let Some(value) = value else {
         return Ok(FollowupTemplates {
             version: FOLLOWUP_TEMPLATES_VERSION,
@@ -570,6 +572,28 @@ pub fn preview_history_context(
     let projection = project_history(storage, parent_type, parent_id, window, Utc::now())?;
     Ok(ContextPreview {
         purpose: SUMMARIZE_PURPOSE.into(),
+        context_text: projection.text,
+        included_record_refs: vec![projection.record],
+    })
+}
+
+/// The same bounded history projection `propose_followup` would send. Drafting
+/// always looks back `DEFAULT_SUMMARY_WINDOW_DAYS`, so this takes no window —
+/// the preview would otherwise be able to disagree with the real call.
+pub fn preview_followup_context(
+    storage: &Storage,
+    parent_type: &str,
+    parent_id: &str,
+) -> Result<ContextPreview, ApplicationError> {
+    let projection = project_history(
+        storage,
+        parent_type,
+        parent_id,
+        DEFAULT_SUMMARY_WINDOW_DAYS,
+        Utc::now(),
+    )?;
+    Ok(ContextPreview {
+        purpose: FOLLOWUP_PURPOSE.into(),
         context_text: projection.text,
         included_record_refs: vec![projection.record],
     })

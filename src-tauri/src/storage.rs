@@ -558,6 +558,20 @@ impl Storage {
         Ok(storage)
     }
 
+    /// Open an existing database WITHOUT running migrations. The read-only MCP
+    /// helper uses this: a connection the user granted no write permission to
+    /// must not rewrite their schema. Connection pragmas are still set (WAL
+    /// mode and foreign keys are per-connection settings, not schema changes).
+    pub fn open_existing(database_path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let database_path = database_path.as_ref().to_path_buf();
+        let connection = Connection::open(&database_path)?;
+        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        Ok(Self {
+            database_path,
+            connection,
+        })
+    }
+
     /// Fully migrated throwaway database that never touches the filesystem —
     /// the archive import dry run applies an untrusted archive here first, so
     /// constraint failures surface before the live database is touched.

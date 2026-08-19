@@ -126,7 +126,9 @@ impl Server {
     }
 
     /// Open the app's SQLite file and its attachment store beside it. Refuses
-    /// a database written by a newer build rather than migrating it blindly.
+    /// a database written by a newer build rather than migrating it blindly,
+    /// and never migrates at all on a read-only connection — the user granted
+    /// this process no write permission, and a schema rewrite is a write.
     pub fn open(database_path: &std::path::Path, mode: Mode) -> Result<Self, String> {
         if !database_path.is_file() {
             return Err(format!(
@@ -144,7 +146,26 @@ impl Server {
             ));
         }
 
-        let storage = Storage::open(database_path)
+        let storage = if stored == known {
+            // Nothing to apply either way; open without the migration pass.
+            Storage::open_existing(database_path)
+        } else if mode.allows_writes() {
+            // `--read-write` is an explicit write grant, so migrating forward
+            // is allowed — but say so, because it changes the user's file.
+            eprintln!(
+                "contractorcrm-mcp: migrating {} from schema v{stored} to v{known}",
+                database_path.display()
+            );
+            Storage::open(database_path)
+        } else {
+            return Err(format!(
+                "{} is at schema v{stored} and this helper knows v{known}; \
+                 launch the ContractorCRM desktop app once to migrate it (or relaunch this \
+                 helper with --read-write) before connecting an agent",
+                database_path.display()
+            ));
+        };
+        let storage = storage
             .map_err(|error| format!("{} could not be opened: {error}", database_path.display()))?;
         // Managed attachment files live beside the database, exactly as the
         // desktop lays them out.
@@ -355,6 +376,14 @@ impl Server {
                     &storage,
                     &args.opportunity_id,
                 )?)
+            }
+            "list_stages" => {
+                let storage = self.storage();
+                value(application::list_stages(&storage)?)
+            }
+            "list_lost_reasons" => {
+                let storage = self.storage();
+                value(application::list_lost_reasons(&storage)?)
             }
             "get_timeline" => {
                 let args: TimelineArgs = parse(arguments)?;
@@ -738,7 +767,7 @@ impl Server {
     fn preview_context(&self, args: &PreviewArgs) -> Result<ContextPreview, ApplicationError> {
         let storage = self.storage();
         match args.tool.as_str() {
-            "summarize_history" | "propose_followup" => {
+            "summarize_history" => {
                 let inner: SummarizeArgs = parse(&args.arguments)?;
                 followups::preview_history_context(
                     &storage,
@@ -746,6 +775,12 @@ impl Server {
                     &inner.parent_id,
                     inner.window,
                 )
+            }
+            "propose_followup" => {
+                // The same arguments the real tool takes are accepted; the
+                // ones that do not shape the projection are ignored.
+                let inner: PreviewFollowupArgs = parse(&args.arguments)?;
+                followups::preview_followup_context(&storage, &inner.parent_type, &inner.parent_id)
             }
             "explain_attention_flag" => {
                 let inner: FlagArgs = parse(&args.arguments)?;
@@ -809,6 +844,10 @@ impl Server {
 }
 
 /// Read the highest applied migration without running any migration.
+///
+/// A file with no readable `schema_migrations` table is not a ContractorCRM
+/// database. Treating that as version 0 would have this helper create a whole
+/// schema inside somebody else's SQLite file, so it is a hard error.
 fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, String> {
     let connection = rusqlite::Connection::open(database_path)
         .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
@@ -816,8 +855,19 @@ fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, Stri
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })
-        .unwrap_or(Some(0));
-    Ok(version.unwrap_or(0))
+        .map_err(|_| {
+            format!(
+                "{} has no ContractorCRM schema (no readable schema_migrations table); \
+                 point --database at the app's contractorcrm.sqlite3 file",
+                database_path.display()
+            )
+        })?;
+    version.ok_or_else(|| {
+        format!(
+            "{} has an empty schema_migrations table; not a ContractorCRM database",
+            database_path.display()
+        )
+    })
 }
 
 /// Serve JSON-RPC messages until the client closes stdin (graceful shutdown).
@@ -1183,6 +1233,26 @@ struct ProposeFollowupArgs {
     template_id: Option<String>,
 }
 
+/// `propose_followup`'s preview arguments. `objective` and `templateId` pick
+/// the wording, and drafting always uses the default history window, so none of
+/// the three changes what would be sent — they are accepted and ignored so the
+/// caller can hand over the exact arguments they mean to use.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreviewFollowupArgs {
+    parent_type: String,
+    parent_id: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    objective: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    template_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    window: Option<i64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PreviewArgs {
@@ -1419,6 +1489,21 @@ fn tools() -> Vec<ToolDef> {
                 json!({"opportunityId": text("Opportunity id.")}),
                 &["opportunityId"],
             ),
+        },
+        ToolDef {
+            name: "list_stages",
+            description: "Pipeline stages in board order, with their kind \
+                          (open, won, lost). Source of the stage ids \
+                          move_opportunity_stage takes.",
+            write: false,
+            input_schema: schema(json!({}), &[]),
+        },
+        ToolDef {
+            name: "list_lost_reasons",
+            description: "The stored lost reasons. Moving an opportunity to a \
+                          lost stage requires one of these ids.",
+            write: false,
+            input_schema: schema(json!({}), &[]),
         },
         ToolDef {
             name: "get_timeline",

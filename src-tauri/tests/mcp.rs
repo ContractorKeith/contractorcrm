@@ -33,7 +33,7 @@ const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
 
 /// Every tool the adapter advertises in read-write mode, in table order.
 /// docs/SLICE5_COVERAGE.md maps each of these to its docs and its test.
-const ALL_TOOLS: [&str; 37] = [
+const ALL_TOOLS: [&str; 39] = [
     "search_records",
     "list_contacts",
     "get_contact",
@@ -41,6 +41,8 @@ const ALL_TOOLS: [&str; 37] = [
     "get_company",
     "list_opportunities",
     "get_opportunity",
+    "list_stages",
+    "list_lost_reasons",
     "get_timeline",
     "list_tasks",
     "get_attention_flags",
@@ -1224,6 +1226,56 @@ fn record_rules_and_the_lost_reason_rule_carry_their_own_error_kinds() {
     assert_eq!(error["recordId"], json!(opportunity.id));
 }
 
+/// An agent has to be able to discover stage and lost-reason ids, or
+/// `move_opportunity_stage` is unusable without a human reading them out.
+#[test]
+fn an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let opportunity = application::create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Back yard fence".into(),
+                contact_id: Some(contact.id),
+                value_minor: 450_000,
+                currency_code: "USD".into(),
+                ..OpportunityPatch::default()
+            },
+        },
+    )
+    .expect("create opportunity");
+    let server = server(&temp, storage, Mode::ReadWrite);
+
+    let stages = ok(&server, "list_stages", json!({}));
+    let stages = stages.as_array().expect("stages");
+    assert!(stages.len() >= 3, "a seeded pipeline has open/won/lost");
+    let lost_stage_id = stages
+        .iter()
+        .find(|stage| stage["kind"] == json!("lost"))
+        .expect("a lost stage")["id"]
+        .clone();
+
+    let reasons = ok(&server, "list_lost_reasons", json!({}));
+    let lost_reason_id = reasons.as_array().expect("lost reasons")[0]["id"].clone();
+
+    // Both ids came from the tools, and nothing else was needed.
+    let moved = ok(
+        &server,
+        "move_opportunity_stage",
+        json!({
+            "opportunityId": opportunity.id,
+            "toStageId": lost_stage_id,
+            "lostReasonId": lost_reason_id,
+            "expectedVersion": opportunity.version,
+        }),
+    );
+    assert_eq!(moved["stageId"], lost_stage_id);
+}
+
 // ---------------------------------------------------------------------------
 // The remaining AI-backed tools
 // ---------------------------------------------------------------------------
@@ -1339,6 +1391,71 @@ fn propose_followup_drafts_from_a_template_and_applies_as_a_task() {
             json!({"parentType": "contact", "parentId": contact.id, "templateId": "nope"})
         ),
         "not_found"
+    );
+}
+
+/// The follow-up preview has to describe the follow-up call, not the summary
+/// call: it takes the same arguments and projects the same text.
+#[test]
+fn the_followup_preview_matches_what_propose_followup_actually_sends() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    application::log_activity(
+        &mut storage,
+        LogActivityRequest {
+            actor: Actor::User,
+            parent_type: "contact".into(),
+            parent_id: contact.id.clone(),
+            activity: ActivityPatch {
+                kind: "call".into(),
+                direction: None,
+                occurred_at: None,
+                summary: "Walked the back fence line".into(),
+                body: None,
+            },
+        },
+    )
+    .expect("log activity");
+    let provider = Arc::new(CannedProvider::new("Checking in on that fence quote."));
+    let server = server(&temp, storage, Mode::ReadOnly).with_provider(provider.clone());
+    let arguments = json!({
+        "parentType": "contact",
+        "parentId": contact.id,
+        "objective": "chase the proposal",
+        "templateId": "proposal_chaser",
+    });
+
+    // The arguments a caller would pass to the tool are accepted as-is.
+    let preview = ok(
+        &server,
+        "preview_context",
+        json!({"tool": "propose_followup", "arguments": arguments}),
+    );
+    assert_eq!(preview["purpose"], json!("propose_followup"));
+    assert_eq!(
+        preview["includedRecordRefs"][0]["entityId"],
+        json!(contact.id)
+    );
+    assert_eq!(provider.call_count(), 0, "a preview sends nothing");
+
+    // A window argument is accepted and ignored: drafting has one window.
+    let mut windowed = arguments.clone();
+    windowed["window"] = json!(1);
+    let windowed_preview = ok(
+        &server,
+        "preview_context",
+        json!({"tool": "propose_followup", "arguments": windowed}),
+    );
+    assert_eq!(windowed_preview["contextText"], preview["contextText"]);
+
+    // And the projection is exactly what the real call carries.
+    ok(&server, "propose_followup", arguments);
+    let sent = provider.seen.lock().expect("canned provider mutex")[0].clone();
+    assert_eq!(sent.purpose, "propose_followup");
+    assert_eq!(
+        preview["contextText"].as_str().expect("context text"),
+        sent.context_text.as_deref().expect("context was sent")
     );
 }
 
@@ -1467,6 +1584,115 @@ fn the_shipped_binary_serves_a_handshake_and_a_read_over_stdio() {
 
     let contacts = &responses[2]["result"]["structuredContent"]["result"];
     assert_eq!(contacts[0]["displayName"], json!("Dana Ruiz"));
+}
+
+// ---------------------------------------------------------------------------
+// Opening a database (the helper must never rewrite a schema it wasn't given
+// permission to touch)
+// ---------------------------------------------------------------------------
+
+/// Undo the newest migration so the file looks like one written by an older
+/// build: drop what v10 created and forget it was ever applied.
+fn roll_back_the_newest_migration(database_path: &std::path::Path) {
+    assert_eq!(
+        contractorcrm_lib::storage::latest_migration_version(),
+        10,
+        "update this fixture when a migration is added"
+    );
+    let connection = rusqlite::Connection::open(database_path).expect("open the database");
+    connection
+        .execute_batch(
+            "DROP TRIGGER opportunities_attachments_delete;
+             DROP TRIGGER contacts_attachments_delete;
+             DROP TRIGGER attachments_owner_update;
+             DROP TRIGGER attachments_owner_insert;
+             DROP INDEX attachments_parent;
+             DROP TABLE attachments;
+             DELETE FROM schema_migrations WHERE version = 10;",
+        )
+        .expect("roll back migration 10");
+}
+
+fn stored_schema_version(database_path: &std::path::Path) -> i64 {
+    let connection = rusqlite::Connection::open(database_path).expect("open the database");
+    connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read the schema version")
+}
+
+#[test]
+fn a_read_only_helper_refuses_an_older_database_instead_of_migrating_it() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let database = {
+        let storage = open_storage(&temp);
+        storage.database_path().to_path_buf()
+    };
+    roll_back_the_newest_migration(&database);
+
+    let error = Server::open(&database, Mode::ReadOnly)
+        .err()
+        .expect("an older file is refused");
+
+    assert!(error.contains("schema v9"), "{error}");
+    assert!(error.contains("desktop app"), "{error}");
+    assert_eq!(
+        stored_schema_version(&database),
+        9,
+        "a read-only connection must not migrate the user's database"
+    );
+}
+
+#[test]
+fn a_read_write_helper_may_still_migrate_an_older_database() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let database = {
+        let storage = open_storage(&temp);
+        storage.database_path().to_path_buf()
+    };
+    roll_back_the_newest_migration(&database);
+
+    assert!(
+        Server::open(&database, Mode::ReadWrite).is_ok(),
+        "--read-write is an explicit write grant"
+    );
+
+    assert_eq!(stored_schema_version(&database), 10);
+}
+
+#[test]
+fn a_foreign_sqlite_file_is_refused_rather_than_given_a_contractorcrm_schema() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let foreign = temp.path().join("someone-elses.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&foreign).expect("create a foreign database");
+        connection
+            .execute_batch("CREATE TABLE invoices (id TEXT PRIMARY KEY, total INTEGER);")
+            .expect("seed the foreign schema");
+    }
+
+    for mode in [Mode::ReadOnly, Mode::ReadWrite] {
+        let error = Server::open(&foreign, mode)
+            .err()
+            .expect("not a ContractorCRM database");
+        assert!(
+            error.contains("no ContractorCRM schema"),
+            "{mode:?}: {error}"
+        );
+    }
+
+    let connection = rusqlite::Connection::open(&foreign).expect("reopen the foreign database");
+    let tables: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name != 'invoices'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count tables");
+    assert_eq!(tables, 0, "the helper must not write a schema into it");
 }
 
 #[test]
