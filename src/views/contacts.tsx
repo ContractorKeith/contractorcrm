@@ -16,6 +16,7 @@ import type {
   Tag,
   CustomFieldDefinition,
 } from "../api/types";
+import { FollowupDraftPanel } from "../components/FollowupDraft";
 import { AssistantPrompt } from "../components/ProposalDialog";
 import { CsvImportDialog } from "../components/CsvImportDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
@@ -420,6 +421,8 @@ export function ContactDetailView({ client, contactId, onBack, onEdit }: Contact
           ))}
         </ul>
       )}
+
+      <FollowupDraftPanel client={client} parentType="contact" parentId={contact.id} />
 
       <RecordAttachments client={client} parentType="contact" parentId={contact.id} />
 

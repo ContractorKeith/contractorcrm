@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { CoreClient } from "../api/client";
+import { HistorySummaryPanel } from "../components/FollowupDraft";
 import type {
   Activity,
   ActivityDirection,
@@ -246,6 +247,9 @@ export function ActivityTimeline({ client, parentType, parentId }: ActivityTimel
       </div>
 
       <GeneralError message={error.general} />
+
+      {/* Recap of this record's history — reads only, and only when asked. */}
+      <HistorySummaryPanel client={client} parentType={parentType} parentId={parentId} />
 
       <form className="timeline-form" onSubmit={submitLog} aria-label="Log activity">
         <ActivityFields draft={draft} onChange={setDraft} errors={error.fields} />

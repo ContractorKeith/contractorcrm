@@ -79,6 +79,10 @@ import type {
   ProposalUndone,
   UndoProposalRequest,
   AttentionExplanation,
+  FollowupDraft,
+  FollowupTemplates,
+  HistorySummary,
+  SetFollowupTemplatesRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -178,6 +182,17 @@ export interface CoreClient {
   applyProposal(request: ApplyProposalRequest): Promise<ProposalApplied>;
   undoProposal(request: UndoProposalRequest): Promise<ProposalUndone>;
   explainAttentionFlag(flagId: string): Promise<AttentionExplanation>;
+  // Follow-ups: templates work with the assistant off; summarizing and
+  // drafting only read — applying the returned proposal is the write.
+  getFollowupTemplates(): Promise<FollowupTemplates>;
+  setFollowupTemplates(request: SetFollowupTemplatesRequest): Promise<FollowupTemplates>;
+  summarizeHistory(parentType: ParentType, parentId: string, window?: number): Promise<HistorySummary>;
+  proposeFollowup(
+    parentType: ParentType,
+    parentId: string,
+    objective?: string,
+    templateId?: string,
+  ): Promise<FollowupDraft>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -271,4 +286,10 @@ export const tauriCoreClient: CoreClient = {
   applyProposal: (request) => invoke("apply_proposal", { request }),
   undoProposal: (request) => invoke("undo_proposal", { request }),
   explainAttentionFlag: (flagId) => invoke("explain_attention_flag", { flagId }),
+  getFollowupTemplates: () => invoke("get_followup_templates"),
+  setFollowupTemplates: (request) => invoke("set_followup_templates", { request }),
+  summarizeHistory: (parentType, parentId, window) =>
+    invoke("summarize_history", { parentType, parentId, window }),
+  proposeFollowup: (parentType, parentId, objective, templateId) =>
+    invoke("propose_followup", { parentType, parentId, objective, templateId }),
 };

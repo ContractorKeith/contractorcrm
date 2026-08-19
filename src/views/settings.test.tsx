@@ -6,7 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { App } from "../App";
 import type { AiSettings } from "../api/types";
-import { makeContact, stubClient } from "../test/stub-client";
+import { makeContact, makeFollowupTemplates, stubClient } from "../test/stub-client";
 
 // Native file dialogs only exist inside Tauri, so stand them in for tests.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -336,5 +336,35 @@ describe("AI assistant settings", () => {
     await user.click(await screen.findByRole("button", { name: "Test connection" }));
 
     expect(await screen.findByText("Couldn't reach 127.0.0.1:11434.")).toBeVisible();
+  });
+
+  it("edits and resets the follow-up templates, which work with the assistant off", async () => {
+    const user = userEvent.setup();
+    const saved = makeFollowupTemplates({
+      templates: [{ id: "call_followup", name: "Call check-in", body: "Thanks for the call." }],
+    });
+    const client = stubClient({
+      getFollowupTemplates: vi.fn().mockResolvedValue(makeFollowupTemplates()),
+      setFollowupTemplates: vi.fn().mockResolvedValue(saved),
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    await screen.findByRole("heading", { name: "Follow-up templates" });
+
+    const name = screen.getByDisplayValue("Call follow-up");
+    await user.clear(name);
+    await user.type(name, "Call check-in");
+    await user.click(screen.getByRole("button", { name: "Save templates" }));
+
+    const request = vi.mocked(client.setFollowupTemplates).mock.calls[0]?.[0];
+    expect(request?.templates[0]).toMatchObject({ id: "call_followup", name: "Call check-in" });
+    expect(request?.templates).toHaveLength(3);
+    expect(await screen.findByText("Follow-up templates saved.")).toBeVisible();
+    expect(screen.getByDisplayValue("Thanks for the call.")).toBeVisible();
+
+    // Resetting sends an empty list; the core restores the built-ins.
+    await user.click(screen.getByRole("button", { name: "Reset to defaults" }));
+    expect(vi.mocked(client.setFollowupTemplates).mock.calls[1]?.[0]).toEqual({ templates: [] });
   });
 });

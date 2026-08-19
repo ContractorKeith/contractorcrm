@@ -6,6 +6,7 @@ pub mod attention;
 pub mod domain;
 pub mod error;
 pub mod explain;
+pub mod followups;
 pub mod proposals;
 pub mod storage;
 
@@ -35,6 +36,7 @@ use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
 use explain::AttentionExplanation;
+use followups::{FollowupDraft, FollowupTemplates, HistorySummary, SetFollowupTemplatesRequest};
 use proposals::{
     ApplyProposalRequest, Proposal, ProposalApplied, ProposalEntityType, ProposalStore,
     ProposalUndone, UndoProposalRequest,
@@ -137,6 +139,10 @@ macro_rules! with_local_api_v1_commands {
             apply_proposal,
             undo_proposal,
             explain_attention_flag,
+            get_followup_templates,
+            set_followup_templates,
+            summarize_history,
+            propose_followup,
         }
     };
 }
@@ -1120,6 +1126,75 @@ fn explain_attention_flag(
         explain::plan_explanation(&storage, credentials.as_ref(), &flag_id, None)?
     };
     plan.run().map_err(Into::into)
+}
+
+// Follow-up commands — templates that work with the assistant off, history
+// summaries, and drafted follow-ups. Only apply_proposal ever writes a record.
+
+#[tauri::command]
+fn get_followup_templates(
+    storage: State<'_, SharedStorage>,
+) -> Result<FollowupTemplates, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    followups::get_followup_templates(&storage).map_err(Into::into)
+}
+
+#[tauri::command]
+fn set_followup_templates(
+    storage: State<'_, SharedStorage>,
+    request: SetFollowupTemplatesRequest,
+) -> Result<FollowupTemplates, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    followups::set_followup_templates(&mut storage, request).map_err(Into::into)
+}
+
+/// Summarize one record's recent history and suggest next actions.
+/// Explanation only — no proposal, no writes.
+#[tauri::command]
+fn summarize_history(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    parent_type: String,
+    parent_id: String,
+    window: Option<i64>,
+) -> Result<HistorySummary, CommandError> {
+    // Same split as the other AI commands: project under the lock, release it,
+    // then make the call that can take seconds.
+    let plan = {
+        let storage = storage.lock().expect("storage mutex poisoned");
+        followups::plan_history_summary(
+            &storage,
+            credentials.as_ref(),
+            &parent_type,
+            &parent_id,
+            window,
+        )?
+    };
+    plan.run().map_err(Into::into)
+}
+
+/// Draft follow-up wording plus a follow-up task proposal. Works with the
+/// assistant off: the chosen template comes back verbatim and nothing is sent.
+#[tauri::command]
+fn propose_followup(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    proposals: State<'_, ProposalStore>,
+    parent_type: String,
+    parent_id: String,
+    objective: Option<String>,
+    template_id: Option<String>,
+) -> Result<FollowupDraft, CommandError> {
+    followups::propose_followup(
+        storage.inner(),
+        credentials.as_ref(),
+        proposals.inner(),
+        &parent_type,
+        &parent_id,
+        objective.as_deref(),
+        template_id.as_deref(),
+    )
+    .map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -11,6 +11,10 @@ use contractorcrm_lib::{
     },
     error::ApplicationError,
     explain::AttentionExplanation,
+    followups::{
+        FollowupDraft, FollowupTemplate, FollowupTemplates, HistorySummary,
+        SetFollowupTemplatesRequest,
+    },
     proposals::{
         ApplyProposalRequest, FieldChange, Proposal, ProposalApplied, ProposalEntityType,
         ProposalKind, ProposalUndone, RecordVersion, UndoProposalRequest,
@@ -926,7 +930,7 @@ fn proposal_commands_and_wire_types_match_the_published_v1_contract() {
     // Published enum values are the wire strings the core actually emits.
     assert_eq!(
         string_array(&schema["wireTypes"]["ProposalEntityType"], "enum"),
-        vec!["contact", "company", "opportunity"]
+        vec!["contact", "company", "opportunity", "task"]
     );
     let published_kinds = string_array(&schema["wireTypes"]["ProposalKind"], "enum");
     for kind in [
@@ -936,6 +940,7 @@ fn proposal_commands_and_wire_types_match_the_published_v1_contract() {
         ProposalKind::UpdateContact,
         ProposalKind::UpdateCompany,
         ProposalKind::UpdateOpportunity,
+        ProposalKind::CreateFollowupTask,
     ] {
         let wire = serde_json::to_value(kind).expect("serialize kind");
         assert!(
@@ -1029,4 +1034,98 @@ fn attention_explanations_match_the_published_v1_contract() {
             false
         );
     }
+}
+
+#[test]
+fn followup_commands_and_wire_types_match_the_published_v1_contract() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for (command, mode, output) in [
+        ("get_followup_templates", "read", "FollowupTemplates"),
+        ("set_followup_templates", "write", "FollowupTemplates"),
+        // Summarizing and drafting only read; only apply_proposal writes.
+        ("summarize_history", "read", "HistorySummary"),
+        ("propose_followup", "read", "FollowupDraft"),
+    ] {
+        let published = commands
+            .iter()
+            .find(|entry| entry["name"] == command)
+            .unwrap_or_else(|| panic!("{command} must be published"));
+        assert_eq!(published["mode"], mode, "{command} mode");
+        assert_eq!(published["output"], output, "{command} output");
+    }
+
+    let template = FollowupTemplate {
+        id: "call_followup".into(),
+        name: "Call follow-up".into(),
+        body: "Thanks for taking the time on the phone.".into(),
+    };
+    assert_published_shape(&schema, "FollowupTemplate", &template);
+    assert_published_shape(
+        &schema,
+        "FollowupTemplates",
+        &FollowupTemplates {
+            version: 1,
+            templates: vec![template.clone()],
+        },
+    );
+    assert_published_shape(
+        &schema,
+        "HistorySummary",
+        &HistorySummary {
+            parent_type: "contact".into(),
+            parent_id: "contact-1".into(),
+            endpoint_host: "127.0.0.1:11434".into(),
+            local: true,
+            model: "llama3.1".into(),
+            summary: "Dana asked for a gate quote and went quiet.".into(),
+            suggested_next_actions: vec!["Call Dana this week".into()],
+            included_record_refs: vec![RecordRef {
+                entity_type: "contact".into(),
+                entity_id: "contact-1".into(),
+                label: "Dana Ruiz".into(),
+            }],
+        },
+    );
+    assert_published_shape(
+        &schema,
+        "FollowupDraft",
+        &FollowupDraft {
+            parent_type: "contact".into(),
+            parent_id: "contact-1".into(),
+            template_id: template.id.clone(),
+            template_name: template.name.clone(),
+            draft_text: template.body.clone(),
+            used_provider: false,
+            endpoint_host: None,
+            local: false,
+            model: None,
+            included_record_refs: Vec::new(),
+            warnings: Vec::new(),
+            proposal: Proposal {
+                id: "proposal-1".into(),
+                kind: ProposalKind::CreateFollowupTask,
+                entity_type: ProposalEntityType::Task,
+                entity_id: None,
+                summary: "Follow up with Dana Ruiz".into(),
+                changes: Vec::new(),
+                warnings: Vec::new(),
+                affected_versions: Vec::new(),
+                created_at: "2026-08-19T12:00:00.000Z".into(),
+                expires_at: "2026-08-19T12:15:00.000Z".into(),
+            },
+        },
+    );
+
+    // A set request defaults the actor and refuses unknown fields.
+    let request: SetFollowupTemplatesRequest =
+        serde_json::from_value(serde_json::json!({"templates": []})).expect("actor is optional");
+    assert_eq!(
+        serde_json::to_value(request.actor).expect("serialize actor"),
+        "user"
+    );
+    assert!(serde_json::from_value::<SetFollowupTemplatesRequest>(
+        serde_json::json!({"templates": [], "force": true})
+    )
+    .is_err());
 }
