@@ -55,6 +55,20 @@ const MAX_PROJECTION_VALUE_CHARS: usize = 200;
 /// Output cap for the extraction call — a draft is a small JSON object.
 const MAX_OUTPUT_TOKENS: u32 = 800;
 
+/// Draft-side caps on model-supplied text. Free-form note fields get room to
+/// be useful; every other field is a name, an address part, or a code. The
+/// validators still have the final say — these only stop an unbounded string
+/// from reaching them in the first place.
+const MAX_DRAFT_NOTE_CHARS: usize = 10_000;
+const MAX_DRAFT_TEXT_CHARS: usize = 500;
+
+fn draft_field_cap(key: &str) -> usize {
+    match key {
+        "notes" | "licenseNotes" => MAX_DRAFT_NOTE_CHARS,
+        _ => MAX_DRAFT_TEXT_CHARS,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prompts (kept together so wording can be tuned in one place)
 // ---------------------------------------------------------------------------
@@ -374,6 +388,7 @@ impl ProposalStore {
     /// caller's problem to fix, not a reason to lose their draft).
     fn put_back(&self, stored: StoredProposal) {
         let mut inner = self.lock();
+        purge(&mut inner, Utc::now());
         inner.proposals.insert(stored.proposal.id.clone(), stored);
     }
 
@@ -396,6 +411,7 @@ impl ProposalStore {
 
     fn put_back_undo(&self, token: String, stored: StoredUndo) {
         let mut inner = self.lock();
+        purge(&mut inner, Utc::now());
         inner.undos.insert(token, stored);
     }
 }
@@ -749,18 +765,9 @@ pub fn apply_proposal(
         }
     };
 
-    // The record write already committed in its own transaction with its own
-    // command_log row; this extra row records that a draft (not a hand edit)
-    // was applied. Written after the fact on purpose — a failure here cannot
-    // leave a half-applied record.
-    log_event(
-        storage,
-        actor,
-        applied.entity_type,
-        &applied.entity_id,
-        &format!("applied the assistant's draft: {}", stored.proposal.summary),
-    )?;
-
+    // The undo token is registered BEFORE the audit row: the record write has
+    // already committed, so losing the only way to reverse it because a log
+    // row failed would be the worse of the two failures.
     let undo_expires_at = store.expiry();
     store.insert_undo(
         applied.undo_token.clone(),
@@ -769,6 +776,17 @@ pub fn apply_proposal(
             version_after_apply: applied.version,
             expires_at: undo_expires_at,
         },
+    );
+
+    // The record write already committed in its own transaction with its own
+    // command_log row; this extra row records that a draft (not a hand edit)
+    // was applied. Best-effort after the fact, like `mcp::log_agent_call`.
+    log_event_best_effort(
+        storage,
+        actor,
+        applied.entity_type,
+        &applied.entity_id,
+        &format!("applied the assistant's draft: {}", stored.proposal.summary),
     );
     Ok(ProposalApplied {
         undo_expires_at: iso(undo_expires_at),
@@ -818,13 +836,13 @@ pub fn undo_proposal(
             return Err(error);
         }
     };
-    log_event(
+    log_event_best_effort(
         storage,
         actor,
         entity_type,
         &entity_id,
         "undid the assistant's applied draft",
-    )?;
+    );
     Ok(undone)
 }
 
@@ -1139,10 +1157,11 @@ fn check_expected_versions(
 ) -> Result<(), ApplicationError> {
     let mut asserted = expected_versions.to_vec();
     for affected in &stored.proposal.affected_versions {
-        if !asserted
-            .iter()
-            .any(|entry| entry.entity_id == affected.entity_id)
-        {
+        // Match on the whole identity: ids are unique per type, not globally,
+        // so a contact assertion must never satisfy a company's affected row.
+        if !asserted.iter().any(|entry| {
+            entry.entity_id == affected.entity_id && entry.entity_type == affected.entity_type
+        }) {
             asserted.push(affected.clone());
         }
     }
@@ -1226,6 +1245,27 @@ fn current_version(
 }
 
 /// One audit row saying a draft was applied or undone. Non-secret summary only.
+///
+/// Best-effort by design: the record write it describes already committed in
+/// its own transaction (with its own `command_log` row), so a failure here is
+/// reported on stderr rather than turned into an error that would strand an
+/// applied change with no undo token. Same approach as `mcp::log_agent_call`.
+fn log_event_best_effort(
+    storage: &mut Storage,
+    actor: Actor,
+    entity_type: ProposalEntityType,
+    entity_id: &str,
+    summary: &str,
+) {
+    if let Err(error) = log_event(storage, actor, entity_type, entity_id, summary) {
+        eprintln!(
+            "ContractorCRM: could not record the proposal audit row for \
+             {} {entity_id}: {error}",
+            resource_name(entity_type)
+        );
+    }
+}
+
 fn log_event(
     storage: &mut Storage,
     actor: Actor,
@@ -1683,7 +1723,17 @@ impl Draft {
                 return None;
             }
         };
-        let text = text.trim().to_owned();
+        let mut text = text.trim().to_owned();
+        // The model controls this string. Validation caps some fields and not
+        // others, so the draft side bounds every one of them and says so.
+        let cap = draft_field_cap(key);
+        if text.chars().count() > cap {
+            text = text.chars().take(cap).collect();
+            self.warn(format!(
+                "The assistant's \"{key}\" was longer than ContractorCRM stores — it was \
+                 shortened to {cap} characters."
+            ));
+        }
         (!text.is_empty()).then_some(text)
     }
 
@@ -1946,6 +1996,33 @@ mod tests {
         let warnings = draft.into_warnings();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("firstName"));
+    }
+
+    #[test]
+    fn model_supplied_text_is_capped_per_field_with_a_warning() {
+        let mut draft = Draft::parse(&format!(
+            "{{\"notes\":\"{}\",\"city\":\"{}\"}}",
+            "n".repeat(MAX_DRAFT_NOTE_CHARS + 50),
+            "c".repeat(MAX_DRAFT_TEXT_CHARS + 50)
+        ))
+        .expect("parse draft");
+
+        assert_eq!(
+            draft
+                .take_text("notes")
+                .expect("notes kept")
+                .chars()
+                .count(),
+            MAX_DRAFT_NOTE_CHARS
+        );
+        assert_eq!(
+            draft.take_text("city").expect("city kept").chars().count(),
+            MAX_DRAFT_TEXT_CHARS
+        );
+        let warnings = draft.into_warnings();
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().any(|warning| warning.contains("notes")));
+        assert!(warnings.iter().any(|warning| warning.contains("city")));
     }
 
     #[test]

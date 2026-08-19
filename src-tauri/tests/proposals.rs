@@ -10,8 +10,8 @@ use contractorcrm_lib::ai::{
     ProviderCompletion, ProviderRequest, SetAiSettingsRequest,
 };
 use contractorcrm_lib::application::{
-    self, ContactPatch, CreateContactRequest, CreateOpportunityRequest, OpportunityPatch,
-    UpdateContactRequest,
+    self, CompanyPatch, ContactPatch, CreateCompanyRequest, CreateContactRequest,
+    CreateOpportunityRequest, OpportunityPatch, UpdateContactRequest,
 };
 use contractorcrm_lib::domain::Actor;
 use contractorcrm_lib::error::ApplicationError;
@@ -573,6 +573,84 @@ fn applying_without_asserted_versions_still_checks_the_version_the_draft_saw() {
     assert_eq!(error.kind(), "version_conflict");
 }
 
+/// Record ids are unique per table, not globally. An assertion about some
+/// other record type must never stand in for the draft's own affected record.
+#[test]
+fn an_assertion_about_another_record_type_does_not_satisfy_the_drafts_own_check() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let store = ProposalStore::new();
+    let contact_id = seed_contact(&storage, "Dana Ruiz");
+
+    // Force the id collision this rule exists for: a company that happens to
+    // carry the same id as the contact the draft is about.
+    {
+        let mut guard = storage.lock().expect("storage lock");
+        let company = application::create_company(
+            &mut guard,
+            CreateCompanyRequest {
+                actor: Actor::User,
+                company: CompanyPatch {
+                    name: "Coastal Fence".into(),
+                    kind: "client".into(),
+                    ..CompanyPatch::default()
+                },
+            },
+        )
+        .expect("seed company");
+        guard
+            .connection()
+            .execute(
+                "UPDATE companies SET id = ?1 WHERE id = ?2",
+                rusqlite::params![&contact_id, &company.id],
+            )
+            .expect("collide the ids");
+    }
+
+    let proposal = propose_update_with_provider(
+        &storage,
+        &CannedProvider::new(r#"{"city":"Orlando"}"#),
+        &store,
+        (ProposalEntityType::Contact, &contact_id, 1),
+        "She moved to Orlando",
+    )
+    .expect("draft an update");
+
+    // The contact moves on behind the draft's back.
+    {
+        let mut guard = storage.lock().expect("storage lock");
+        application::update_contact(
+            &mut guard,
+            UpdateContactRequest {
+                actor: Actor::User,
+                contact_id: contact_id.clone(),
+                expected_version: 1,
+                patch: contact_patch("Dana Ruiz"),
+            },
+        )
+        .expect("hand edit");
+    }
+
+    let mut guard = storage.lock().expect("storage lock");
+    let error = apply_proposal(
+        &mut guard,
+        &store,
+        ApplyProposalRequest {
+            actor: Actor::User,
+            proposal_id: proposal.id,
+            // A true statement about the company, not about the contact.
+            expected_versions: vec![RecordVersion {
+                entity_type: "company".into(),
+                entity_id: contact_id.clone(),
+                version: 1,
+            }],
+        },
+    )
+    .expect_err("the contact's own version is still checked");
+    assert_eq!(error.kind(), "version_conflict");
+    assert!(error.to_string().contains("contact"));
+}
+
 #[test]
 fn proposing_an_update_against_a_stale_version_conflicts_before_the_model_is_asked() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -675,6 +753,72 @@ fn undoing_a_created_record_archives_it_rather_than_deleting_it() {
     )
     .expect_err("one undo per apply");
     assert_eq!(error.kind(), "proposal_expired");
+}
+
+/// The audit row is written after the record change has already committed, so
+/// it must never be able to strand an applied draft with no way back.
+#[test]
+fn a_failed_audit_row_still_leaves_the_apply_undoable() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let store = ProposalStore::new();
+
+    // Refuse exactly the proposal audit row; the ordinary create row still
+    // writes, so this isolates the best-effort logging path.
+    {
+        let guard = storage.lock().expect("storage lock");
+        guard
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER refuse_proposal_audit BEFORE INSERT ON command_log
+                 WHEN NEW.summary LIKE 'applied the assistant%'
+                 BEGIN SELECT RAISE(ABORT, 'audit row refused'); END;",
+            )
+            .expect("install the audit trigger");
+    }
+
+    let proposal = propose_record_with_provider(
+        &storage,
+        &CannedProvider::new(r#"{"displayName":"Dana Ruiz","kind":"client"}"#),
+        &store,
+        ProposalEntityType::Contact,
+        "New client Dana Ruiz",
+    )
+    .expect("draft a contact");
+
+    let mut guard = storage.lock().expect("storage lock");
+    let applied = apply_proposal(
+        &mut guard,
+        &store,
+        ApplyProposalRequest {
+            actor: Actor::Agent,
+            proposal_id: proposal.id,
+            expected_versions: Vec::new(),
+        },
+    )
+    .expect("the apply survives a refused audit row");
+
+    // The record exists and the undo token still works.
+    application::get_contact(&guard, &applied.entity_id).expect("the record was created");
+    let undone = undo_proposal(
+        &mut guard,
+        &store,
+        UndoProposalRequest {
+            actor: Actor::Agent,
+            undo_token: applied.undo_token,
+            expected_versions: Vec::new(),
+        },
+    )
+    .expect("undo works after a failed audit row");
+    assert_eq!(undone.action, "archived");
+    drop(guard);
+
+    assert!(
+        !command_log(&storage)
+            .iter()
+            .any(|(_, _, summary)| summary.contains("applied the assistant's draft")),
+        "the trigger really did refuse the audit row"
+    );
 }
 
 #[test]
@@ -956,6 +1100,54 @@ fn fields_the_app_does_not_store_become_warnings_not_data() {
         .changes
         .iter()
         .all(|change| change.field != "creditCard"));
+}
+
+/// A hostile or runaway model answer cannot push an unbounded string into a
+/// record: the draft is shortened, the user is told, and the apply still works.
+#[test]
+fn an_oversized_drafted_note_is_shortened_warned_about_and_still_applies() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let store = ProposalStore::new();
+    let answer = format!(
+        r#"{{"displayName":"Dana Ruiz","kind":"client","notes":"{}"}}"#,
+        "n".repeat(50_000)
+    );
+
+    let proposal = propose_record_with_provider(
+        &storage,
+        &CannedProvider::new(&answer),
+        &store,
+        ProposalEntityType::Contact,
+        "New client Dana Ruiz with a long note",
+    )
+    .expect("draft a contact");
+
+    assert!(proposal
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("notes")));
+    let notes = proposal
+        .changes
+        .iter()
+        .find(|change| change.field == "notes")
+        .and_then(|change| change.after.clone())
+        .expect("the note is still part of the draft");
+    assert_eq!(notes.chars().count(), 10_000);
+
+    let mut guard = storage.lock().expect("storage lock");
+    let applied = apply_proposal(
+        &mut guard,
+        &store,
+        ApplyProposalRequest {
+            actor: Actor::Agent,
+            proposal_id: proposal.id,
+            expected_versions: Vec::new(),
+        },
+    )
+    .expect("a shortened draft still applies");
+    let contact = application::get_contact(&guard, &applied.entity_id).expect("created contact");
+    assert_eq!(contact.notes.as_deref().map(str::len), Some(10_000));
 }
 
 #[test]
