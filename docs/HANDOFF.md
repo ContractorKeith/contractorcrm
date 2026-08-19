@@ -78,6 +78,34 @@ the record version, and writes a command-log row; the actor defaults to
   ContractorProject job created from this opportunity.
 - `unlink_job(opportunityId, expectedVersion)` — clears the job reference.
 
+## ContractorBooks party reference
+
+ContractorBooks stores a reference to a CRM party (contact or company) on its own
+customer and vendor records, so an invoice or a bill can point back at who this is in
+the CRM. Its shape mirrors the references above with one renamed field:
+
+```json
+{ "tool": "contractorcrm", "id": "contact_01HXY7Q2ZK", "label": "Ridgeline Homes", "linkedAt": "2026-08-19T14:02:00.000Z" }
+```
+
+| ContractorCRM (`quoteRef` / `jobRef`) | ContractorBooks party reference |
+| --- | --- |
+| `externalId` | `id` |
+| `tool`, `label`, `linkedAt` | same |
+
+The CRM owns `tool`, `id` and `label`; ContractorBooks stamps `linkedAt` and owns the
+stub's lifecycle. Books writes it through its own
+`link_crm_party(entityType, entityId, crmRef, expectedVersion)` command — version-checked
+and audited on its side, and never reaching this database.
+
+**The back-reference is future work here.** ContractorCRM stores no pointer to a
+ContractorBooks customer or vendor today, so the link is one-directional: Books knows
+the CRM party, the CRM does not know the Books party. Adding one changes nothing in the
+shape above.
+
+Canonical schema and field ownership for this and the other Books envelopes:
+`../contractorbooks/docs/HANDOFF.md`.
+
 ## Won-stage rule
 
 `link_job` is allowed only while the opportunity sits in a stage of kind
