@@ -76,6 +76,17 @@ Next up is Slice 6 (suite hand-off and hardening).
 - Marketing automation, email campaigns, lead scoring, full email client, heavy reporting
   dashboards, forced cloud sync, mobile apps, enterprise permissions, multi-tenant.
 
+## Documentation
+
+Canonical user docs for ContractorCRM live in the website repo:
+**`ContractorKeith/opencontractoros` → `src/content/docs/crm/`** (served at
+opencontractoros.com/docs/crm/).
+
+**Hard rule:** any PR or commit that changes user-facing behavior must include
+a matching docs update at that exact path, committed and pushed in the same
+working session. Every PR must carry a `docs-updated` or `docs-n/a` marker in
+its body or labels — `.github/workflows/docs-reminder.yml` fails it otherwise.
+
 <!-- kodade:kodmem-project:v1:start -->
 Follow the managed KödMem project-context rule in `AGENTS.md`.
 <!-- kodade:kodmem-project:v1:end -->

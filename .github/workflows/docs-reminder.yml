@@ -1,0 +1,31 @@
+# Fails the PR unless it carries a docs marker: a CHECKED 'docs-updated' or
+# 'docs-n/a' checkbox in the body (the PR template provides both, unchecked),
+# or a label with either name. Docs live in ContractorKeith/opencontractoros
+# under src/content/docs/crm/.
+name: Docs reminder
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, edited, labeled, unlabeled, synchronize]
+
+jobs:
+  docs-marker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for docs-updated / docs-n/a marker
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          checked_box='^[[:space:]]*[-*][[:space:]]*\[[xX]\][[:space:]]*docs-(updated|n/a)'
+          if printf '%s\n' "$PR_BODY" | grep -qiE "$checked_box"; then
+            echo "Docs marker found (checked box in PR body)."
+          elif printf '%s' "$PR_LABELS" | grep -qiE 'docs-updated|docs-n/a'; then
+            echo "Docs marker found (label)."
+          else
+            echo "::error::Missing docs marker. If this PR changes user-facing behavior, update the docs in ContractorKeith/opencontractoros under src/content/docs/crm/ and CHECK the 'docs-updated' box in the PR body (or add the label). If no docs change is needed, check 'docs-n/a' instead."
+            exit 1
+          fi

@@ -1,0 +1,32 @@
+# On push to main, asks ContractorKeith/opencontractoros to rebuild the docs
+# site via repository_dispatch. Docs content lives in the website repo, so this
+# is a "rebuild anyway" safety net (fresh deploy after app releases), not the
+# primary publish path. Skips gracefully when DOCS_SYNC_TOKEN is absent.
+name: Docs sync trigger
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch docs-sync to opencontractoros
+        env:
+          DOCS_SYNC_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$DOCS_SYNC_TOKEN" ]; then
+            echo "DOCS_SYNC_TOKEN is not set - skipping docs sync dispatch."
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer $DOCS_SYNC_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/ContractorKeith/opencontractoros/dispatches \
+            -d "{\"event_type\":\"docs-sync\",\"client_payload\":{\"repo\":\"$SOURCE_REPO\"}}"
+          echo "Dispatched docs-sync from $SOURCE_REPO."
