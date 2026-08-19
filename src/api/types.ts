@@ -786,6 +786,79 @@ export interface ProviderCheck {
   availableModels: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Proposals (src-tauri/src/proposals.rs)
+// ---------------------------------------------------------------------------
+
+export type ProposalEntityType = "contact" | "company" | "opportunity";
+
+export type ProposalKind =
+  | "create_contact"
+  | "create_company"
+  | "create_opportunity"
+  | "update_contact"
+  | "update_company"
+  | "update_opportunity";
+
+// One field a draft would change; before is null when the record is new.
+export interface FieldChange {
+  field: string;
+  before: string | null;
+  after: string | null;
+}
+
+// A record and the version the caller believes it is at.
+export interface RecordVersion {
+  entityType: ProposalEntityType;
+  entityId: string;
+  version: number;
+}
+
+// A drafted change waiting for an explicit apply. Held in the core's memory
+// only — never saved — and expires, so it is applied soon or asked again.
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  entityType: ProposalEntityType;
+  entityId: string | null;
+  summary: string;
+  changes: FieldChange[];
+  warnings: string[];
+  affectedVersions: RecordVersion[];
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface ApplyProposalRequest {
+  actor?: Actor;
+  proposalId: string;
+  expectedVersions?: RecordVersion[];
+}
+
+export interface UndoProposalRequest {
+  actor?: Actor;
+  undoToken: string;
+  expectedVersions?: RecordVersion[];
+}
+
+// What applying a draft changed, plus the token that reverses it.
+export interface ProposalApplied {
+  entityType: ProposalEntityType;
+  entityId: string;
+  created: boolean;
+  version: number;
+  undoToken: string;
+  undoExpiresAt: string;
+}
+
+// What an undo did: archived (undoing a create) or reverted (undoing a change).
+export interface ProposalUndone {
+  entityType: ProposalEntityType;
+  entityId: string;
+  action: "archived" | "reverted";
+  version: number;
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =
@@ -803,6 +876,8 @@ export type CommandError =
     }
   | { kind: "invalid_stored_data"; message: string }
   | { kind: "provider_unavailable"; message: string; reason: string }
+  | { kind: "proposal_expired"; message: string; proposalId: string }
+  | { kind: "read_only"; message: string; command: string }
   | { kind: "storage_unavailable"; message: string };
 
 // Narrow an unknown rejection into a CommandError.

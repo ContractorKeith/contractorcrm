@@ -84,7 +84,11 @@
     {"name":"set_ai_settings","mode":"write","input":[{"name":"request","type":"SetAiSettingsRequest","required":true}],"output":"AiSettings"},
     {"name":"set_ai_api_key","mode":"write","input":[{"name":"apiKey","type":"string","required":true}],"output":"AiSettings"},
     {"name":"clear_ai_api_key","mode":"write","input":[],"output":"AiSettings"},
-    {"name":"test_ai_provider","mode":"read","input":[],"output":"ProviderCheck"}
+    {"name":"test_ai_provider","mode":"read","input":[],"output":"ProviderCheck"},
+    {"name":"propose_record","mode":"read","input":[{"name":"kind","type":"ProposalEntityType","required":true},{"name":"description","type":"string","required":true}],"output":"Proposal"},
+    {"name":"propose_update","mode":"read","input":[{"name":"entityType","type":"ProposalEntityType","required":true},{"name":"entityId","type":"string","required":true},{"name":"request","type":"string","required":true},{"name":"expectedVersion","type":"integer","required":true}],"output":"Proposal"},
+    {"name":"apply_proposal","mode":"write","input":[{"name":"request","type":"ApplyProposalRequest","required":true}],"output":"ProposalApplied"},
+    {"name":"undo_proposal","mode":"write","input":[{"name":"request","type":"UndoProposalRequest","required":true}],"output":"ProposalUndone"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
@@ -172,6 +176,15 @@
     "SetAiSettingsRequest": {"type":"object","additionalProperties":false,"required":["enabled","providerLabel","baseUrl","model"],"properties":{"actor":{"type":"Actor"},"enabled":{"type":"boolean"},"providerLabel":{"type":"string"},"baseUrl":{"type":"string"},"model":{"type":"string"}}},
     "RecordRef": {"type":"object","additionalProperties":false,"description":"one record disclosed to a provider call","required":["entityType","entityId","label"],"properties":{"entityType":{"type":"string"},"entityId":{"type":"string"},"label":{"type":"string"}}},
     "ProviderCheck": {"type":"object","additionalProperties":false,"description":"result of an explicit AI provider connection test","required":["providerLabel","endpointHost","local","model","modelAvailable","availableModels"],"properties":{"providerLabel":{"type":"string"},"endpointHost":{"type":"string"},"local":{"type":"boolean"},"model":{"type":"string"},"modelAvailable":{"type":"boolean"},"availableModels":{"type":"string[]"}}},
+    "ProposalEntityType": {"enum":["contact","company","opportunity"]},
+    "ProposalKind": {"enum":["create_contact","create_company","create_opportunity","update_contact","update_company","update_opportunity"]},
+    "FieldChange": {"type":"object","additionalProperties":false,"description":"one field a proposal would change; before is null on a create","required":["field","before","after"],"properties":{"field":{"type":"string"},"before":{"type":["string","null"]},"after":{"type":["string","null"]}}},
+    "RecordVersion": {"type":"object","additionalProperties":false,"description":"a record and the version the caller believes it is at","required":["entityType","entityId","version"],"properties":{"entityType":{"type":"ProposalEntityType"},"entityId":{"type":"string"},"version":{"type":"integer"}}},
+    "Proposal": {"type":"object","additionalProperties":false,"description":"a validated draft held in memory only, never written to SQLite; expires 15 minutes after it is created","required":["id","kind","entityType","entityId","summary","changes","warnings","affectedVersions","createdAt","expiresAt"],"properties":{"id":{"type":"string"},"kind":{"type":"ProposalKind"},"entityType":{"type":"ProposalEntityType"},"entityId":{"type":["string","null"]},"summary":{"type":"string"},"changes":{"type":"FieldChange[]"},"warnings":{"type":"string[]"},"affectedVersions":{"type":"RecordVersion[]"},"createdAt":{"type":"string"},"expiresAt":{"type":"string"}}},
+    "ApplyProposalRequest": {"type":"object","additionalProperties":false,"description":"apply one draft; expectedVersions are re-checked against current data before anything is written","required":["proposalId"],"properties":{"actor":{"type":"Actor"},"proposalId":{"type":"string"},"expectedVersions":{"type":"RecordVersion[]","required":false}}},
+    "UndoProposalRequest": {"type":"object","additionalProperties":false,"description":"reverse one applied draft; single use and version-checked","required":["undoToken"],"properties":{"actor":{"type":"Actor"},"undoToken":{"type":"string"},"expectedVersions":{"type":"RecordVersion[]","required":false}}},
+    "ProposalApplied": {"type":"object","additionalProperties":false,"description":"what applying a draft changed, plus the token that reverses it","required":["entityType","entityId","created","version","undoToken","undoExpiresAt"],"properties":{"entityType":{"type":"ProposalEntityType"},"entityId":{"type":"string"},"created":{"type":"boolean"},"version":{"type":"integer"},"undoToken":{"type":"string"},"undoExpiresAt":{"type":"string"}}},
+    "ProposalUndone": {"type":"object","additionalProperties":false,"description":"what an undo did: archived (undoing a create) or reverted","required":["entityType","entityId","action","version"],"properties":{"entityType":{"type":"ProposalEntityType"},"entityId":{"type":"string"},"action":{"enum":["archived","reverted"]},"version":{"type":"integer"}}},
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",
@@ -196,7 +209,9 @@
         "recordId":{"type":"string","required":false},
         "expectedVersion":{"type":"integer","required":false},
         "currentVersion":{"type":"integer","required":false},
-        "reason":{"type":"string","required":false}
+        "reason":{"type":"string","required":false},
+        "proposalId":{"type":"string","required":false},
+        "command":{"type":"string","required":false}
       }
     }
   },
@@ -210,6 +225,8 @@
     "backup_failed",
     "restore_invalid",
     "provider_unavailable",
+    "proposal_expired",
+    "read_only",
     "storage_unavailable",
     "io"
   ],

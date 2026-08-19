@@ -10,6 +10,10 @@ use contractorcrm_lib::{
         AddAttachmentRequest, Attachment, AttachmentParentType, RemoveAttachmentRequest,
     },
     error::ApplicationError,
+    proposals::{
+        ApplyProposalRequest, FieldChange, Proposal, ProposalApplied, ProposalEntityType,
+        ProposalKind, ProposalUndone, RecordVersion, UndoProposalRequest,
+    },
     storage, LOCAL_API_V1_COMMANDS, LOCAL_API_VERSION,
 };
 use std::collections::BTreeMap;
@@ -350,6 +354,14 @@ fn local_api_v1_matches_the_registered_command_contract() {
         ApplicationError::RestoreInvalid("invalid".into()).kind(),
         ApplicationError::ProviderUnavailable {
             reason: "unreachable".into(),
+        }
+        .kind(),
+        ApplicationError::ProposalExpired {
+            proposal_id: "proposal-1".into(),
+        }
+        .kind(),
+        ApplicationError::ReadOnly {
+            command: "apply_proposal".into(),
         }
         .kind(),
         ApplicationError::Database(rusqlite::Error::InvalidQuery).kind(),
@@ -844,4 +856,125 @@ fn ai_provider_commands_and_wire_types_match_the_published_v1_contract() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn proposal_commands_and_wire_types_match_the_published_v1_contract() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    for (command, mode) in [
+        ("propose_record", "read"),
+        ("propose_update", "read"),
+        ("apply_proposal", "write"),
+        ("undo_proposal", "write"),
+    ] {
+        let published = commands
+            .iter()
+            .find(|entry| entry["name"] == command)
+            .unwrap_or_else(|| panic!("{command} must be published"));
+        // Drafting is published as a read: only apply/undo ever write.
+        assert_eq!(published["mode"], mode, "{command} mode");
+    }
+
+    let proposal = Proposal {
+        id: "proposal-1".into(),
+        kind: ProposalKind::UpdateContact,
+        entity_type: ProposalEntityType::Contact,
+        entity_id: Some("contact-1".into()),
+        summary: "Update contact \"Dana Ruiz\"".into(),
+        changes: vec![FieldChange {
+            field: "city".into(),
+            before: Some("Sanford".into()),
+            after: Some("Orlando".into()),
+        }],
+        warnings: vec!["Filed as a lead — change the kind if that's not right.".into()],
+        affected_versions: vec![RecordVersion {
+            entity_type: "contact".into(),
+            entity_id: "contact-1".into(),
+            version: 3,
+        }],
+        created_at: "2026-08-19T12:00:00.000Z".into(),
+        expires_at: "2026-08-19T12:15:00.000Z".into(),
+    };
+    assert_published_shape(&schema, "Proposal", &proposal);
+    assert_published_shape(&schema, "FieldChange", &proposal.changes[0]);
+    assert_published_shape(&schema, "RecordVersion", &proposal.affected_versions[0]);
+    assert_published_shape(
+        &schema,
+        "ProposalApplied",
+        &ProposalApplied {
+            entity_type: ProposalEntityType::Contact,
+            entity_id: "contact-1".into(),
+            created: false,
+            version: 4,
+            undo_token: "undo-1".into(),
+            undo_expires_at: "2026-08-19T12:15:00.000Z".into(),
+        },
+    );
+    assert_published_shape(
+        &schema,
+        "ProposalUndone",
+        &ProposalUndone {
+            entity_type: ProposalEntityType::Contact,
+            entity_id: "contact-1".into(),
+            action: "reverted".into(),
+            version: 5,
+        },
+    );
+
+    // Published enum values are the wire strings the core actually emits.
+    assert_eq!(
+        string_array(&schema["wireTypes"]["ProposalEntityType"], "enum"),
+        vec!["contact", "company", "opportunity"]
+    );
+    let published_kinds = string_array(&schema["wireTypes"]["ProposalKind"], "enum");
+    for kind in [
+        ProposalKind::CreateContact,
+        ProposalKind::CreateCompany,
+        ProposalKind::CreateOpportunity,
+        ProposalKind::UpdateContact,
+        ProposalKind::UpdateCompany,
+        ProposalKind::UpdateOpportunity,
+    ] {
+        let wire = serde_json::to_value(kind).expect("serialize kind");
+        assert!(
+            published_kinds.contains(&wire.as_str().expect("kind is a string").to_owned()),
+            "{wire} must be published"
+        );
+    }
+
+    // Apply/undo requests default the actor and reject unknown fields, like
+    // every other write request.
+    let request: ApplyProposalRequest =
+        serde_json::from_value(serde_json::json!({"proposalId": "proposal-1"}))
+            .expect("actor and versions are optional");
+    assert_eq!(
+        serde_json::to_value(request.actor).expect("serialize actor"),
+        "user"
+    );
+    assert!(request.expected_versions.is_empty());
+    assert!(serde_json::from_value::<ApplyProposalRequest>(
+        serde_json::json!({"proposalId": "proposal-1", "force": true})
+    )
+    .is_err());
+    let undo: UndoProposalRequest =
+        serde_json::from_value(serde_json::json!({"undoToken": "undo-1"}))
+            .expect("actor and versions are optional");
+    assert_eq!(undo.undo_token, "undo-1");
+}
+
+/// Every field the core serializes is published, and nothing more.
+fn assert_published_shape<T: serde::Serialize>(schema: &Value, name: &str, value: &T) {
+    let serialized = serde_json::to_value(value).expect("serialize wire value");
+    let mut actual = serialized
+        .as_object()
+        .unwrap_or_else(|| panic!("{name} is an object"))
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual.sort();
+    let mut expected = string_array(&schema["wireTypes"][name], "required");
+    expected.sort();
+    assert_eq!(expected, actual, "{name} wire shape");
+    assert_eq!(schema["wireTypes"][name]["additionalProperties"], false);
 }

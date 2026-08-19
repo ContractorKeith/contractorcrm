@@ -62,6 +62,16 @@ pub enum ApplicationError {
     #[error("{reason}")]
     ProviderUnavailable { reason: String },
 
+    /// The draft is gone — expired, already applied, or never existed. All
+    /// three look the same to the caller: ask the assistant again.
+    #[error("that draft is no longer available; ask the assistant again")]
+    ProposalExpired { proposal_id: String },
+
+    /// The caller is connected read-only (the agent interface's read mode);
+    /// defined here, returned by the MCP adapter.
+    #[error("this connection is read-only: {command} is not available")]
+    ReadOnly { command: String },
+
     #[error("local database error: {0}")]
     Database(#[from] rusqlite::Error),
 
@@ -82,6 +92,8 @@ impl ApplicationError {
             Self::BackupFailed(_) => "backup_failed",
             Self::RestoreInvalid(_) => "restore_invalid",
             Self::ProviderUnavailable { .. } => "provider_unavailable",
+            Self::ProposalExpired { .. } => "proposal_expired",
+            Self::ReadOnly { .. } => "read_only",
             Self::Database(_) => "storage_unavailable",
             Self::Io(_) => "io",
         }

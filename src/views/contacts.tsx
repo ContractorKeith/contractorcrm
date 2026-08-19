@@ -16,6 +16,7 @@ import type {
   Tag,
   CustomFieldDefinition,
 } from "../api/types";
+import { AssistantPrompt } from "../components/ProposalDialog";
 import { CsvImportDialog } from "../components/CsvImportDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordAttachments } from "../components/RecordAttachments";
@@ -224,6 +225,13 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
             <span>Show archived</span>
           </label>
           <span className="list-count">{contacts?.length ?? 0}</span>
+          <AssistantPrompt
+            client={client}
+            entityType="contact"
+            label="Ask the assistant"
+            placeholder="Describe the new contact…"
+            onApplied={() => setReloadToken((token) => token + 1)}
+          />
           <button type="button" className="button" onClick={() => void pickImportFile()}>
             Import CSV…
           </button>
@@ -385,6 +393,15 @@ export function ContactDetailView({ client, contactId, onBack, onEdit }: Contact
           </div>
         ))}
       </dl>
+
+      <AssistantPrompt
+        client={client}
+        entityType="contact"
+        target={{ entityId: contact.id, expectedVersion: contact.version }}
+        label="Ask the assistant"
+        placeholder="Describe the change…"
+        onApplied={load}
+      />
 
       <RecordMetadata client={client} entityType="contact" recordId={contact.id} expectedVersion={contact.version} onSaved={load} />
 

@@ -121,6 +121,10 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   setAiApiKey: vi.fn(),
   clearAiApiKey: vi.fn(),
   testAiProvider: vi.fn(),
+  proposeRecord: vi.fn(),
+  proposeUpdate: vi.fn(),
+  applyProposal: vi.fn(),
+  undoProposal: vi.fn(),
   ...overrides,
 });
 

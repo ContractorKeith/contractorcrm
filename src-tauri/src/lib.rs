@@ -5,6 +5,7 @@ pub mod attachments;
 pub mod attention;
 pub mod domain;
 pub mod error;
+pub mod proposals;
 pub mod storage;
 
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,10 @@ use attachments::{
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
+use proposals::{
+    ApplyProposalRequest, Proposal, ProposalApplied, ProposalEntityType, ProposalStore,
+    ProposalUndone, UndoProposalRequest,
+};
 use serde::Serialize;
 use storage::Storage;
 use tauri::{Manager, State};
@@ -125,6 +130,10 @@ macro_rules! with_local_api_v1_commands {
             set_ai_api_key,
             clear_ai_api_key,
             test_ai_provider,
+            propose_record,
+            propose_update,
+            apply_proposal,
+            undo_proposal,
         }
     };
 }
@@ -181,6 +190,14 @@ enum CommandErrorDetails {
     Provider {
         reason: String,
     },
+    /// Which draft went away, so the UI can drop it from its state.
+    Proposal {
+        proposal_id: String,
+    },
+    /// Which command a read-only connection refused.
+    ReadOnly {
+        command: String,
+    },
     None {},
 }
 
@@ -217,6 +234,12 @@ impl From<ApplicationError> for CommandError {
             },
             ApplicationError::ProviderUnavailable { reason } => CommandErrorDetails::Provider {
                 reason: reason.clone(),
+            },
+            ApplicationError::ProposalExpired { proposal_id } => CommandErrorDetails::Proposal {
+                proposal_id: proposal_id.clone(),
+            },
+            ApplicationError::ReadOnly { command } => CommandErrorDetails::ReadOnly {
+                command: command.clone(),
             },
             ApplicationError::InvalidStoredData(_)
             | ApplicationError::BackupFailed(_)
@@ -1017,6 +1040,68 @@ fn test_ai_provider(
     provider.check().map_err(Into::into)
 }
 
+// Proposal commands — plain-language drafts. propose_* only read; only
+// apply_proposal and undo_proposal write.
+
+#[tauri::command]
+fn propose_record(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    proposals: State<'_, ProposalStore>,
+    kind: ProposalEntityType,
+    description: String,
+) -> Result<Proposal, CommandError> {
+    // The model call inside runs with no storage lock held (see proposals.rs).
+    proposals::propose_record(
+        storage.inner(),
+        credentials.as_ref(),
+        proposals.inner(),
+        kind,
+        &description,
+    )
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+fn propose_update(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    proposals: State<'_, ProposalStore>,
+    entity_type: ProposalEntityType,
+    entity_id: String,
+    request: String,
+    expected_version: i64,
+) -> Result<Proposal, CommandError> {
+    proposals::propose_update(
+        storage.inner(),
+        credentials.as_ref(),
+        proposals.inner(),
+        (entity_type, &entity_id, expected_version),
+        &request,
+    )
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+fn apply_proposal(
+    storage: State<'_, SharedStorage>,
+    proposals: State<'_, ProposalStore>,
+    request: ApplyProposalRequest,
+) -> Result<ProposalApplied, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    proposals::apply_proposal(&mut storage, proposals.inner(), request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn undo_proposal(
+    storage: State<'_, SharedStorage>,
+    proposals: State<'_, ProposalStore>,
+    request: UndoProposalRequest,
+) -> Result<ProposalUndone, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    proposals::undo_proposal(&mut storage, proposals.inner(), request).map_err(Into::into)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     macro_rules! command_handler {
@@ -1042,6 +1127,8 @@ pub fn run() {
             // the database; constructing the handle touches no keychain yet.
             let credentials: SharedCredentials = Arc::new(ai::KeyringCredentialStore::new());
             app.manage(credentials);
+            // Drafts live in memory only and expire; nothing here is persisted.
+            app.manage(ProposalStore::new());
             Ok(())
         })
         .invoke_handler(with_local_api_v1_commands!(command_handler))

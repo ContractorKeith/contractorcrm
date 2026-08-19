@@ -72,6 +72,12 @@ import type {
   AiSettings,
   SetAiSettingsRequest,
   ProviderCheck,
+  ApplyProposalRequest,
+  Proposal,
+  ProposalApplied,
+  ProposalEntityType,
+  ProposalUndone,
+  UndoProposalRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -160,6 +166,16 @@ export interface CoreClient {
   setAiApiKey(apiKey: string): Promise<AiSettings>;
   clearAiApiKey(): Promise<AiSettings>;
   testAiProvider(): Promise<ProviderCheck>;
+  // Drafting reads only; apply/undo are the writes.
+  proposeRecord(kind: ProposalEntityType, description: string): Promise<Proposal>;
+  proposeUpdate(
+    entityType: ProposalEntityType,
+    entityId: string,
+    request: string,
+    expectedVersion: number,
+  ): Promise<Proposal>;
+  applyProposal(request: ApplyProposalRequest): Promise<ProposalApplied>;
+  undoProposal(request: UndoProposalRequest): Promise<ProposalUndone>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -247,4 +263,9 @@ export const tauriCoreClient: CoreClient = {
   setAiApiKey: (apiKey) => invoke("set_ai_api_key", { apiKey }),
   clearAiApiKey: () => invoke("clear_ai_api_key"),
   testAiProvider: () => invoke("test_ai_provider"),
+  proposeRecord: (kind, description) => invoke("propose_record", { kind, description }),
+  proposeUpdate: (entityType, entityId, request, expectedVersion) =>
+    invoke("propose_update", { entityType, entityId, request, expectedVersion }),
+  applyProposal: (request) => invoke("apply_proposal", { request }),
+  undoProposal: (request) => invoke("undo_proposal", { request }),
 };

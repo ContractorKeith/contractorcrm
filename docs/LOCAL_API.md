@@ -57,17 +57,55 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 
 ### Propose
 
-- `propose_record(kind, description)` — natural-language contact/company/opportunity creation as a typed draft
-- `propose_update(entityType, entityId, request, expectedVersion)`
+- `propose_record(kind, description)` — natural-language contact/company/
+  opportunity creation as a typed draft. The configured provider extracts a
+  strict-JSON draft (fences, prose, and trailing chatter are tolerated;
+  anything unparseable is `validation_failed` / `draft_unreadable`, never a
+  panic or a partial write). Values the app doesn't store, unexpected value
+  shapes, and names that match no record become `warnings`; the draft itself is
+  then validated with exactly the rules `create_contact`/`create_company`/
+  `create_opportunity` run. A drafted opportunity may name its contact/company
+  and the id is resolved deterministically here — an ambiguous or unknown name
+  resolves to nothing and warns. Returns a `Proposal`.
+- `propose_update(entityType, entityId, request, expectedVersion)` — loads the
+  record (`not_found`), checks `expectedVersion` before the model is asked
+  (`version_conflict`), sends a bounded field projection as context (no
+  attachment bodies, no credentials) with the record named in the call's
+  disclosure list, and diffs the extracted patch against current values so only
+  fields that actually change appear. Record links (company/contact) are never
+  re-pointed by a plain-language edit. Returns a `Proposal` whose
+  `affectedVersions` names the record and the version the draft was built from.
 - `propose_followup(parentType, parentId, objective?)` — drafts follow-up wording plus an optional task
 - `summarize_history(parentType, parentId, window?)` — explanation only, no proposal ID
 - `explain_attention_flag(flagId)` — explanation only
 
 Proposal tools return a typed diff, warnings, affected versions, and an opaque proposal ID. They do not mutate CRM data.
 
+Drafts live in the running app's memory only — never in SQLite — and expire 15
+minutes after they are created. An unknown, expired, or already-applied id is
+`proposal_expired`; the three are deliberately indistinguishable.
+
 ### Write
 
-- `apply_proposal(proposalId, expectedVersions)`
+- `apply_proposal(request)` — `{actor?, proposalId, expectedVersions?}`. Takes
+  the draft (single use), re-checks every asserted version plus the version the
+  draft was built against, and only then applies it through the same
+  `create_*`/`update_*` application code the manual path uses, so validation
+  runs again against current data in one transaction. A `version_conflict` or a
+  failed re-validation puts the draft back so it can be refreshed and retried.
+  Writes the ordinary record `command_log` row (actor from the request: `user`
+  from the UI, `agent` from an MCP client) plus one row recording that a draft
+  was applied. Returns `ProposalApplied { entityType, entityId, created,
+  version, undoToken, undoExpiresAt }`.
+- `undo_proposal(request)` — `{actor?, undoToken, expectedVersions?}`. Reverses
+  one applied draft in a single version-checked transaction: a created record is
+  archived (never hard-deleted), an updated record is restored from the stored
+  before-image. The record must still be exactly where the apply left it: the
+  post-apply version is checked unconditionally, so a caller that asserts
+  nothing gets `version_conflict` rather than a silent revert over work done
+  after the apply; `expectedVersions` is an additional guard on top, never a
+  substitute. Single use, same TTL as the draft, and audited like any other
+  write. Returns `ProposalUndone { entityType, entityId, action, version }`.
 - `create_contact(contact)` / `create_company(company)`
 - `update_contact(contactId, patch, expectedVersion)` / `update_company(companyId, patch, expectedVersion)`
 - `create_opportunity(opportunity)`

@@ -3565,6 +3565,24 @@ fn load_task_facts(connection: &rusqlite::Connection) -> Result<Vec<TaskFacts>, 
 // Validation
 // ---------------------------------------------------------------------------
 
+// Draft checks — the proposal engine runs exactly the rules the direct
+// create/update commands run, without writing anything.
+
+/// Validate a drafted contact patch; the result is discarded.
+pub fn check_contact_patch(patch: &ContactPatch) -> Result<(), ApplicationError> {
+    validate_contact_patch(patch.clone()).map(|_| ())
+}
+
+/// Validate a drafted company patch; the result is discarded.
+pub fn check_company_patch(patch: &CompanyPatch) -> Result<(), ApplicationError> {
+    validate_company_patch(patch.clone()).map(|_| ())
+}
+
+/// Validate a drafted opportunity patch; the result is discarded.
+pub fn check_opportunity_patch(patch: &OpportunityPatch) -> Result<(), ApplicationError> {
+    validate_opportunity_patch(patch.clone()).map(|_| ())
+}
+
 /// Company patch after validation, with parsed enums and trimmed text.
 struct ValidCompanyFields {
     name: String,

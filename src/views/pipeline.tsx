@@ -22,6 +22,7 @@ import {
   type Stage,
   type StageKind,
 } from "../api/types";
+import { AssistantPrompt } from "../components/ProposalDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordAttachments } from "../components/RecordAttachments";
 import { RecordMetadata } from "../components/RecordMetadata";
@@ -192,6 +193,7 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
   const [filterError, setFilterError] = useState<string | null>(null);
   const [csvStatus, setCsvStatus] = useState("");
   const [csvError, setCsvError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   // Pick a destination, then write every opportunity to it. The native save
   // dialog already confirms replacement, so the export overwrites directly.
@@ -234,7 +236,7 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
     return () => {
       active = false;
     };
-  }, [client, showArchived]);
+  }, [client, showArchived, reloadToken]);
   useEffect(() => { void Promise.all([client.listTags(true), client.listCustomFieldDefs("opportunity", true)]).then(([nextTags, nextDefinitions]) => { setTags(nextTags); setFieldDefinitions(nextDefinitions); }).catch(() => setFilterError("Tags and custom-field filters could not be loaded.")); }, [client]);
 
   // Toggle direction on the active column, ascending on a new one.
@@ -380,6 +382,13 @@ export function PipelineView({ client, onOpen, onCreate }: PipelineViewProps) {
             </label>
           ) : null}
           <span className="list-count">{opportunities?.length ?? 0}</span>
+          <AssistantPrompt
+            client={client}
+            entityType="opportunity"
+            label="Ask the assistant"
+            placeholder="Describe the new job…"
+            onApplied={() => setReloadToken((token) => token + 1)}
+          />
           <button type="button" className="button" onClick={() => void exportCsv()}>
             Export CSV…
           </button>
@@ -835,6 +844,14 @@ export function OpportunityDetailView({
         detail={detail}
         stageKind={stageById(detail.stageId)?.kind ?? null}
         onChanged={load}
+      />
+      <AssistantPrompt
+        client={client}
+        entityType="opportunity"
+        target={{ entityId: detail.id, expectedVersion: detail.version }}
+        label="Ask the assistant"
+        placeholder="Describe the change…"
+        onApplied={load}
       />
       <RecordMetadata client={client} entityType="opportunity" recordId={detail.id} expectedVersion={detail.version} onSaved={load} />
 
