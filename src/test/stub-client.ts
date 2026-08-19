@@ -109,6 +109,18 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listAttachments: vi.fn().mockResolvedValue([]),
   removeAttachment: vi.fn().mockResolvedValue({ fileRemoved: true }),
   attachmentPath: vi.fn().mockResolvedValue({ path: "", exists: true }),
+  getAiSettings: vi.fn().mockResolvedValue({
+    version: 1,
+    enabled: false,
+    providerLabel: "Local model",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "",
+    hasApiKey: false,
+  }),
+  setAiSettings: vi.fn(),
+  setAiApiKey: vi.fn(),
+  clearAiApiKey: vi.fn(),
+  testAiProvider: vi.fn(),
   ...overrides,
 });
 

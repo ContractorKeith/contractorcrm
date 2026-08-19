@@ -753,6 +753,39 @@ export interface AttachmentLocation {
   exists: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// AI provider seam (src-tauri/src/ai.rs)
+// ---------------------------------------------------------------------------
+
+// Non-secret provider settings. The API key itself never crosses this seam:
+// hasApiKey is derived from the OS credential store.
+export interface AiSettings {
+  version: number;
+  enabled: boolean;
+  providerLabel: string;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+}
+
+export interface SetAiSettingsRequest {
+  actor?: Actor;
+  enabled: boolean;
+  providerLabel: string;
+  baseUrl: string;
+  model: string;
+}
+
+// Result of an explicit connection test — never run on its own.
+export interface ProviderCheck {
+  providerLabel: string;
+  endpointHost: string;
+  local: boolean;
+  model: string;
+  modelAvailable: boolean;
+  availableModels: string[];
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =
@@ -769,6 +802,7 @@ export type CommandError =
       currentVersion: number;
     }
   | { kind: "invalid_stored_data"; message: string }
+  | { kind: "provider_unavailable"; message: string; reason: string }
   | { kind: "storage_unavailable"; message: string };
 
 // Narrow an unknown rejection into a CommandError.

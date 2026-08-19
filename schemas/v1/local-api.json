@@ -79,7 +79,12 @@
     {"name":"add_attachment","mode":"write","input":[{"name":"request","type":"AddAttachmentRequest","required":true}],"output":"Attachment"},
     {"name":"list_attachments","mode":"read","input":[{"name":"parentType","type":"AttachmentParentType","required":true},{"name":"parentId","type":"string","required":true}],"output":"Attachment[]"},
     {"name":"remove_attachment","mode":"write","input":[{"name":"request","type":"RemoveAttachmentRequest","required":true}],"output":"AttachmentRemoval"},
-    {"name":"attachment_path","mode":"read","input":[{"name":"attachmentId","type":"string","required":true}],"output":"AttachmentLocation"}
+    {"name":"attachment_path","mode":"read","input":[{"name":"attachmentId","type":"string","required":true}],"output":"AttachmentLocation"},
+    {"name":"get_ai_settings","mode":"read","input":[],"output":"AiSettings"},
+    {"name":"set_ai_settings","mode":"write","input":[{"name":"request","type":"SetAiSettingsRequest","required":true}],"output":"AiSettings"},
+    {"name":"set_ai_api_key","mode":"write","input":[{"name":"apiKey","type":"string","required":true}],"output":"AiSettings"},
+    {"name":"clear_ai_api_key","mode":"write","input":[],"output":"AiSettings"},
+    {"name":"test_ai_provider","mode":"read","input":[],"output":"ProviderCheck"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
@@ -163,6 +168,10 @@
     "RemoveAttachmentRequest": {"type":"object","additionalProperties":false,"required":["attachmentId","expectedVersion"],"properties":{"actor":{"type":"Actor"},"attachmentId":{"type":"string"},"expectedVersion":{"type":"integer"}}},
     "AttachmentRemoval": {"type":"object","additionalProperties":false,"required":["fileRemoved"],"properties":{"fileRemoved":{"type":"boolean"}}},
     "AttachmentLocation": {"type":"object","additionalProperties":false,"required":["path","exists"],"properties":{"path":{"type":"string","description":"absolute path of the managed file"},"exists":{"type":"boolean"}}},
+    "AiSettings": {"type":"object","additionalProperties":false,"description":"non-secret AI provider settings; hasApiKey is derived from the OS credential store and the key itself is never returned","required":["version","enabled","providerLabel","baseUrl","model","hasApiKey"],"properties":{"version":{"type":"integer","const":1},"enabled":{"type":"boolean"},"providerLabel":{"type":"string"},"baseUrl":{"type":"string"},"model":{"type":"string"},"hasApiKey":{"type":"boolean"}}},
+    "SetAiSettingsRequest": {"type":"object","additionalProperties":false,"required":["enabled","providerLabel","baseUrl","model"],"properties":{"actor":{"type":"Actor"},"enabled":{"type":"boolean"},"providerLabel":{"type":"string"},"baseUrl":{"type":"string"},"model":{"type":"string"}}},
+    "RecordRef": {"type":"object","additionalProperties":false,"description":"one record disclosed to a provider call","required":["entityType","entityId","label"],"properties":{"entityType":{"type":"string"},"entityId":{"type":"string"},"label":{"type":"string"}}},
+    "ProviderCheck": {"type":"object","additionalProperties":false,"description":"result of an explicit AI provider connection test","required":["providerLabel","endpointHost","local","model","modelAvailable","availableModels"],"properties":{"providerLabel":{"type":"string"},"endpointHost":{"type":"string"},"local":{"type":"boolean"},"model":{"type":"string"},"modelAvailable":{"type":"boolean"},"availableModels":{"type":"string[]"}}},
     "ParentType": {"enum":["contact","company","opportunity"]},
     "SearchResult": {
       "type":"object",
@@ -186,7 +195,8 @@
         "resource":{"type":"string","required":false},
         "recordId":{"type":"string","required":false},
         "expectedVersion":{"type":"integer","required":false},
-        "currentVersion":{"type":"integer","required":false}
+        "currentVersion":{"type":"integer","required":false},
+        "reason":{"type":"string","required":false}
       }
     }
   },
@@ -199,6 +209,7 @@
     "invalid_stored_data",
     "backup_failed",
     "restore_invalid",
+    "provider_unavailable",
     "storage_unavailable",
     "io"
   ],

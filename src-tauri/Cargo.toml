@@ -15,6 +15,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
 csv = "1.3"
+# AI provider API keys live in the OS credential store, never in SQLite.
+# Default (v1) features give the native macOS Keychain and Windows credential stores.
+keyring = "4.1.6"
 rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +27,8 @@ tauri-plugin-dialog = "2"
 # Opens a managed attachment with the OS default application.
 tauri-plugin-opener = "2"
 thiserror = "2.0.20"
+# Blocking HTTP for the AI provider adapter: small, synchronous, hard timeouts.
+ureq = { version = "3.4.0", features = ["json"] }
 uuid = { version = "1.24.0", features = ["serde", "v7"] }
 # Portable archive container: deflate only (no aes/bzip2/zstd/time backends).
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }

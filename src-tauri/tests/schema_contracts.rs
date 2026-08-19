@@ -1,4 +1,5 @@
 use contractorcrm_lib::{
+    ai::{AiSettings, ProviderCheck, SetAiSettingsRequest},
     application::{
         ContactImportMapping, CreateTagRequest, CustomFieldValueInput, ImportContactsRequest,
         ProductInfo, SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter,
@@ -347,6 +348,10 @@ fn local_api_v1_matches_the_registered_command_contract() {
         ApplicationError::InvalidStoredData("invalid".into()).kind(),
         ApplicationError::BackupFailed("failed".into()).kind(),
         ApplicationError::RestoreInvalid("invalid".into()).kind(),
+        ApplicationError::ProviderUnavailable {
+            reason: "unreachable".into(),
+        }
+        .kind(),
         ApplicationError::Database(rusqlite::Error::InvalidQuery).kind(),
         ApplicationError::Io(std::io::Error::other("failed")).kind(),
     ];
@@ -753,5 +758,90 @@ fn csv_import_export_publish_strict_bounded_wire_types() {
     assert_eq!(
         serde_json::to_value(defaulted.actor).expect("serialize actor"),
         "import"
+    );
+}
+
+#[test]
+fn ai_provider_commands_and_wire_types_match_the_published_v1_contract() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let names = schema["commands"]
+        .as_array()
+        .expect("commands array")
+        .iter()
+        .map(|command| command["name"].as_str().expect("command name"))
+        .collect::<Vec<_>>();
+    for command in [
+        "get_ai_settings",
+        "set_ai_settings",
+        "set_ai_api_key",
+        "clear_ai_api_key",
+        "test_ai_provider",
+    ] {
+        assert!(names.contains(&command), "{command} must be published");
+    }
+
+    // The settings wire shape carries the derived has-key flag and never the key.
+    let settings = serde_json::to_value(AiSettings {
+        version: 1,
+        enabled: true,
+        provider_label: "Local model".into(),
+        base_url: "http://127.0.0.1:11434/v1".into(),
+        model: "llama3.1".into(),
+        has_api_key: true,
+    })
+    .expect("serialize ai settings");
+    let mut actual_fields = settings
+        .as_object()
+        .expect("settings object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual_fields.sort();
+    let mut expected_fields = string_array(&schema["wireTypes"]["AiSettings"], "required");
+    expected_fields.sort();
+    assert_eq!(expected_fields, actual_fields);
+    assert!(!settings.to_string().contains("apiKey"));
+
+    let check = serde_json::to_value(ProviderCheck {
+        provider_label: "Local model".into(),
+        endpoint_host: "127.0.0.1:11434".into(),
+        local: true,
+        model: "llama3.1".into(),
+        model_available: true,
+        available_models: vec!["llama3.1".into()],
+    })
+    .expect("serialize provider check");
+    let mut actual_check_fields = check
+        .as_object()
+        .expect("check object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    actual_check_fields.sort();
+    let mut expected_check_fields = string_array(&schema["wireTypes"]["ProviderCheck"], "required");
+    expected_check_fields.sort();
+    assert_eq!(expected_check_fields, actual_check_fields);
+
+    // Requests reject unknown fields and default the actor like every other write.
+    let request: SetAiSettingsRequest = serde_json::from_value(serde_json::json!({
+        "enabled": false,
+        "providerLabel": "Local model",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "model": ""
+    }))
+    .expect("actor is optional");
+    assert_eq!(
+        serde_json::to_value(request.actor).expect("serialize actor"),
+        "user"
+    );
+    assert!(
+        serde_json::from_value::<SetAiSettingsRequest>(serde_json::json!({
+            "enabled": false,
+            "providerLabel": "Local model",
+            "baseUrl": "http://127.0.0.1:11434/v1",
+            "model": "",
+            "apiKey": "sk-nope"
+        }))
+        .is_err()
     );
 }

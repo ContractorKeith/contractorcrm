@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { App } from "../App";
+import type { AiSettings } from "../api/types";
 import { makeContact, stubClient } from "../test/stub-client";
 
 // Native file dialogs only exist inside Tauri, so stand them in for tests.
@@ -176,5 +177,164 @@ describe("backup and data view", () => {
 
     expect(await screen.findByText("The file picker could not be opened.")).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("AI assistant settings", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.mocked(open).mockReset();
+    vi.mocked(save).mockReset();
+  });
+
+  const aiSettings = (overrides: Partial<AiSettings> = {}): AiSettings => ({
+    version: 1,
+    enabled: false,
+    providerLabel: "Local model",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "llama3.1",
+    hasApiKey: false,
+    ...overrides,
+  });
+
+  it("shows the local disclosure line and no test button until the assistant is on", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({ getAiSettings: vi.fn().mockResolvedValue(aiSettings()) });
+
+    render(<App client={client} />);
+    await openDataView(user);
+
+    expect(await screen.findByRole("heading", { name: "AI Assistant" })).toBeVisible();
+    expect(screen.getByText("Local · no data leaves this machine")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    expect(screen.getByLabelText("Use an AI assistant")).not.toBeChecked();
+  });
+
+  it("names the endpoint host when the model is not on this machine", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      getAiSettings: vi
+        .fn()
+        .mockResolvedValue(aiSettings({ baseUrl: "https://api.openai.com/v1" })),
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+
+    expect(await screen.findByText("Records you send go to api.openai.com")).toBeVisible();
+  });
+
+  it("saves the settings the user typed", async () => {
+    const user = userEvent.setup();
+    const setAiSettings = vi
+      .fn()
+      .mockResolvedValue(aiSettings({ enabled: true, model: "mistral" }));
+    const client = stubClient({
+      getAiSettings: vi.fn().mockResolvedValue(aiSettings()),
+      setAiSettings,
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    await screen.findByRole("heading", { name: "AI Assistant" });
+
+    await user.click(screen.getByLabelText("Use an AI assistant"));
+    const modelField = screen.getByLabelText("Model");
+    await user.clear(modelField);
+    await user.type(modelField, "mistral");
+    await user.click(screen.getByRole("button", { name: "Save AI settings" }));
+
+    expect(setAiSettings).toHaveBeenCalledWith({
+      enabled: true,
+      providerLabel: "Local model",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      model: "mistral",
+    });
+    expect(await screen.findByText("AI settings saved.")).toBeVisible();
+  });
+
+  it("stores an API key write-only and reports only that one is saved", async () => {
+    const user = userEvent.setup();
+    const setAiApiKey = vi.fn().mockResolvedValue(aiSettings({ hasApiKey: true }));
+    const client = stubClient({
+      getAiSettings: vi.fn().mockResolvedValue(aiSettings()),
+      setAiApiKey,
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    const keyField = await screen.findByLabelText("API key (only needed for online services)");
+    expect(keyField).toHaveAttribute("type", "password");
+    expect(keyField).toHaveAttribute("placeholder", "No key saved");
+
+    await user.type(keyField, "sk-secret-key");
+    await user.click(screen.getByRole("button", { name: "Save key" }));
+
+    expect(setAiApiKey).toHaveBeenCalledWith("sk-secret-key");
+    expect(
+      await screen.findByText("API key saved to this machine's credential store."),
+    ).toBeVisible();
+    // The field is cleared and never re-populated from the core.
+    expect(keyField).toHaveValue("");
+    expect(keyField).toHaveAttribute("placeholder", "A key is saved on this machine");
+  });
+
+  it("clears a stored API key", async () => {
+    const user = userEvent.setup();
+    const clearAiApiKey = vi.fn().mockResolvedValue(aiSettings({ hasApiKey: false }));
+    const client = stubClient({
+      getAiSettings: vi.fn().mockResolvedValue(aiSettings({ hasApiKey: true })),
+      clearAiApiKey,
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    const remove = await screen.findByRole("button", { name: "Remove key" });
+    await user.click(remove);
+
+    expect(clearAiApiKey).toHaveBeenCalled();
+    expect(await screen.findByText("API key removed.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Remove key" })).toBeDisabled();
+  });
+
+  it("reports the endpoint and model after a connection test", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      getAiSettings: vi.fn().mockResolvedValue(aiSettings({ enabled: true })),
+      testAiProvider: vi.fn().mockResolvedValue({
+        providerLabel: "Local model",
+        endpointHost: "127.0.0.1:11434",
+        local: true,
+        model: "llama3.1",
+        modelAvailable: true,
+        availableModels: ["llama3.1"],
+      }),
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+
+    expect(
+      await screen.findByText("Connected to 127.0.0.1:11434 — llama3.1 is ready."),
+    ).toBeVisible();
+  });
+
+  it("surfaces the core's reason when the provider cannot be reached", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      getAiSettings: vi.fn().mockResolvedValue(aiSettings({ enabled: true })),
+      testAiProvider: vi.fn().mockRejectedValue({
+        kind: "provider_unavailable",
+        message: "Couldn't reach 127.0.0.1:11434.",
+        reason: "Couldn't reach 127.0.0.1:11434.",
+      }),
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+
+    expect(await screen.findByText("Couldn't reach 127.0.0.1:11434.")).toBeVisible();
   });
 });

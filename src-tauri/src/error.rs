@@ -57,6 +57,11 @@ pub enum ApplicationError {
     #[error("restore rejected: {0}")]
     RestoreInvalid(String),
 
+    /// The configured AI provider (or the credential store it needs) could not
+    /// be reached. `reason` is user-facing text and never carries secrets.
+    #[error("{reason}")]
+    ProviderUnavailable { reason: String },
+
     #[error("local database error: {0}")]
     Database(#[from] rusqlite::Error),
 
@@ -76,6 +81,7 @@ impl ApplicationError {
             Self::InvalidStoredData(_) => "invalid_stored_data",
             Self::BackupFailed(_) => "backup_failed",
             Self::RestoreInvalid(_) => "restore_invalid",
+            Self::ProviderUnavailable { .. } => "provider_unavailable",
             Self::Database(_) => "storage_unavailable",
             Self::Io(_) => "io",
         }

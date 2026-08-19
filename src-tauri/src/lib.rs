@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod application;
 pub mod archive;
 pub mod attachments;
@@ -6,8 +7,9 @@ pub mod domain;
 pub mod error;
 pub mod storage;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use ai::{AiSettings, CompletionProvider, CredentialStore, ProviderCheck, SetAiSettingsRequest};
 use application::{
     ArchiveRequest, CompleteTaskRequest, ContactImportMapping, ContactImportPreview,
     ContactImportSummary, ContactListItem, CreateCompanyRequest, CreateContactRequest,
@@ -28,7 +30,7 @@ use attachments::{
     AttachmentStore, RemoveAttachmentRequest,
 };
 use attention::{AttentionFlag, Thresholds};
-use domain::{Activity, Company, Contact, LostReason, Opportunity, Stage, Task};
+use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
 use serde::Serialize;
 use storage::Storage;
@@ -118,6 +120,11 @@ macro_rules! with_local_api_v1_commands {
             list_attachments,
             remove_attachment,
             attachment_path,
+            get_ai_settings,
+            set_ai_settings,
+            set_ai_api_key,
+            clear_ai_api_key,
+            test_ai_provider,
         }
     };
 }
@@ -135,6 +142,10 @@ with_local_api_v1_commands!(declare_command_names);
 /// Managed application state — one storage handle behind a mutex because the
 /// SQLite connection is Send but not Sync.
 type SharedStorage = Mutex<Storage>;
+
+/// Managed credential store for the AI provider API key — an OS keychain in
+/// production, swappable so tests never touch a real one.
+type SharedCredentials = Arc<dyn CredentialStore>;
 
 /// Wire shape for application errors — stable kind plus per-kind details.
 #[derive(Debug, Serialize)]
@@ -165,6 +176,10 @@ enum CommandErrorDetails {
         record_id: String,
         expected_version: i64,
         current_version: i64,
+    },
+    /// Why the AI provider could not be used — safe text only, never a key.
+    Provider {
+        reason: String,
     },
     None {},
 }
@@ -199,6 +214,9 @@ impl From<ApplicationError> for CommandError {
                 record_id: id.clone(),
                 expected_version: *expected,
                 current_version: *current,
+            },
+            ApplicationError::ProviderUnavailable { reason } => CommandErrorDetails::Provider {
+                reason: reason.clone(),
             },
             ApplicationError::InvalidStoredData(_)
             | ApplicationError::BackupFailed(_)
@@ -943,6 +961,62 @@ fn attachment_path(
     attachments::attachment_path(&storage, &attachments, &attachment_id).map_err(Into::into)
 }
 
+// AI provider commands — non-secret settings, the keychain-held API key, and
+// an explicit connection check. Nothing here runs unless the user asks.
+
+#[tauri::command]
+fn get_ai_settings(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+) -> Result<AiSettings, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    ai::get_ai_settings(&storage, credentials.as_ref()).map_err(Into::into)
+}
+
+#[tauri::command]
+fn set_ai_settings(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    request: SetAiSettingsRequest,
+) -> Result<AiSettings, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    ai::set_ai_settings(&mut storage, credentials.as_ref(), request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn set_ai_api_key(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    api_key: String,
+) -> Result<AiSettings, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    ai::set_ai_api_key(&mut storage, credentials.as_ref(), Actor::User, api_key).map_err(Into::into)
+}
+
+#[tauri::command]
+fn clear_ai_api_key(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+) -> Result<AiSettings, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    ai::clear_ai_api_key(&mut storage, credentials.as_ref(), Actor::User).map_err(Into::into)
+}
+
+#[tauri::command]
+fn test_ai_provider(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+) -> Result<ProviderCheck, CommandError> {
+    // Read the configuration under the lock, then release it: the request
+    // that follows can take seconds, and nothing else may block behind a
+    // slow or hung endpoint.
+    let provider = {
+        let storage = storage.lock().expect("storage mutex poisoned");
+        ai::provider_for_connection_test(&storage, credentials.as_ref())?
+    };
+    provider.check().map_err(Into::into)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     macro_rules! command_handler {
@@ -964,6 +1038,10 @@ pub fn run() {
             app.manage(Mutex::new(storage));
             // Managed attachment files live beside the database.
             app.manage(AttachmentStore::open_in_app_data(&app_data));
+            // The AI provider key lives in the OS credential store, never in
+            // the database; constructing the handle touches no keychain yet.
+            let credentials: SharedCredentials = Arc::new(ai::KeyringCredentialStore::new());
+            app.manage(credentials);
             Ok(())
         })
         .invoke_handler(with_local_api_v1_commands!(command_handler))

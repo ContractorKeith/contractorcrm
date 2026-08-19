@@ -69,6 +69,9 @@ import type {
   AttachmentParentType,
   AttachmentRemoval,
   RemoveAttachmentRequest,
+  AiSettings,
+  SetAiSettingsRequest,
+  ProviderCheck,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -152,6 +155,11 @@ export interface CoreClient {
   listAttachments(parentType: AttachmentParentType, parentId: string): Promise<Attachment[]>;
   removeAttachment(request: RemoveAttachmentRequest): Promise<AttachmentRemoval>;
   attachmentPath(attachmentId: string): Promise<AttachmentLocation>;
+  getAiSettings(): Promise<AiSettings>;
+  setAiSettings(request: SetAiSettingsRequest): Promise<AiSettings>;
+  setAiApiKey(apiKey: string): Promise<AiSettings>;
+  clearAiApiKey(): Promise<AiSettings>;
+  testAiProvider(): Promise<ProviderCheck>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -234,4 +242,9 @@ export const tauriCoreClient: CoreClient = {
   listAttachments: (parentType, parentId) => invoke("list_attachments", { parentType, parentId }),
   removeAttachment: (request) => invoke("remove_attachment", { request }),
   attachmentPath: (attachmentId) => invoke("attachment_path", { attachmentId }),
+  getAiSettings: () => invoke("get_ai_settings"),
+  setAiSettings: (request) => invoke("set_ai_settings", { request }),
+  setAiApiKey: (apiKey) => invoke("set_ai_api_key", { apiKey }),
+  clearAiApiKey: () => invoke("clear_ai_api_key"),
+  testAiProvider: () => invoke("test_ai_provider"),
 };
