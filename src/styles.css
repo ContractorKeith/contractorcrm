@@ -622,6 +622,13 @@ h1 {
   word-break: break-all;
 }
 
+/* "Reading CSV…" / "Importing…" line shown while the core is working. */
+.csv-import__progress {
+  margin: 0 0 var(--space-4);
+  color: var(--color-neutral-500);
+  font-size: var(--font-size-label);
+}
+
 .csv-import table {
   width: 100%;
   margin-bottom: var(--space-4);

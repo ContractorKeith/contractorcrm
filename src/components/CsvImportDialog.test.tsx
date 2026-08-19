@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ContactImportPreview } from "../api/types";
+import type { ContactImportPreview, ContactImportSummary } from "../api/types";
 import { stubClient } from "../test/stub-client";
 import { CsvImportDialog } from "./CsvImportDialog";
 
@@ -147,5 +147,54 @@ describe("CsvImportDialog", () => {
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledWith(false);
     expect(client.importContacts).not.toHaveBeenCalled();
+  });
+
+  it("announces progress, marks the dialog busy, and seals shut while importing", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    let finishPreview = (_preview: ContactImportPreview) => {};
+    let finishImport = (_summary: ContactImportSummary) => {};
+    const client = stubClient({
+      previewContactImport: vi.fn().mockReturnValue(
+        new Promise<ContactImportPreview>((resolve) => {
+          finishPreview = resolve;
+        }),
+      ),
+      importContacts: vi.fn().mockReturnValue(
+        new Promise<ContactImportSummary>((resolve) => {
+          finishImport = resolve;
+        }),
+      ),
+    });
+
+    render(<CsvImportDialog client={client} path="/tmp/leads.csv" onClose={onClose} />);
+
+    // Reading the file: busy and announced, but the user may still back out.
+    const dialog = screen.getByRole("dialog", { name: "Import contacts from CSV" });
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Reading CSV…");
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+    finishPreview(preview());
+    expect(await screen.findByRole("button", { name: "Import" })).toBeEnabled();
+    expect(dialog).toHaveAttribute("aria-busy", "false");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    // Writing contacts: both buttons inert and Escape cannot abandon the run.
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(/Importing contacts/);
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeVisible();
+
+    finishImport({ created: 2, updated: 0, skipped: [] });
+    expect(await screen.findByText("2 created, 0 updated, 0 skipped.")).toBeVisible();
+    expect(dialog).toHaveAttribute("aria-busy", "false");
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledWith(true);
   });
 });

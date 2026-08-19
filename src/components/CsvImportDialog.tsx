@@ -65,6 +65,9 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
   const [mapping, setMapping] = useState<ContactImportMapping | null>(null);
   const [summary, setSummary] = useState<ContactImportSummary | null>(null);
   const [busy, setBusy] = useState(false);
+  // True only while the core is writing contacts — the dialog is sealed shut
+  // for that window so a half-written import cannot lose its summary.
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -117,6 +120,7 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
   const runImport = async () => {
     if (!mapping) return;
     setBusy(true);
+    setImporting(true);
     try {
       const result = await client.importContacts({ path, mapping });
       setSummary(result);
@@ -126,14 +130,25 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
         isCommandError(rejection) ? rejection.message : "The contacts could not be imported.",
       );
     } finally {
+      setImporting(false);
       setBusy(false);
     }
   };
 
+  // Reading the CSV is a read-only round trip the user may abandon; writing
+  // contacts is not, so only the write says "don't close this window".
+  const progress = importing
+    ? "Importing contacts — don't close this window…"
+    : busy
+      ? "Reading CSV…"
+      : null;
+
   const trapFocus = (event: React.KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose(summary !== null);
+      // Never leave mid-import: contacts are being written and the caller
+      // still needs the created/updated/skipped summary.
+      if (!importing) onClose(summary !== null);
       return;
     }
     if (event.key !== "Tab") return;
@@ -161,11 +176,18 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
         role="dialog"
         aria-modal="true"
         aria-labelledby="csv-import-title"
+        aria-busy={busy}
         className="saved-views__dialog csv-import"
         onKeyDown={trapFocus}
       >
         <h2 id="csv-import-title">Import contacts from CSV</h2>
         <p className="csv-import__path">{path}</p>
+
+        {progress ? (
+          <p role="status" aria-live="polite" className="csv-import__progress">
+            {progress}
+          </p>
+        ) : null}
 
         {error ? (
           <p role="alert" className="form-error">
@@ -264,7 +286,13 @@ export function CsvImportDialog({ client, path, onClose }: CsvImportDialogProps)
         ) : null}
 
         <div className="form-actions">
-          <button ref={closeRef} type="button" className="button" onClick={() => onClose(summary !== null)}>
+          <button
+            ref={closeRef}
+            type="button"
+            className="button"
+            disabled={importing}
+            onClick={() => onClose(summary !== null)}
+          >
             {summary ? "Done" : "Cancel"}
           </button>
           {!summary ? (
