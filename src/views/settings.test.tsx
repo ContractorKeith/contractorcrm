@@ -338,6 +338,33 @@ describe("AI assistant settings", () => {
     expect(await screen.findByText("Couldn't reach 127.0.0.1:11434.")).toBeVisible();
   });
 
+  it("shows the agent helper command line for this device and explains both modes", async () => {
+    const user = userEvent.setup();
+    const client = stubClient({
+      getDatabaseInfo: vi.fn().mockResolvedValue({
+        databasePath: "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3",
+        fileSizeBytes: 2048,
+        lastBackupAt: null,
+      }),
+    });
+
+    render(<App client={client} />);
+    await openDataView(user);
+    await screen.findByRole("heading", { name: "Agent access (MCP)" });
+
+    const readOnly = await screen.findByLabelText("Read-only (recommended)");
+    expect(readOnly).toHaveValue(
+      'contractorcrm-mcp --database "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3"',
+    );
+    expect(readOnly).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Read and write")).toHaveValue(
+      'contractorcrm-mcp --database "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3" --read-write',
+    );
+    expect(screen.getByText(/Nothing is written\./)).toBeVisible();
+    expect(screen.getByText(/recorded in the audit log/)).toBeVisible();
+    expect(screen.getByText(/restart it to go back/)).toBeVisible();
+  });
+
   it("edits and resets the follow-up templates, which work with the assistant off", async () => {
     const user = userEvent.setup();
     const saved = makeFollowupTemplates({

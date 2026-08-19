@@ -7,6 +7,7 @@ pub mod domain;
 pub mod error;
 pub mod explain;
 pub mod followups;
+pub mod mcp;
 pub mod proposals;
 pub mod storage;
 
@@ -34,7 +35,7 @@ use attachments::{
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
-use error::ApplicationError;
+use error::CommandError;
 use explain::AttentionExplanation;
 use followups::{FollowupDraft, FollowupTemplates, HistorySummary, SetFollowupTemplatesRequest};
 use proposals::{
@@ -164,105 +165,6 @@ type SharedStorage = Mutex<Storage>;
 /// Managed credential store for the AI provider API key — an OS keychain in
 /// production, swappable so tests never touch a real one.
 type SharedCredentials = Arc<dyn CredentialStore>;
-
-/// Wire shape for application errors — stable kind plus per-kind details.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CommandError {
-    kind: &'static str,
-    message: String,
-    #[serde(flatten)]
-    details: Box<CommandErrorDetails>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all_fields = "camelCase", untagged)]
-enum CommandErrorDetails {
-    InvalidInput {
-        field: String,
-    },
-    Validation {
-        code: &'static str,
-        field: String,
-    },
-    Record {
-        resource: &'static str,
-        record_id: String,
-    },
-    VersionConflict {
-        resource: &'static str,
-        record_id: String,
-        expected_version: i64,
-        current_version: i64,
-    },
-    /// Why the AI provider could not be used — safe text only, never a key.
-    Provider {
-        reason: String,
-    },
-    /// Which draft went away, so the UI can drop it from its state.
-    Proposal {
-        proposal_id: String,
-    },
-    /// Which command a read-only connection refused.
-    ReadOnly {
-        command: String,
-    },
-    None {},
-}
-
-impl From<ApplicationError> for CommandError {
-    fn from(error: ApplicationError) -> Self {
-        let details = match &error {
-            ApplicationError::InvalidInput { field, .. } => CommandErrorDetails::InvalidInput {
-                field: field.clone(),
-            },
-            ApplicationError::ValidationFailed { code, field, .. } => {
-                CommandErrorDetails::Validation {
-                    code,
-                    field: field.clone(),
-                }
-            }
-            ApplicationError::NotFound { resource, id } => CommandErrorDetails::Record {
-                resource,
-                record_id: id.clone(),
-            },
-            ApplicationError::MissingLostReason { id } => CommandErrorDetails::Record {
-                resource: "opportunity",
-                record_id: id.clone(),
-            },
-            ApplicationError::VersionConflict {
-                resource,
-                id,
-                expected,
-                current,
-            } => CommandErrorDetails::VersionConflict {
-                resource,
-                record_id: id.clone(),
-                expected_version: *expected,
-                current_version: *current,
-            },
-            ApplicationError::ProviderUnavailable { reason } => CommandErrorDetails::Provider {
-                reason: reason.clone(),
-            },
-            ApplicationError::ProposalExpired { proposal_id } => CommandErrorDetails::Proposal {
-                proposal_id: proposal_id.clone(),
-            },
-            ApplicationError::ReadOnly { command } => CommandErrorDetails::ReadOnly {
-                command: command.clone(),
-            },
-            ApplicationError::InvalidStoredData(_)
-            | ApplicationError::BackupFailed(_)
-            | ApplicationError::RestoreInvalid(_)
-            | ApplicationError::Database(_)
-            | ApplicationError::Io(_) => CommandErrorDetails::None {},
-        };
-        Self {
-            kind: error.kind(),
-            message: error.to_string(),
-            details: Box::new(details),
-        }
-    }
-}
 
 /// Report returned by the `health` command — proves the UI → Rust seam works.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -1235,7 +1137,8 @@ pub fn run() {
 mod tests {
     use serde_json::json;
 
-    use super::{health_report, ApplicationError, CommandError};
+    use super::{health_report, CommandError};
+    use crate::error::ApplicationError;
 
     #[test]
     fn health_report_identifies_the_app_and_is_ok() {

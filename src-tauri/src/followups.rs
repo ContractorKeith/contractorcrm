@@ -29,7 +29,8 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{
-    self, CompletionProvider, CredentialStore, OpenAiCompatibleProvider, ProviderRequest, RecordRef,
+    self, CompletionProvider, ContextPreview, CredentialStore, OpenAiCompatibleProvider,
+    ProviderRequest, RecordRef,
 };
 use crate::application::{self, immediate, log_command, TaskPatch};
 use crate::domain::{Activity, Actor};
@@ -553,6 +554,24 @@ pub fn plan_history_summary(
             max_output_tokens: Some(MAX_SUMMARY_OUTPUT_TOKENS),
             timeout_seconds: None,
         },
+    })
+}
+
+/// The same bounded history projection `summarize_history` would send, built
+/// without a provider and without reading credentials — the agent interface's
+/// "what would be sent" surface.
+pub fn preview_history_context(
+    storage: &Storage,
+    parent_type: &str,
+    parent_id: &str,
+    window: Option<i64>,
+) -> Result<ContextPreview, ApplicationError> {
+    let window = checked_window(window)?;
+    let projection = project_history(storage, parent_type, parent_id, window, Utc::now())?;
+    Ok(ContextPreview {
+        purpose: SUMMARIZE_PURPOSE.into(),
+        context_text: projection.text,
+        included_record_refs: vec![projection.record],
     })
 }
 

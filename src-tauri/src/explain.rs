@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::ai::{
-    self, CompletionProvider, CredentialStore, OpenAiCompatibleProvider, ProviderCompletion,
-    ProviderRequest, RecordRef,
+    self, CompletionProvider, ContextPreview, CredentialStore, OpenAiCompatibleProvider,
+    ProviderCompletion, ProviderRequest, RecordRef,
 };
 use crate::application;
 use crate::attention::{self, AttentionFlag, AttentionInputs, AttentionRecordType, AttentionRule};
@@ -119,6 +119,49 @@ pub fn plan_explanation(
         });
     };
 
+    let (flag, context_text) = project_flag(storage, flag_id, reference_time)?;
+
+    let request = ProviderRequest {
+        purpose: EXPLAIN_PURPOSE.into(),
+        system_text: SYSTEM_TEXT.into(),
+        user_text: USER_TEXT.into(),
+        context_text: Some(context_text),
+        included_record_refs: vec![record_ref(&flag)],
+        max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+        timeout_seconds: None,
+    };
+
+    Ok(ExplanationPlan {
+        flag_id: flag.id,
+        endpoint_host: ai::endpoint_host(provider.base_url()),
+        local: ai::is_local_endpoint(provider.base_url()),
+        provider,
+        request,
+    })
+}
+
+/// The same bounded projection `plan_explanation` would send, built without a
+/// provider and without reading credentials — the agent interface's
+/// "what would be sent" surface.
+pub fn preview_flag_context(
+    storage: &Storage,
+    flag_id: &str,
+    reference_time: Option<String>,
+) -> Result<ContextPreview, ApplicationError> {
+    let (flag, context_text) = project_flag(storage, flag_id, reference_time)?;
+    Ok(ContextPreview {
+        purpose: EXPLAIN_PURPOSE.into(),
+        context_text,
+        included_record_refs: vec![record_ref(&flag)],
+    })
+}
+
+/// Find the current flag and project it. Reads storage only; sends nothing.
+fn project_flag(
+    storage: &Storage,
+    flag_id: &str,
+    reference_time: Option<String>,
+) -> Result<(AttentionFlag, String), ApplicationError> {
     let flag_id = flag_id.trim();
     if flag_id.is_empty() {
         return Err(ApplicationError::InvalidInput {
@@ -136,23 +179,8 @@ pub fn plan_explanation(
             id: flag_id.to_owned(),
         })?;
 
-    let request = ProviderRequest {
-        purpose: EXPLAIN_PURPOSE.into(),
-        system_text: SYSTEM_TEXT.into(),
-        user_text: USER_TEXT.into(),
-        context_text: Some(projection(&inputs, &flag)),
-        included_record_refs: vec![record_ref(&flag)],
-        max_output_tokens: Some(MAX_OUTPUT_TOKENS),
-        timeout_seconds: None,
-    };
-
-    Ok(ExplanationPlan {
-        flag_id: flag.id,
-        endpoint_host: ai::endpoint_host(provider.base_url()),
-        local: ai::is_local_endpoint(provider.base_url()),
-        provider,
-        request,
-    })
+    let text = projection(&inputs, &flag);
+    Ok((flag, text))
 }
 
 /// The bounded projection: the rule, its thresholds, the dates that tripped

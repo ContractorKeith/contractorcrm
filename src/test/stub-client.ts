@@ -110,6 +110,11 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
     issues: [],
   }),
   importArchive: vi.fn().mockResolvedValue({ recordCounts: {}, safetyBackupPath: "" }),
+  getDatabaseInfo: vi.fn().mockResolvedValue({
+    databasePath: "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3",
+    fileSizeBytes: 1024,
+    lastBackupAt: null,
+  }),
   addAttachment: vi.fn(),
   listAttachments: vi.fn().mockResolvedValue([]),
   removeAttachment: vi.fn().mockResolvedValue({ fileRemoved: true }),

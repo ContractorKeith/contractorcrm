@@ -108,6 +108,19 @@ impl ProviderRequest {
     }
 }
 
+/// Exactly what an AI-backed feature would send, without sending it: the
+/// bounded projection text plus the records it names. The agent interface
+/// returns this from `preview_context` so a client can inspect the data
+/// before any provider call is made.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPreview {
+    /// The feature the preview is for, e.g. "summarize_history".
+    pub purpose: String,
+    pub context_text: String,
+    pub included_record_refs: Vec<RecordRef>,
+}
+
 /// A completion plus the provenance the UI needs to display it honestly.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

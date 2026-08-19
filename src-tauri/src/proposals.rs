@@ -26,7 +26,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::{
-    configured_provider, CompletionProvider, CredentialStore, ProviderRequest, RecordRef,
+    configured_provider, CompletionProvider, ContextPreview, CredentialStore, ProviderRequest,
+    RecordRef,
 };
 use crate::application::{
     self, ArchiveRequest, ChannelInput, CompanyPatch, ContactPatch, CreateCompanyRequest,
@@ -658,6 +659,27 @@ pub fn propose_update_with_provider(
             version: snapshot.version,
         }],
     ))
+}
+
+/// The same bounded record projection `propose_update` would send, built
+/// without a provider and without reading credentials. The caller's version is
+/// still checked, so a preview cannot quietly describe a stale record.
+pub fn preview_update_context(
+    storage: &Storage,
+    entity_type: ProposalEntityType,
+    entity_id: &str,
+    expected_version: i64,
+) -> Result<ContextPreview, ApplicationError> {
+    let snapshot = load_snapshot(storage, entity_type, entity_id, expected_version)?;
+    Ok(ContextPreview {
+        purpose: "propose_update".into(),
+        context_text: snapshot.context,
+        included_record_refs: vec![RecordRef {
+            entity_type: entity_type.as_wire_value().into(),
+            entity_id: entity_id.to_owned(),
+            label: snapshot.label,
+        }],
+    })
 }
 
 /// Assemble, store, and return the draft. Kept in one place so every proposal

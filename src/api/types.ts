@@ -753,6 +753,13 @@ export interface AttachmentLocation {
   exists: boolean;
 }
 
+// Where the live database file is and how big it is.
+export interface DatabaseInfo {
+  databasePath: string;
+  fileSizeBytes: number;
+  lastBackupAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // AI provider seam (src-tauri/src/ai.rs)
 // ---------------------------------------------------------------------------

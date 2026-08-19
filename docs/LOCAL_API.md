@@ -1,7 +1,7 @@
 # Local agent API
 
-Status: v1 application command contract implemented; MCP adapter planned
-Updated: 2026-08-18 (attachments as managed files)
+Status: v1 application command contract implemented; MCP adapter implemented
+Updated: 2026-08-19 (MCP stdio helper)
 
 The implemented command registry, named inputs, outputs, foundational wire
 types, and stable error kinds are published in `schemas/v1/local-api.json` and
@@ -13,6 +13,47 @@ do not yet appear in that manifest remain planned work.
 Ship an MCP helper with the desktop application and use stdio as the v1 transport, exactly like ContractorProject. The agent client launches the helper; ContractorCRM does not open a network listener for normal single-user use.
 
 The MCP adapter calls the same Rust application interface as the desktop UI. It never opens SQLite directly and cannot bypass validation, record-version checks, or audit logging.
+
+## Agent onboarding
+
+The helper ships as a second binary, `contractorcrm-mcp`, alongside the
+desktop app (`src-tauri/src/mcp.rs` is the server; the binary only parses the
+command line). It speaks JSON-RPC 2.0 over stdio — one message per line, MCP
+revision `2025-06-18` (older `2025-03-26` and `2024-11-05` clients are accepted
+and echoed back). `initialize` reports the product version and the local API
+version; closing stdin is the graceful shutdown. No socket is opened.
+
+Wire it into an agent client with the command line Settings → Backup & Data →
+"Agent access (MCP)" shows for this device:
+
+```
+contractorcrm-mcp --database "<app data>/contractorcrm.sqlite3"
+contractorcrm-mcp --database "<app data>/contractorcrm.sqlite3" --read-write
+```
+
+- **Read-only is the default.** Write tools are not listed at all; calling one
+  anyway returns the `read_only` error kind naming the command. The mode is
+  whatever the helper was launched with, so it is reversible: drop
+  `--read-write` and restart the client.
+- A missing or unreadable database, or one written by a newer build than the
+  helper knows, is refused on stderr with a nonzero exit rather than migrated.
+- Every mutating tool call runs as actor `agent` and writes an extra
+  `command_log` row naming the MCP client from the `initialize` handshake.
+- `preview_context(tool, arguments)` returns the exact bounded projection text
+  and `includedRecordRefs` that `summarize_history`, `propose_followup`,
+  `explain_attention_flag`, or `propose_update` would send — without calling a
+  provider, and without needing the assistant to be on.
+- Bounds over MCP: search returns one page of at most 50; `get_timeline`
+  returns at most 200 entries and truncates activity bodies to 500 characters
+  unless `fullBodies: true` is passed; list tools accept an optional `limit`
+  (maximum 500). No response ever carries attachment bytes, an attachment's
+  internal relative path, or a provider credential.
+
+Omitted from the v1 tool surface on purpose — the desktop owns these
+file-path and destructive surfaces: `backup_database` / `restore_database`,
+`export_archive` / `preview_archive_import` / `import_archive`,
+`preview_contact_import` / `import_contacts` / `export_contacts_csv` /
+`export_opportunities_csv`, and `add_attachment` / `remove_attachment`.
 
 ## Initial tools
 
