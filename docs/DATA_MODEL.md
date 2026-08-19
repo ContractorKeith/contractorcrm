@@ -1,7 +1,7 @@
 # Data model
 
-Status: implemented through database migration 009
-Updated: 2026-08-18
+Status: implemented through database migration 010
+Updated: 2026-08-19
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`, including
 each implemented table's columns, required fields, primary key, foreign keys,
@@ -185,7 +185,18 @@ Same as ContractorProject:
 
 - `schema_migrations` — forward-only migrations
 - `command_log` — command ID, actor (`user`, `agent`, `import`), timestamp, bounded summary for undo/audit
-- `app_settings` — non-secret preferences (thresholds, density, theme)
+- `app_settings` — non-secret preferences (thresholds, density, theme) as
+  versioned JSON per key. The assistant adds two:
+  - `ai.provider` — `{version, enabled, providerLabel, baseUrl, model}`. Never
+    the API key: that lives in the OS keychain (service
+    `com.contractorcrm.desktop`, account `ai-provider-api-key`), so a database
+    copy, backup, or portable archive can never carry a credential.
+  - `followups.templates` — `{version, templates: [{id, name, body}]}`, the
+    stored follow-up wordings. Absent until the user edits them, when the
+    built-in set is returned instead.
+- Drafts and undo tokens are never persisted. Proposals from `propose_*` live
+  in the running process's memory with a 15-minute TTL, so nothing half-decided
+  by a model ever reaches SQLite, a backup, or an archive.
 - FTS5 index over active contacts, companies, opportunities, and activity summaries/bodies, maintained by the repository layer inside the same transaction as the write. It is a rebuildable projection; archived records and deleted activities are removed immediately. Contact channel values are included.
 - Provider credentials never stored in these tables
 

@@ -71,11 +71,21 @@ Beyond local-first + AI-native.
 
 ## AI-Native Touches (on top of the local foundation)
 
-- Natural language contact/opportunity creation and updates
-- Suggested next actions or follow-up wording
-- Summaries of a contact's history or an opportunity's status
-- Risk flags ("no contact in 21 days", "proposal sent but no response")
-- Local agent API so other tools or agents can read/write CRM data
+Shipped in Slice 5. The assistant is off until you turn it on, point it at a
+local or BYOK endpoint, and every provider call names the records it includes.
+
+- [x] Natural language contact/company/opportunity creation and updates — a
+  typed draft with a visible diff, applied through the same validation as a
+  hand edit, and undoable
+- [x] Suggested next actions and follow-up wording — from your own templates,
+  which still work verbatim with the assistant switched off
+- [x] Summaries of a contact's history or an opportunity's status, from a
+  bounded projection of that one record's timeline
+- [x] Risk flags ("no contact in 21 days", "proposal sent but no response") —
+  deterministic rules the model explains, never invents
+- [x] Local agent API so other tools or agents can read/write CRM data — the
+  `contractorcrm-mcp` stdio helper, read-only unless you launch it
+  `--read-write` (see `docs/LOCAL_API.md`)
 
 ---
 

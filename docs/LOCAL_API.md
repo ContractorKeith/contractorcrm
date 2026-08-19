@@ -1,7 +1,8 @@
 # Local agent API
 
 Status: v1 application command contract implemented; MCP adapter implemented
-Updated: 2026-08-19 (MCP stdio helper)
+and covered end to end (see `docs/SLICE5_COVERAGE.md`)
+Updated: 2026-08-19 (Slice 5 docs and test sweep)
 
 The implemented command registry, named inputs, outputs, foundational wire
 types, and stable error kinds are published in `schemas/v1/local-api.json` and
@@ -59,18 +60,24 @@ file-path and destructive surfaces: `backup_database` / `restore_database`,
 
 ### Read
 
-- `search_records(query, entityTypes?, limit?)` — bounded FTS-backed search across contacts, companies, opportunities, and activities; activity hits include their parent navigation target
-- `list_contacts(kind?, tag?, limit?, cursor?)`
-- `get_contact(contactId, include?)` — include options: `activities`, `tasks`, `opportunities`, `customFields`
-- `list_companies(kind?, limit?, cursor?)`
-- `get_company(companyId, include?)`
-- `list_opportunities(stageId?, status?, limit?, cursor?)`
-- `get_opportunity(opportunityId, include?)`
-- `get_timeline(parentType, parentId, window?, limit?, cursor?)`
-- `list_tasks(status?, dueBefore?, parentType?, parentId?, limit?, cursor?)`
-- `get_attention_flags(asOfDate?)` — deterministic stale-lead / overdue / no-response flags
+Argument names below are the shipped MCP ones. Related records are fetched with
+a second call rather than an `include` option, and lists are bounded by `limit`
+rather than paged with a cursor (see "Context and privacy").
+
+- `search_records(query, entityTypes?, limit?)` — bounded FTS-backed search across contacts, companies, opportunities, and activities; activity hits include their parent navigation target. One page, at most 50 rows
+- `list_contacts(includeArchived?, limit?)`
+- `get_contact(contactId)`
+- `list_companies(includeArchived?, limit?)`
+- `get_company(companyId)`
+- `list_opportunities(includeArchived?, limit?)`
+- `get_opportunity(opportunityId)`
+- `get_timeline(parentType, parentId, includeRelated?, limit?, fullBodies?)`
+- `list_tasks(status?, overdueOnly?, parentType?, parentId?, limit?)`
+- `get_attention_flags(referenceTime?)` — deterministic stale-lead / overdue / no-response flags, evaluated against `referenceTime` (UTC ISO-8601) or now
 - `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
-- `list_tags(includeArchived)`, `list_custom_field_defs(entityType, includeArchived)`, `get_record_metadata(entityType, recordId)`, and `match_saved_view(entityType, definition)`
+- `list_tags(includeArchived?)`, `list_custom_field_defs(entityType, includeArchived?)`, and `get_record_metadata(entityType, recordId)`
+- `match_saved_view(entityType, definition)` — desktop command; not an MCP tool in v1
+- `list_stages()` / `list_lost_reasons()` — desktop commands; not MCP tools in v1, so an agent learns a stage id from an opportunity it already read
 - `list_attachments(parentType, parentId)` — every managed file on a contact or opportunity, oldest first; each returns `id`, `fileName`, `mediaType`, `sizeBytes`, `sha256`, `createdAt`, `version` (never the internal `relative_path`)
 - `attachment_path(attachmentId)` — resolves a managed file's absolute path and whether it still exists on disk (`AttachmentLocation { path, exists }`), for the frontend to hand to the OS opener; `exists: false` after a database restore means the row survived but its bytes did not
 - `preview_contact_import(path, mapping?)` — parses a CSV file's headers and sample rows without writing; returns the effective mapping (caller's or auto-guessed from header aliases) and per-row validation issues, but does not touch the database. A trailing empty header column (and its cells) is dropped and tolerated; an interior blank header, a duplicate header, or a non-UTF-8/malformed file fails as `invalid_input` (the encoding case with re-save-as-UTF-8 guidance) rather than a partial read.
@@ -166,7 +173,12 @@ Proposal tools return a typed diff, warnings, affected versions, and an opaque p
 
 Drafts live in the running app's memory only — never in SQLite — and expire 15
 minutes after they are created. An unknown, expired, or already-applied id is
-`proposal_expired`; the three are deliberately indistinguishable.
+`proposal_expired`; the three are deliberately indistinguishable. Undo tokens
+follow the same rules: memory only, single use, the same 15-minute window, and
+the version the apply left behind is pinned, so an undo can never quietly revert
+work done after it. A desktop draft and an MCP draft share nothing but this
+behavior — each running process holds its own drafts, so a draft cannot be
+proposed in one client and applied from another.
 
 ### Write
 
@@ -257,18 +269,30 @@ Write tools are available only in read-write mode. Agent onboarding makes the se
 
 ## Error contract
 
-Stable machine-readable error kinds, shared with the sibling module where meanings overlap:
+Stable machine-readable error kinds, shared with the sibling module where
+meanings overlap. The published list is `errorKinds` in
+`schemas/v1/local-api.json`, checked against the code by
+`src-tauri/tests/schema_contracts.rs`:
 
 - `not_found`
-- `invalid_input`
-- `validation_failed`
-- `version_conflict`
-- `read_only`
-- `proposal_expired`
+- `invalid_input` — malformed or unusable arguments, including an unusable `limit`
+- `validation_failed` — a record rule refused the write; carries `code` and `field`
+- `version_conflict` — carries `resource`, `recordId`, `expectedVersion`, `currentVersion`
+- `read_only` — a write tool on a read-only connection; carries `command`
+- `proposal_expired` — the draft is unknown, expired, or already applied; carries `proposalId`
 - `missing_lost_reason` — moving to the lost stage without a reason
-- `provider_unavailable`
+- `provider_unavailable` — the assistant is off, unconfigured, or the endpoint could not answer; carries safe `reason` text, never a key
+- `invalid_stored_data` — a stored row or setting could not be read as its current shape
+- `backup_failed`, `restore_invalid` — the backup and restore commands (desktop only)
+- `storage_unavailable` — the local database itself refused the work
+- `io` — a filesystem failure behind an attachment, export, or archive command
 
-Validation failures include field paths and safe remediation details. Version conflicts return the current version and require an intentional refresh; they never silently overwrite newer work.
+The MCP adapter returns the same JSON the desktop gets: a tool failure comes
+back as `isError: true` with the error under
+`structuredContent.error`, kind and details intact. Validation failures include
+field paths and safe remediation details. Version conflicts return the current
+version and require an intentional refresh; they never silently overwrite newer
+work.
 
 ## Context and privacy
 
@@ -278,9 +302,14 @@ CRM data is personal data — names, phones, emails, addresses. The privacy rule
 - Agent responses omit attachment bodies and provider credentials.
 - Local MCP reads do not imply permission to send contact data to a model provider; provider calls are separate and show exactly which contacts are included.
 - Each mutation records actor, client name, command ID, timestamp, and a concise non-secret summary in the command log.
-- Implemented desktop commands use explicit size limits. The future MCP adapter
-  will add cursors to list/timeline tools where result sets can grow; the v1
-  desktop search command deliberately returns one bounded page (maximum 50).
+- Every read is bounded by an explicit size limit, not by paging: search returns
+  one page of at most 50, `get_timeline` caps at 200 entries with 500-character
+  bodies, and the list tools take an optional `limit` of 1–500. A `limit` of 0
+  or one over the cap is `invalid_input` rather than a silent clamp, so a client
+  never believes it read everything. Cursors stay future work — they only earn
+  their complexity if a single contractor's list genuinely outgrows 500 rows.
+- Every tool, size limit, error kind, and version-conflict path is mapped to its
+  documentation and its test in `docs/SLICE5_COVERAGE.md`.
 
 ## Suite hand-off surface
 

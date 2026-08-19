@@ -1,7 +1,8 @@
 # Architecture and stack
 
-Status: planning baseline
-Updated: 2026-08-14
+Status: implemented through Slice 5 — AI provider adapters and the MCP stdio
+helper ship; packaging is the remaining planning baseline
+Updated: 2026-08-19
 
 ## Recommendation
 
@@ -18,8 +19,8 @@ Build a Tauri 2 desktop app with a React and TypeScript frontend, a Rust applica
 | Database | SQLite through `rusqlite` | Embedded, transactional, portable, directly controlled by the core. |
 | Local search | SQLite FTS5 | Fast full-text search across contacts, companies, notes, and opportunities without extra processes. |
 | IDs and money | UUIDv7-style opaque IDs; integer minor currency units | Portable suite identity and exact arithmetic for opportunity values. |
-| Agent interface | MCP over stdio | No listener, port, or cloud dependency; tools call the same application services as the UI. |
-| AI integration | Provider adapters plus a local OpenAI-compatible adapter | BYOK and local models share one narrow interface; credentials stay outside CRM data. |
+| Agent interface | MCP over stdio (implemented: `contractorcrm-mcp`) | No listener, port, or cloud dependency; tools call the same application services as the UI. |
+| AI integration | Provider adapters plus a local OpenAI-compatible adapter (implemented) | BYOK and local models share one narrow interface; credentials stay in the OS keychain, outside CRM data. |
 | Testing | Rust unit/integration tests, Vitest, React Testing Library, Playwright smoke tests | Verify rules at the core; UI tests only for observable workflows. |
 | CI/releases | GitHub Actions on macOS and Windows | Builds and tests on the OS that produces each signed package. |
 
@@ -46,6 +47,16 @@ MCP helper ─── tool adapter ───┘             │
 - `search`: full-text index maintenance and saved views/filters
 - `handoff`: versioned export/link envelopes toward quotes and ContractorProject jobs
 - `application`: use cases and transactions exposed to UI and agent adapters
+- `ai` (`src/ai.rs`): provider settings, the keychain credential seam, the
+  OpenAI-compatible adapter, and the bounded-context preview type
+- `proposals` (`src/proposals.rs`): typed drafts, the in-memory draft store and
+  its 15-minute TTL, apply, and undo
+- `explain` (`src/explain.rs`): plain-language explanations of deterministic
+  attention flags
+- `followups` (`src/followups.rs`): history summaries, follow-up templates, and
+  drafted follow-up tasks
+- `mcp` (`src/mcp.rs`): the stdio agent adapter and its tool table; the
+  `contractorcrm-mcp` binary only parses the command line
 
 The needs-attention rules ("no contact in 21 days", "proposal sent, no response") are a pure calculation seam: given records and a reference date, they return deterministic flags. They must not know about React, SQLite, Tauri, or AI — the model explains and prioritizes those facts, it never invents them.
 
@@ -56,7 +67,11 @@ The needs-attention rules ("no contact in 21 days", "proposal sent, no response"
 - Pipeline view (list plus board — final form per the open DESIGN.md question)
 - Opportunity detail with linked quote/job references
 - Tasks and needs-attention views
-- Assistant panel with previewable proposals and explainable attention flags
+- Assistant affordances where the work happens rather than one panel: a
+  proposal dialog with the typed diff, its context preview, and undo; a
+  follow-up draft on contacts and opportunities; explanations on the
+  needs-attention view; and the provider, key, and agent-access settings in
+  Settings
 
 Keep state local to each slice. A small command/query client and focused React state are enough while the Rust core is in-process.
 
