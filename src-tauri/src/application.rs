@@ -2,6 +2,8 @@
 //! one immediate transaction, checks the expected record version, bumps the
 //! version, and writes a command_log row before committing.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -1544,10 +1546,11 @@ pub fn list_contacts(
             Ok((base, last_contacted_at, next_open_task_due_at))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut channels = load_channels_by_contact(connection)?;
     rows.into_iter()
         .map(|(row, last_contacted_at, next_open_task_due_at)| {
             let mut contact = finish_contact(row)?;
-            contact.channels = load_channels(connection, &contact.id)?;
+            contact.channels = channels.remove(&contact.id).unwrap_or_default();
             Ok(ContactListItem {
                 contact,
                 last_contacted_at,
@@ -5282,6 +5285,40 @@ fn insert_channels(
     Ok(())
 }
 
+/// Raw channel row, finished into a ContactChannel after parsing its kind.
+type ChannelRow = (String, String, String, Option<String>, String, bool, i64);
+
+fn channel_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn finish_channel(
+    (id, contact_id, kind_text, label, value, preferred, sort_key): ChannelRow,
+) -> Result<ContactChannel, ApplicationError> {
+    let kind = ChannelKind::from_database_value(&kind_text).ok_or_else(|| {
+        ApplicationError::InvalidStoredData(format!(
+            "channel {id} has unsupported kind {kind_text}"
+        ))
+    })?;
+    Ok(ContactChannel {
+        id,
+        contact_id,
+        kind,
+        label,
+        value,
+        preferred,
+        sort_key,
+    })
+}
+
 fn load_channels(
     connection: &rusqlite::Connection,
     contact_id: &str,
@@ -5291,38 +5328,33 @@ fn load_channels(
          FROM contact_channels WHERE contact_id = ?1 ORDER BY sort_key, id",
     )?;
     let rows = statement
-        .query_map([contact_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, bool>(5)?,
-                row.get::<_, i64>(6)?,
-            ))
-        })?
+        .query_map([contact_id], channel_from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(
-            |(id, contact_id, kind_text, label, value, preferred, sort_key)| {
-                let kind = ChannelKind::from_database_value(&kind_text).ok_or_else(|| {
-                    ApplicationError::InvalidStoredData(format!(
-                        "channel {id} has unsupported kind {kind_text}"
-                    ))
-                })?;
-                Ok(ContactChannel {
-                    id,
-                    contact_id,
-                    kind,
-                    label,
-                    value,
-                    preferred,
-                    sort_key,
-                })
-            },
-        )
-        .collect()
+    rows.into_iter().map(finish_channel).collect()
+}
+
+/// Every contact's channels in one pass, grouped by contact id. The list views
+/// need all of them at once; asking per contact was 10,000 queries and a third
+/// of the time it took to list a 10,000-contact book (issue #42).
+fn load_channels_by_contact(
+    connection: &rusqlite::Connection,
+) -> Result<HashMap<String, Vec<ContactChannel>>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, contact_id, kind, label, value, preferred, sort_key
+         FROM contact_channels ORDER BY contact_id, sort_key, id",
+    )?;
+    let rows = statement
+        .query_map([], channel_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut grouped: HashMap<String, Vec<ContactChannel>> = HashMap::new();
+    for row in rows {
+        let channel = finish_channel(row)?;
+        grouped
+            .entry(channel.contact_id.clone())
+            .or_default()
+            .push(channel);
+    }
+    Ok(grouped)
 }
 
 const STAGE_COLUMNS: &str =

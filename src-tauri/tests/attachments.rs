@@ -367,9 +367,9 @@ fn migration_010_creates_attachments_on_fresh_and_upgraded_databases() {
     let temp = tempfile::tempdir().unwrap();
     let database_path = temp.path().join("contractorcrm.sqlite3");
     let storage = Storage::open(&database_path).unwrap();
-    assert_eq!(
-        contractorcrm_lib::storage::latest_migration_version(),
-        10,
+    // Attachments arrived in the tenth migration; later ones may follow it.
+    assert!(
+        contractorcrm_lib::storage::latest_migration_version() >= 10,
         "attachments is the tenth migration"
     );
     let columns: Vec<String> = storage
@@ -417,7 +417,10 @@ fn migration_010_creates_attachments_on_fresh_and_upgraded_databases() {
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
-    assert_eq!(applied, (1..=10).collect::<Vec<_>>());
+    assert_eq!(
+        applied,
+        (1..=contractorcrm_lib::storage::latest_migration_version()).collect::<Vec<_>>()
+    );
     let table_exists: bool = storage
         .connection()
         .query_row(

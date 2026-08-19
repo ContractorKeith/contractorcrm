@@ -85,6 +85,9 @@ Identical to ContractorProject:
 - Audit timestamps in UTC; user-facing dates rendered in the machine's locale.
 - Attachments are referenced files in a managed assets directory, not database blobs.
 - Core workflows never require network access.
+- Supported sizes — enforced caps versus tested-to guidance, the measurements
+  behind them, and how to reproduce them with the dev-only seeder — are in
+  `docs/DATA_MODEL.md` under "Supported limits".
 
 ## AI rules
 

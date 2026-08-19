@@ -48,6 +48,8 @@ fn migration_backfills_a_populated_v5_database() {
          CREATE TABLE contact_channels (contact_id TEXT, value TEXT);
          CREATE TABLE opportunities (id TEXT PRIMARY KEY, name TEXT, notes TEXT, source_label TEXT, archived_at TEXT);
          CREATE TABLE activities (id TEXT PRIMARY KEY, parent_type TEXT, parent_id TEXT, summary TEXT, body TEXT);
+         -- A real v5 database has tasks (migration 5); migration 11 indexes it.
+         CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_type TEXT, parent_id TEXT, status TEXT, due_at TEXT);
          INSERT INTO companies VALUES ('co', 'Backfill Builders', NULL, NULL, NULL, NULL, NULL);
          INSERT INTO contacts VALUES ('ct', 'Riley Backfill', NULL, NULL);
          INSERT INTO contacts VALUES ('archived-ct', 'Hidden Backfill', NULL, '2026-01-01T00:00:00Z');

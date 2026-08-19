@@ -1,7 +1,7 @@
 {
   "contract": "contractorcrm-data-model",
   "schemaVersion": 1,
-  "databaseMigrationVersion": 10,
+  "databaseMigrationVersion": 11,
   "migrations": [
     { "version": 1, "name": "companies_contacts" },
     { "version": 2, "name": "pipeline" },
@@ -12,7 +12,8 @@
     { "version": 7, "name": "saved_views" },
     { "version": 8, "name": "tags_custom_fields" },
     { "version": 9, "name": "contact_external_ids" },
-    { "version": 10, "name": "attachments" }
+    { "version": 10, "name": "attachments" },
+    { "version": 11, "name": "task_parent_scale_index" }
   ],
   "tables": {
     "attachments": {
@@ -113,6 +114,7 @@
       "columns": {"id":"TEXT","title":"TEXT","body":"TEXT","parent_type":"TEXT","parent_id":"TEXT","due_at":"TEXT","remind_at":"TEXT","priority":"TEXT","status":"TEXT","completed_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},
       "required": ["title","priority","status","created_at","updated_at","version"],
       "primaryKey": ["id"],
+      "indexes": [{"name":"tasks_status_due","unique":false,"columns":["status","due_at"]},{"name":"tasks_parent_status_due","unique":false,"columns":["parent_type","parent_id","status","due_at"]}],
       "sqlChecks": ["parent_type IN ('contact', 'company', 'opportunity')", "priority IN ('low', 'normal', 'high')", "status IN ('open', 'done', 'dropped')", "(parent_type IS NULL) = (parent_id IS NULL)", "version > 0"]
     },
     "tags": {"columns":{"id":"TEXT","label":"TEXT","color_role":"TEXT","archived_at":"TEXT","created_at":"TEXT","updated_at":"TEXT","version":"INTEGER"},"required":["label","created_at","updated_at","version"],"primaryKey":["id"],"indexes":[{"name":"tags_label_unique","unique":true,"columns":["label"]}],"sqlChecks":["length(trim(label)) BETWEEN 1 AND 80","color_role IN ('neutral', 'accent', 'attention')","version > 0"]},

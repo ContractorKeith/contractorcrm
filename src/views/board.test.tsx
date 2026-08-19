@@ -185,4 +185,31 @@ describe("pipeline board", () => {
     expect(await screen.findByRole("table", { name: "Pipeline list" })).toBeVisible();
     expect(screen.queryByRole("region", { name: "Pipeline board" })).not.toBeInTheDocument();
   });
+
+  it("draws the top of a very deep column and points at the list for the rest", async () => {
+    const user = userEvent.setup();
+    const deep = Array.from({ length: 130 }, (_, index) =>
+      makeOpportunity({
+        id: `deep-${index}`,
+        name: `Deep job ${index}`,
+        value: { valueMinor: 100, currencyCode: "USD" },
+      }),
+    );
+    const client = stubClient({ listOpportunities: vi.fn().mockResolvedValue(deep) });
+
+    render(<App client={client} />);
+    const board = await openBoard(user);
+
+    const newLead = within(board).getByRole("region", { name: "New lead" });
+    // The count and total still cover every opportunity in the stage.
+    expect(within(newLead).getByText("130")).toBeVisible();
+    expect(within(newLead).getByText("$130.00")).toBeVisible();
+    // Only the first 100 are drawn, and the column says so.
+    expect(
+      within(within(newLead).getByRole("list")).getAllByRole("listitem"),
+    ).toHaveLength(100);
+    expect(within(newLead).getByText(/Showing the first 100 of 130/)).toBeVisible();
+    expect(within(newLead).getByText("Deep job 0")).toBeVisible();
+    expect(within(newLead).queryByText("Deep job 100")).not.toBeInTheDocument();
+  });
 });
