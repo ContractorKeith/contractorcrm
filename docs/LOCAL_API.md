@@ -36,14 +36,25 @@ contractorcrm-mcp --database "<app data>/contractorcrm.sqlite3" --read-write
   anyway returns the `read_only` error kind naming the command. The mode is
   whatever the helper was launched with, so it is reversible: drop
   `--read-write` and restart the client.
-- A missing or unreadable database, or one written by a newer build than the
+- A missing database, a file with no readable `schema_migrations` table (it is
+  not a ContractorCRM database), or one written by a newer build than the
   helper knows, is refused on stderr with a nonzero exit rather than migrated.
+- A database written by an *older* build is refused too in read-only mode: a
+  connection the user granted no write permission to never rewrites their
+  schema. The message says to launch the desktop app once (or relaunch the
+  helper with `--read-write`, which is an explicit write grant and does migrate
+  forward, saying so on stderr).
 - Every mutating tool call runs as actor `agent` and writes an extra
   `command_log` row naming the MCP client from the `initialize` handshake.
 - `preview_context(tool, arguments)` returns the exact bounded projection text
   and `includedRecordRefs` that `summarize_history`, `propose_followup`,
   `explain_attention_flag`, or `propose_update` would send — without calling a
-  provider, and without needing the assistant to be on.
+  provider, and without needing the assistant to be on. Each arm takes that
+  tool's own arguments; for `propose_followup`, `objective` and `templateId`
+  pick the wording rather than the projection and a `window` has no meaning
+  (drafting always looks back the default 90 days), so all three are accepted
+  and ignored and the preview always matches the real call. The desktop has the
+  same seam as the `preview_context` command (see "Initial tools → Propose").
 - Bounds over MCP: search returns one page of at most 50; `get_timeline`
   returns at most 200 entries and truncates activity bodies to 500 characters
   unless `fullBodies: true` is passed; list tools accept an optional `limit`
@@ -77,7 +88,8 @@ rather than paged with a cursor (see "Context and privacy").
 - `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
 - `list_tags(includeArchived?)`, `list_custom_field_defs(entityType, includeArchived?)`, and `get_record_metadata(entityType, recordId)`
 - `match_saved_view(entityType, definition)` — desktop command; not an MCP tool in v1
-- `list_stages()` / `list_lost_reasons()` — desktop commands; not MCP tools in v1, so an agent learns a stage id from an opportunity it already read
+- `list_stages()` — pipeline stages in board order with their kind (open, won, lost); the source of the ids `move_opportunity_stage` takes
+- `list_lost_reasons()` — the stored lost reasons; moving to a lost stage requires one of these ids
 - `list_attachments(parentType, parentId)` — every managed file on a contact or opportunity, oldest first; each returns `id`, `fileName`, `mediaType`, `sizeBytes`, `sha256`, `createdAt`, `version` (never the internal `relative_path`)
 - `attachment_path(attachmentId)` — resolves a managed file's absolute path and whether it still exists on disk (`AttachmentLocation { path, exists }`), for the frontend to hand to the OS opener; `exists: false` after a database restore means the row survived but its bytes did not
 - `preview_contact_import(path, mapping?)` — parses a CSV file's headers and sample rows without writing; returns the effective mapping (caller's or auto-guessed from header aliases) and per-row validation issues, but does not touch the database. A trailing empty header column (and its cells) is dropped and tolerated; an interior blank header, a duplicate header, or a non-UTF-8/malformed file fails as `invalid_input` (the encoding case with re-save-as-UTF-8 guidance) rather than a partial read.
@@ -168,6 +180,18 @@ rather than paged with a cursor (see "Context and privacy").
   `not_found`; a switched-off or unconfigured assistant is
   `provider_unavailable` and reads neither the credential store nor the
   network.
+- `preview_context(request)` — implemented as both a desktop command and an
+  MCP tool. `request` is `{tool}` plus that tool's own identifying arguments:
+  `summarize_history` (`parentType`, `parentId`, `window?`),
+  `explain_attention_flag` (`flagId`), `propose_update` (`entityType`,
+  `entityId`, `expectedVersion` — still version-checked, so a preview cannot
+  quietly describe a stale record), or `propose_followup` (`parentType`,
+  `parentId`, and `objective?` / `templateId?`, which are accepted and ignored
+  because they pick the wording, not the projection). Returns `ContextPreview
+  { purpose, contextText, includedRecordRefs }` — exactly what that feature
+  would send. No provider is called, no credential is read, and it works with
+  the assistant switched off, which is what lets the desktop offer "see what
+  will be sent" before the user commits to a call.
 
 Proposal tools return a typed diff, warnings, affected versions, and an opaque proposal ID. They do not mutate CRM data.
 

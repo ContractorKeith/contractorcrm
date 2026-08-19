@@ -9,11 +9,11 @@ function name in that file. Rust unit tests live in the `mod tests` block at the
 bottom of the named source file.
 
 The tool table itself is pinned: `mcp.rs::the_advertised_tool_surface_is_exactly_the_documented_one`
-compares `tools/list` against the 37 names below and against the published
+compares `tools/list` against the 39 names below and against the published
 command list in `schemas/v1/local-api.json`, so a tool cannot be added or
 renamed without this file being revisited.
 
-## MCP tools (37)
+## MCP tools (39)
 
 All tests in this table live in `src-tauri/tests/mcp.rs` unless another file is
 named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
@@ -29,6 +29,8 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | `get_company` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
 | `list_opportunities` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
 | `get_opportunity` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
+| `list_stages` | "Initial tools → Read" | `an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them` |
+| `list_lost_reasons` | "Initial tools → Read" | `an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them` |
 | `get_timeline` | "Initial tools → Read", "Agent onboarding" (bounds) | `a_timeline_is_capped_and_its_bodies_truncated` |
 | `list_tasks` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface`, `list_tools_take_a_limit_and_refuse_an_unusable_one` |
 | `get_attention_flags` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface`, `explain_attention_flag_answers_the_flag_get_attention_flags_returned` |
@@ -39,7 +41,7 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | `list_attachments` | "Initial tools → Read" | `attachment_reads_carry_no_file_contents_or_internal_paths` |
 | `attachment_path` | "Initial tools → Read" | `attachment_reads_carry_no_file_contents_or_internal_paths` |
 | `get_followup_templates` | "Initial tools → Propose" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
-| `preview_context` | "Agent onboarding" | `preview_context_shows_what_would_be_sent_without_calling_the_provider`, `preview_context_covers_propose_update_and_refuses_an_unpreviewable_tool` |
+| `preview_context` | "Agent onboarding", "Initial tools → Propose" | `preview_context_shows_what_would_be_sent_without_calling_the_provider`, `preview_context_covers_propose_update_and_refuses_an_unpreviewable_tool`, `the_followup_preview_matches_what_propose_followup_actually_sends`; desktop command: `tests/schema_contracts.rs::preview_context_publishes_one_arm_per_ai_backed_feature`, `src/components/ContextDisclosure.test.tsx` |
 
 ### AI-backed tools (a provider call the client asked for)
 
@@ -63,7 +65,7 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | `update_company` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `every_version_checked_write_reports_the_conflict_over_mcp` |
 | `create_opportunity` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path` |
 | `update_opportunity` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `every_version_checked_write_reports_the_conflict_over_mcp` |
-| `move_opportunity_stage` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `record_rules_and_the_lost_reason_rule_carry_their_own_error_kinds` |
+| `move_opportunity_stage` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `record_rules_and_the_lost_reason_rule_carry_their_own_error_kinds`, `an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them` |
 | `log_activity` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path` |
 | `create_task` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path` |
 | `complete_task` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `every_version_checked_write_reports_the_conflict_over_mcp` |
@@ -81,7 +83,11 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | Unknown tool / unknown method are JSON-RPC errors | "Agent onboarding" | `an_unknown_tool_is_a_json_rpc_error`, `an_unknown_method_is_a_json_rpc_error_and_notifications_get_no_reply` |
 | Every write logs the agent actor and the client name | "Agent onboarding", "Context and privacy" | `writes_are_logged_against_the_agent_actor_and_the_client_name` |
 | Stdio transport, graceful shutdown, read-only default binary | "Agent onboarding" | `the_shipped_binary_serves_a_handshake_and_a_read_over_stdio` |
-| Missing or newer-schema database refused | "Agent onboarding" | `the_binary_refuses_a_missing_database` |
+| Missing, foreign, or newer-schema database refused | "Agent onboarding" | `the_binary_refuses_a_missing_database`, `a_foreign_sqlite_file_is_refused_rather_than_given_a_contractorcrm_schema` |
+| Read-only never migrates; `--read-write` may | "Agent onboarding" | `a_read_only_helper_refuses_an_older_database_instead_of_migrating_it`, `a_read_write_helper_may_still_migrate_an_older_database` |
+| The keychain is untouched while the assistant is off | ARCHITECTURE.md "AI rules" | `tests/ai_provider.rs::reading_settings_while_disabled_never_reads_the_credential_store`, `tests/ai_provider.rs::a_disabled_assistant_reaches_no_provider_and_no_credential_store` |
+| An applied draft is undoable even if its audit row fails | LOCAL_API.md "Initial tools → Write" | `tests/proposals.rs::a_failed_audit_row_still_leaves_the_apply_undoable` |
+| An API key never reaches a log line | ARCHITECTURE.md "AI rules" | `src/ai.rs::debugging_a_call_never_prints_the_api_key` (unit) |
 
 ## Size limits
 
@@ -100,6 +106,8 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | Follow-up objective | 500 chars | LOCAL_API.md "Initial tools → Propose" | `src/followups.rs::an_objective_is_trimmed_and_bounded` (unit) |
 | Follow-up templates | 20 templates, 80-char names, 2000-char bodies | LOCAL_API.md "Initial tools → Propose" | `src/followups.rs::templates_are_capped_trimmed_and_uniquely_identified` (unit), `tests/followups.rs::template_writes_are_validated_and_capped` |
 | Provider request timeout | default 60s, clamped 1–300s | ARCHITECTURE.md "AI rules" | `src/ai.rs::a_request_timeout_is_clamped_into_a_usable_range` (unit) |
+| Completion text / model name at the seam | 8000 / 200 chars | ARCHITECTURE.md "AI rules" | `tests/ai_provider.rs::an_oversized_completion_and_model_name_are_truncated_at_the_seam` |
+| Model-supplied draft field text | 10000 chars (notes), 500 (other) | LOCAL_API.md "Initial tools → Propose" | `src/proposals.rs::model_supplied_text_is_capped_per_field_with_a_warning` (unit), `tests/proposals.rs::an_oversized_drafted_note_is_shortened_warned_about_and_still_applies` |
 | Models offered by a connection test | 50 (`MAX_LISTED_MODELS`) | ARCHITECTURE.md "AI rules" | `tests/ai_provider.rs::the_connection_test_never_lists_more_than_fifty_models` |
 | Attachment file size | 256 MiB | LOCAL_API.md `add_attachment` | `tests/attachments.rs::a_file_past_the_size_cap_is_refused_before_it_is_copied` |
 | Archive entry / total uncompressed | 256 MiB / ~1 GiB | LOCAL_API.md `preview_archive_import`, `export_archive` | `tests/portable_archive.rs` (`validation_failed` / `archive_too_large` cases) |
@@ -144,15 +152,13 @@ and compares versions there, so the check cannot be raced by another writer.
 | Attachment removal | LOCAL_API.md `remove_attachment` | `tests/attachments.rs::attachments_are_copied_under_management_listed_and_removed` |
 | Saved views, tags, custom fields | LOCAL_API.md "Initial tools → Write" | `tests/saved_views.rs::saved_view_validation_conflicts_and_limits_are_honest`, `tests/tags_custom_fields.rs::invalid_metadata_and_stale_saved_view_references_are_atomic` |
 | `propose_update` (before the model is asked) | LOCAL_API.md "Initial tools → Propose" | `tests/proposals.rs::proposing_an_update_against_a_stale_version_conflicts_before_the_model_is_asked`, `mcp.rs::preview_context_covers_propose_update_and_refuses_an_unpreviewable_tool` |
-| `apply_proposal` (asserted versions and the version the draft saw) | LOCAL_API.md "Initial tools → Write" | `tests/proposals.rs::a_stale_expected_version_conflicts_and_keeps_the_draft_usable`, `tests/proposals.rs::applying_without_asserted_versions_still_checks_the_version_the_draft_saw` |
+| `apply_proposal` (asserted versions and the version the draft saw) | LOCAL_API.md "Initial tools → Write" | `tests/proposals.rs::a_stale_expected_version_conflicts_and_keeps_the_draft_usable`, `tests/proposals.rs::applying_without_asserted_versions_still_checks_the_version_the_draft_saw`, `tests/proposals.rs::an_assertion_about_another_record_type_does_not_satisfy_the_drafts_own_check` |
 | `undo_proposal` (post-apply version pinning) | LOCAL_API.md "Initial tools → Write" | `tests/proposals.rs::undo_refuses_when_the_record_moved_since_it_was_applied`, `tests/proposals.rs::undo_never_silently_reverts_over_work_done_after_the_apply` |
 
-## Known gap
+## Closed gaps
 
-`move_opportunity_stage` needs a `toStageId` (and a `lostReasonId` when the
-target is a lost stage), but the v1 tool surface has no way to list stages or
-lost reasons — `list_stages` and `list_lost_reasons` exist as application
-commands and are not exposed as MCP tools. An agent can only learn a stage id
-from an opportunity it already read, so it cannot move work forward on its own.
-Exposing those two read tools is a small feature, not a test gap, and is left
-for a follow-up item.
+`list_stages` and `list_lost_reasons` are now read tools, so an agent can
+discover the stage and lost-reason ids `move_opportunity_stage` needs instead of
+inferring one from an opportunity it already read
+(`mcp.rs::an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them`
+drives the whole move from ids the tools returned).
