@@ -84,7 +84,8 @@
     {"name":"set_ai_settings","mode":"write","input":[{"name":"request","type":"SetAiSettingsRequest","required":true}],"output":"AiSettings"},
     {"name":"set_ai_api_key","mode":"write","input":[{"name":"apiKey","type":"string","required":true}],"output":"AiSettings"},
     {"name":"clear_ai_api_key","mode":"write","input":[],"output":"AiSettings"},
-    {"name":"test_ai_provider","mode":"read","input":[],"output":"ProviderCheck"}
+    {"name":"test_ai_provider","mode":"read","input":[],"output":"ProviderCheck"},
+    {"name":"explain_attention_flag","mode":"read","input":[{"name":"flagId","type":"string","required":true}],"output":"AttentionExplanation"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
@@ -198,7 +199,9 @@
         "currentVersion":{"type":"integer","required":false},
         "reason":{"type":"string","required":false}
       }
-    }
+    },
+    "ProviderCompletion": {"type":"object","additionalProperties":false,"description":"one model completion plus the provenance shown with it","required":["purpose","model","text","includedRecordRefs"],"properties":{"purpose":{"type":"string"},"model":{"type":"string"},"text":{"type":"string"},"includedRecordRefs":{"type":"RecordRef[]"}}},
+    "AttentionExplanation": {"type":"object","additionalProperties":false,"description":"plain-language explanation of one deterministic attention flag; explanation only, never a write","required":["flagId","endpointHost","local","explanation"],"properties":{"flagId":{"type":"string"},"endpointHost":{"type":"string"},"local":{"type":"boolean"},"explanation":{"type":"ProviderCompletion"}}}
   },
   "errorKinds": [
     "invalid_input",

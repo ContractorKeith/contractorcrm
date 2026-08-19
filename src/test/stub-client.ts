@@ -4,6 +4,7 @@ import type { CoreClient } from "../api/client";
 import type {
   Activity,
   Attachment,
+  AttentionExplanation,
   AttentionFlag,
   Company,
   Contact,
@@ -121,6 +122,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   setAiApiKey: vi.fn(),
   clearAiApiKey: vi.fn(),
   testAiProvider: vi.fn(),
+  explainAttentionFlag: vi.fn().mockResolvedValue(makeAttentionExplanation()),
   ...overrides,
 });
 
@@ -303,6 +305,23 @@ export const makeAttentionFlag = (overrides: Partial<AttentionFlag> = {}): Atten
   recordId: "task-1",
   recordDisplayName: "Follow up with Dana",
   explanation: 'Task "Follow up with Dana" is overdue.',
+  ...overrides,
+});
+
+export const makeAttentionExplanation = (
+  overrides: Partial<AttentionExplanation> = {},
+): AttentionExplanation => ({
+  flagId: "flag-1",
+  endpointHost: "127.0.0.1:11434",
+  local: true,
+  explanation: {
+    purpose: "explain_attention_flag",
+    model: "llama3.1",
+    text: "This task is three days past due — call the county office today.",
+    includedRecordRefs: [
+      { entityType: "task", entityId: "task-1", label: "Follow up with Dana" },
+    ],
+  },
   ...overrides,
 });
 

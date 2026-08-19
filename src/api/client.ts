@@ -72,6 +72,7 @@ import type {
   AiSettings,
   SetAiSettingsRequest,
   ProviderCheck,
+  AttentionExplanation,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -160,6 +161,7 @@ export interface CoreClient {
   setAiApiKey(apiKey: string): Promise<AiSettings>;
   clearAiApiKey(): Promise<AiSettings>;
   testAiProvider(): Promise<ProviderCheck>;
+  explainAttentionFlag(flagId: string): Promise<AttentionExplanation>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -247,4 +249,5 @@ export const tauriCoreClient: CoreClient = {
   setAiApiKey: (apiKey) => invoke("set_ai_api_key", { apiKey }),
   clearAiApiKey: () => invoke("clear_ai_api_key"),
   testAiProvider: () => invoke("test_ai_provider"),
+  explainAttentionFlag: (flagId) => invoke("explain_attention_flag", { flagId }),
 };

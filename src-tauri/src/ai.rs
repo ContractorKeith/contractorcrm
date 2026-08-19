@@ -183,6 +183,12 @@ impl OpenAiCompatibleProvider {
         }
     }
 
+    /// Configured endpoint, so callers can build the "sent to <host>"
+    /// disclosure without re-reading settings.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Build the chat-completions call. The key rides in the Authorization
     /// header only; the body carries model text and nothing else.
     pub fn completion_call(&self, request: &ProviderRequest) -> HttpCall {

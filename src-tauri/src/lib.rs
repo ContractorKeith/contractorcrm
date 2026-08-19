@@ -5,6 +5,7 @@ pub mod attachments;
 pub mod attention;
 pub mod domain;
 pub mod error;
+pub mod explain;
 pub mod storage;
 
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,7 @@ use attachments::{
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
 use error::ApplicationError;
+use explain::AttentionExplanation;
 use serde::Serialize;
 use storage::Storage;
 use tauri::{Manager, State};
@@ -125,6 +127,7 @@ macro_rules! with_local_api_v1_commands {
             set_ai_api_key,
             clear_ai_api_key,
             test_ai_provider,
+            explain_attention_flag,
         }
     };
 }
@@ -1015,6 +1018,23 @@ fn test_ai_provider(
         ai::provider_for_connection_test(&storage, credentials.as_ref())?
     };
     provider.check().map_err(Into::into)
+}
+
+/// Explain one current attention flag. Explanation only — nothing is written,
+/// and the deterministic rules are untouched.
+#[tauri::command]
+fn explain_attention_flag(
+    storage: State<'_, SharedStorage>,
+    credentials: State<'_, SharedCredentials>,
+    flag_id: String,
+) -> Result<AttentionExplanation, CommandError> {
+    // Same split as the connection test: gather the projection under the lock,
+    // release it, then make the call that can take seconds.
+    let plan = {
+        let storage = storage.lock().expect("storage mutex poisoned");
+        explain::plan_explanation(&storage, credentials.as_ref(), &flag_id, None)?
+    };
+    plan.run().map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
