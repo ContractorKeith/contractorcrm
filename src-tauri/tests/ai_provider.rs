@@ -3,8 +3,9 @@
 //! adapter's failure behavior against real sockets.
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
+use std::time::Duration;
 
 use contractorcrm_lib::ai::{
     clear_ai_api_key, configured_provider, get_ai_settings, provider_for_connection_test,
@@ -29,7 +30,10 @@ fn local_settings(enabled: bool, base_url: &str) -> SetAiSettingsRequest {
     }
 }
 
-/// Bind a port and drop it, so connecting to it is refused.
+/// Bind a port and drop it, so connecting to it is refused. The OS could in
+/// principle hand the same ephemeral port to another test's stub server in the
+/// window after this returns; nothing in the process reuses a released port
+/// deliberately, so treat a surprise success here as that rare collision.
 fn closed_port_url() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe port");
     let port = listener.local_addr().expect("probe address").port();
@@ -38,24 +42,69 @@ fn closed_port_url() -> String {
 }
 
 /// One-shot HTTP server that answers with the given raw body and 200 OK.
+///
+/// The request is read to its end before anything is written, and the socket is
+/// half-closed and drained afterwards. Closing a socket with an unread request
+/// still in its buffer sends a TCP reset, which the client sees instead of the
+/// response — the source of intermittent `provider_unavailable` failures in
+/// these tests under load.
 fn serve_once(body: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
     let port = listener.local_addr().expect("stub address").port();
     thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            let mut buffer = [0_u8; 2048];
-            let _ = stream.read(&mut buffer);
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+            read_whole_request(&mut stream);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             let _ = stream.write_all(response.as_bytes());
             let _ = stream.flush();
+            // Half-close, then drain: the client learns the response ended and
+            // no reset is sent for bytes still in flight.
+            let _ = stream.shutdown(Shutdown::Write);
+            let _ = stream.read_to_end(&mut Vec::new());
         }
     });
     // The socket is already bound, so the client's connection queues even if
     // the accept loop has not been scheduled yet.
     format!("http://127.0.0.1:{port}/v1")
+}
+
+/// Read headers plus the body the request declares, so nothing is left unread.
+fn read_whole_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let Ok(read) = stream.read(&mut chunk) else {
+            return;
+        };
+        if read == 0 {
+            return;
+        }
+        request.extend_from_slice(&chunk[..read]);
+        let Some(header_end) = find_header_end(&request) else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]).to_lowercase();
+        let declared = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        if request.len() - header_end >= declared {
+            return;
+        }
+    }
+}
+
+/// Index just past the blank line that ends the request headers.
+fn find_header_end(request: &[u8]) -> Option<usize> {
+    request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|start| start + 4)
 }
 
 #[test]
@@ -330,6 +379,23 @@ fn a_successful_completion_returns_the_text_and_the_records_that_were_included()
     assert_eq!(completion.model, "llama3.1");
     assert_eq!(completion.purpose, "draft_follow_up");
     assert_eq!(completion.included_record_refs.len(), 1);
+}
+
+#[test]
+fn the_connection_test_never_lists_more_than_fifty_models() {
+    // 60 models offered; a picker the user has to scroll forever is no help.
+    let listed = (0..60)
+        .map(|index| format!("{{\"id\":\"model-{index}\"}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let body: &'static str = Box::leak(format!("{{\"data\":[{listed}]}}").into_boxed_str());
+    let provider = OpenAiCompatibleProvider::new("Local model", serve_once(body), "model-0", None);
+
+    let check = provider.check().expect("connection test");
+
+    assert_eq!(check.available_models.len(), 50);
+    assert_eq!(check.available_models[0], "model-0");
+    assert!(check.model_available);
 }
 
 #[test]
