@@ -1957,6 +1957,33 @@ mod tests {
     }
 
     #[test]
+    fn a_chatty_answer_never_returns_more_than_the_warning_cap() {
+        let fields = (0..MAX_WARNINGS + 10)
+            .map(|index| format!("\"madeUp{index}\":\"x\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let draft = Draft::parse(&format!("{{{fields}}}")).expect("parse draft");
+        assert_eq!(draft.into_warnings().len(), MAX_WARNINGS);
+    }
+
+    #[test]
+    fn a_blank_or_over_long_description_is_refused_before_the_model_is_asked() {
+        let blank = checked_description("   ").expect_err("a blank description is useless");
+        assert_eq!(blank.kind(), "invalid_input");
+
+        let over_long = checked_description(&"x".repeat(MAX_DESCRIPTION_CHARS + 1))
+            .expect_err("an over-long description is refused");
+        assert_eq!(over_long.kind(), "invalid_input");
+        assert!(over_long
+            .to_string()
+            .contains(&MAX_DESCRIPTION_CHARS.to_string()));
+
+        let accepted = checked_description(&format!("  {}  ", "x".repeat(MAX_DESCRIPTION_CHARS)))
+            .expect("at the cap");
+        assert_eq!(accepted.chars().count(), MAX_DESCRIPTION_CHARS);
+    }
+
+    #[test]
     fn the_diff_reports_only_fields_that_actually_change() {
         let before = CompanyPatch {
             name: "Coastal Fence".into(),

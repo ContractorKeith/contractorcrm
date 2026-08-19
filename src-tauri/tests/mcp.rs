@@ -7,25 +7,71 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use chrono::{Duration, SecondsFormat, Utc};
 use contractorcrm_lib::ai::{
     set_ai_settings, CompletionProvider, CredentialStore, InMemoryCredentialStore, ProviderCheck,
     ProviderCompletion, ProviderRequest, SetAiSettingsRequest,
 };
 use contractorcrm_lib::application::{
-    self, ActivityPatch, ContactPatch, CreateContactRequest, LogActivityRequest,
+    self, ActivityPatch, CompanyPatch, ContactPatch, CreateCompanyRequest, CreateContactRequest,
+    CreateOpportunityRequest, CreateTaskRequest, LogActivityRequest, OpportunityPatch, TaskPatch,
 };
 use contractorcrm_lib::attachments::{
     self, AddAttachmentRequest, AttachmentParentType, AttachmentStore,
 };
-use contractorcrm_lib::domain::{Actor, Contact};
+use contractorcrm_lib::domain::{Actor, Contact, StageKind};
 use contractorcrm_lib::error::ApplicationError;
-use contractorcrm_lib::mcp::{Mode, Server, MAX_TIMELINE_BODY_CHARS};
+use contractorcrm_lib::mcp::{Mode, Server, MAX_LIST_LIMIT, MAX_TIMELINE_BODY_CHARS};
 use contractorcrm_lib::storage::Storage;
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
+
+const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
+
+/// Every tool the adapter advertises in read-write mode, in table order.
+/// docs/SLICE5_COVERAGE.md maps each of these to its docs and its test.
+const ALL_TOOLS: [&str; 37] = [
+    "search_records",
+    "list_contacts",
+    "get_contact",
+    "list_companies",
+    "get_company",
+    "list_opportunities",
+    "get_opportunity",
+    "get_timeline",
+    "list_tasks",
+    "get_attention_flags",
+    "list_saved_views",
+    "list_tags",
+    "list_custom_field_defs",
+    "get_record_metadata",
+    "list_attachments",
+    "attachment_path",
+    "get_followup_templates",
+    "preview_context",
+    "summarize_history",
+    "explain_attention_flag",
+    "propose_record",
+    "propose_update",
+    "propose_followup",
+    "apply_proposal",
+    "undo_proposal",
+    "create_contact",
+    "update_contact",
+    "create_company",
+    "update_company",
+    "create_opportunity",
+    "update_opportunity",
+    "move_opportunity_stage",
+    "log_activity",
+    "create_task",
+    "complete_task",
+    "link_quote",
+    "link_job",
+];
 
 /// A provider that answers with canned text and records what it was asked.
 struct CannedProvider {
@@ -264,6 +310,36 @@ fn v1_omits_the_archive_csv_and_backup_tools() {
         assert!(
             !names.contains(&omitted.to_owned()),
             "{omitted} is desktop-only in v1"
+        );
+    }
+}
+
+/// The whole advertised surface, so a tool can never be added or dropped
+/// without docs/SLICE5_COVERAGE.md and docs/LOCAL_API.md being revisited.
+#[test]
+fn the_advertised_tool_surface_is_exactly_the_documented_one() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let server = server(&temp, storage, Mode::ReadWrite);
+    let mut names = tool_names(&server);
+    names.sort();
+
+    let mut expected = ALL_TOOLS.map(str::to_owned).to_vec();
+    expected.sort();
+    assert_eq!(names, expected, "the MCP tool surface changed");
+
+    // Every tool but the MCP-only context preview is a published v1 command.
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let commands = schema["commands"]
+        .as_array()
+        .expect("published commands")
+        .iter()
+        .map(|command| command["name"].as_str().expect("a name").to_owned())
+        .collect::<Vec<_>>();
+    for name in &names {
+        assert!(
+            name == "preview_context" || commands.contains(name),
+            "{name} is not a published v1 command"
         );
     }
 }
@@ -714,6 +790,612 @@ fn writes_are_logged_against_the_agent_actor_and_the_client_name() {
             .any(|(_, summary)| summary.contains("create_contact")
                 && summary.contains("Claude Desktop")),
         "the client name is recorded: {rows:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The rest of the read surface
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_read_tools_answer_for_every_record_and_metadata_surface() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let company = application::create_company(
+        &mut storage,
+        CreateCompanyRequest {
+            actor: Actor::User,
+            company: CompanyPatch {
+                name: "Ridgeline Fence Co".into(),
+                kind: "client".into(),
+                ..CompanyPatch::default()
+            },
+        },
+    )
+    .expect("create company");
+    let opportunity = application::create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Back lot fence".into(),
+                contact_id: Some(contact.id.clone()),
+                currency_code: "USD".into(),
+                ..OpportunityPatch::default()
+            },
+        },
+    )
+    .expect("create opportunity");
+    application::create_task(
+        &mut storage,
+        CreateTaskRequest {
+            actor: Actor::User,
+            task: TaskPatch {
+                title: "Call Dana back".into(),
+                parent_type: Some("contact".into()),
+                parent_id: Some(contact.id.clone()),
+                ..TaskPatch::default()
+            },
+        },
+    )
+    .expect("create task");
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    let companies = ok(&server, "list_companies", json!({}));
+    assert_eq!(companies[0]["id"], json!(company.id));
+    assert_eq!(
+        ok(&server, "get_company", json!({"companyId": company.id}))["name"],
+        json!("Ridgeline Fence Co")
+    );
+
+    let opportunities = ok(&server, "list_opportunities", json!({}));
+    assert_eq!(opportunities[0]["id"], json!(opportunity.id));
+    assert_eq!(
+        ok(
+            &server,
+            "get_opportunity",
+            json!({"opportunityId": opportunity.id})
+        )["name"],
+        json!("Back lot fence")
+    );
+
+    let tasks = ok(&server, "list_tasks", json!({"status": "open"}));
+    assert_eq!(tasks[0]["title"], json!("Call Dana back"));
+    assert_eq!(
+        ok(&server, "list_tasks", json!({"overdueOnly": true}))
+            .as_array()
+            .expect("tasks")
+            .len(),
+        0,
+        "a task with no due date is never overdue"
+    );
+
+    // Deterministic flags, saved views, tags, custom fields, and the stored
+    // follow-up wordings all answer over the same read connection.
+    assert!(ok(&server, "get_attention_flags", json!({})).is_array());
+    assert!(ok(
+        &server,
+        "list_saved_views",
+        json!({"entityType": "contact"})
+    )
+    .is_array());
+    assert!(ok(&server, "list_tags", json!({})).is_array());
+    assert!(ok(
+        &server,
+        "list_custom_field_defs",
+        json!({"entityType": "contact"})
+    )
+    .is_array());
+
+    let metadata = ok(
+        &server,
+        "get_record_metadata",
+        json!({"entityType": "contact", "recordId": contact.id}),
+    );
+    assert!(metadata["tagIds"].is_array());
+    assert!(metadata["values"].is_array());
+
+    let templates = ok(&server, "get_followup_templates", json!({}));
+    assert_eq!(templates["version"], json!(1));
+    assert!(!templates["templates"]
+        .as_array()
+        .expect("templates")
+        .is_empty());
+}
+
+#[test]
+fn list_tools_take_a_limit_and_refuse_an_unusable_one() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    for index in 0..5 {
+        make_contact(&mut storage, &format!("Crew {index}"));
+    }
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    assert_eq!(
+        ok(&server, "list_contacts", json!({"limit": 2}))
+            .as_array()
+            .expect("contacts")
+            .len(),
+        2
+    );
+    assert_eq!(
+        ok(&server, "list_contacts", json!({}))
+            .as_array()
+            .expect("contacts")
+            .len(),
+        5,
+        "no limit returns everything active"
+    );
+    // Zero and over-cap limits are caller errors, never a silent clamp.
+    assert_eq!(
+        kind(&server, "list_contacts", json!({"limit": 0})),
+        "invalid_input"
+    );
+    assert_eq!(
+        kind(&server, "list_tasks", json!({"limit": MAX_LIST_LIMIT + 1})),
+        "invalid_input"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The rest of the write surface
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_write_tool_round_trips_through_the_ordinary_application_path() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let won_stage = application::list_stages(&storage)
+        .expect("list stages")
+        .into_iter()
+        .find(|stage| stage.kind == StageKind::Won)
+        .expect("a won stage is seeded");
+    let server = server(&temp, storage, Mode::ReadWrite);
+    handshake(&server, "Claude Desktop");
+
+    let company = ok(
+        &server,
+        "create_company",
+        json!({"company": {"name": "Ridgeline Fence Co", "kind": "client"}}),
+    );
+    let company_updated = ok(
+        &server,
+        "update_company",
+        json!({
+            "companyId": company["id"],
+            "expectedVersion": company["version"],
+            "patch": {"name": "Ridgeline Fence", "kind": "client"},
+        }),
+    );
+    assert_eq!(company_updated["name"], json!("Ridgeline Fence"));
+
+    let opportunity = ok(
+        &server,
+        "create_opportunity",
+        json!({
+            "opportunity": {
+                "name": "Back lot fence",
+                "companyId": company["id"],
+                "currencyCode": "USD",
+                "valueMinor": 450_000,
+            },
+        }),
+    );
+    let opportunity = ok(
+        &server,
+        "update_opportunity",
+        json!({
+            "opportunityId": opportunity["id"],
+            "expectedVersion": opportunity["version"],
+            "patch": {
+                "name": "Back lot fence — 240 lf",
+                "companyId": company["id"],
+                "currencyCode": "USD",
+                "valueMinor": 480_000,
+            },
+        }),
+    );
+    assert_eq!(opportunity["value"]["valueMinor"], json!(480_000));
+
+    let activity = ok(
+        &server,
+        "log_activity",
+        json!({
+            "parentType": "opportunity",
+            "parentId": opportunity["id"],
+            "activity": {"kind": "call", "summary": "Walked the line with the owner"},
+        }),
+    );
+    assert_eq!(activity["summary"], json!("Walked the line with the owner"));
+
+    let task = ok(
+        &server,
+        "create_task",
+        json!({
+            "task": {
+                "title": "Send the fence quote",
+                "parentType": "opportunity",
+                "parentId": opportunity["id"],
+            },
+        }),
+    );
+    let completed = ok(
+        &server,
+        "complete_task",
+        json!({"taskId": task["id"], "expectedVersion": task["version"]}),
+    );
+    assert_eq!(completed["status"], json!("done"));
+
+    let quoted = ok(
+        &server,
+        "link_quote",
+        json!({
+            "opportunityId": opportunity["id"],
+            "expectedVersion": opportunity["version"],
+            "quoteRef": {"tool": "contractorquote", "externalId": "q-42", "label": "Quote 42"},
+        }),
+    );
+    assert_eq!(quoted["quoteRef"]["externalId"], json!("q-42"));
+
+    // A job hand-off is only allowed once the opportunity is won.
+    let won = ok(
+        &server,
+        "move_opportunity_stage",
+        json!({
+            "opportunityId": opportunity["id"],
+            "toStageId": won_stage.id,
+            "expectedVersion": quoted["version"],
+        }),
+    );
+    assert_eq!(won["stageId"], json!(won_stage.id));
+    let linked = ok(
+        &server,
+        "link_job",
+        json!({
+            "opportunityId": opportunity["id"],
+            "expectedVersion": won["version"],
+            "jobRef": {"tool": "contractorproject", "externalId": "job-7"},
+        }),
+    );
+    assert_eq!(linked["jobRef"]["externalId"], json!("job-7"));
+}
+
+#[test]
+fn every_version_checked_write_reports_the_conflict_over_mcp() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let company = application::create_company(
+        &mut storage,
+        CreateCompanyRequest {
+            actor: Actor::User,
+            company: CompanyPatch {
+                name: "Ridgeline Fence Co".into(),
+                kind: "client".into(),
+                ..CompanyPatch::default()
+            },
+        },
+    )
+    .expect("create company");
+    let opportunity = application::create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Back lot fence".into(),
+                contact_id: Some(contact.id.clone()),
+                currency_code: "USD".into(),
+                ..OpportunityPatch::default()
+            },
+        },
+    )
+    .expect("create opportunity");
+    let task = application::create_task(
+        &mut storage,
+        CreateTaskRequest {
+            actor: Actor::User,
+            task: TaskPatch {
+                title: "Call Dana back".into(),
+                ..TaskPatch::default()
+            },
+        },
+    )
+    .expect("create task");
+    let won_stage = application::list_stages(&storage)
+        .expect("list stages")
+        .into_iter()
+        .find(|stage| stage.kind == StageKind::Won)
+        .expect("a won stage is seeded");
+    let stale = 99;
+    let server = server(&temp, storage, Mode::ReadWrite);
+
+    for (tool, arguments, resource) in [
+        (
+            "update_company",
+            json!({"companyId": company.id, "expectedVersion": stale,
+                   "patch": {"name": "Ridgeline Fence", "kind": "client"}}),
+            "company",
+        ),
+        (
+            "update_opportunity",
+            json!({"opportunityId": opportunity.id, "expectedVersion": stale,
+                   "patch": {"name": "Back lot fence", "contactId": contact.id,
+                             "currencyCode": "USD"}}),
+            "opportunity",
+        ),
+        (
+            "move_opportunity_stage",
+            json!({"opportunityId": opportunity.id, "toStageId": won_stage.id,
+                   "expectedVersion": stale}),
+            "opportunity",
+        ),
+        (
+            "complete_task",
+            json!({"taskId": task.id, "expectedVersion": stale}),
+            "task",
+        ),
+        (
+            "link_quote",
+            json!({"opportunityId": opportunity.id, "expectedVersion": stale,
+                   "quoteRef": {"tool": "contractorquote", "externalId": "q-42"}}),
+            "opportunity",
+        ),
+        (
+            "link_job",
+            json!({"opportunityId": opportunity.id, "expectedVersion": stale,
+                   "jobRef": {"tool": "contractorproject", "externalId": "job-7"}}),
+            "opportunity",
+        ),
+    ] {
+        let result = call(&server, tool, arguments);
+        let error = &result["structuredContent"]["error"];
+        assert_eq!(error["kind"], json!("version_conflict"), "{tool}: {result}");
+        assert_eq!(error["resource"], json!(resource), "{tool}");
+        assert_eq!(error["expectedVersion"], json!(stale), "{tool}");
+        assert!(
+            error["currentVersion"].as_i64().expect("a version") < stale,
+            "{tool} must report the current version"
+        );
+    }
+}
+
+#[test]
+fn record_rules_and_the_lost_reason_rule_carry_their_own_error_kinds() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let opportunity = application::create_opportunity(
+        &mut storage,
+        CreateOpportunityRequest {
+            actor: Actor::User,
+            stage_id: None,
+            opportunity: OpportunityPatch {
+                name: "Back lot fence".into(),
+                contact_id: Some(contact.id.clone()),
+                currency_code: "USD".into(),
+                ..OpportunityPatch::default()
+            },
+        },
+    )
+    .expect("create opportunity");
+    let lost_stage = application::list_stages(&storage)
+        .expect("list stages")
+        .into_iter()
+        .find(|stage| stage.kind == StageKind::Lost)
+        .expect("a lost stage is seeded");
+    let server = server(&temp, storage, Mode::ReadWrite);
+
+    // A record rule the desktop enforces is the same rule here, with its code
+    // and field path intact.
+    let rejected = call(
+        &server,
+        "create_contact",
+        json!({
+            "contact": {
+                "displayName": "Sam Boone",
+                "kind": "client",
+                "channels": [
+                    {"kind": "phone", "value": "555-0101", "preferred": true},
+                    {"kind": "phone", "value": "555-0102", "preferred": true},
+                ],
+            },
+        }),
+    );
+    let error = &rejected["structuredContent"]["error"];
+    assert_eq!(error["kind"], json!("validation_failed"));
+    assert_eq!(error["code"], json!("duplicate_preferred_channel"));
+    assert_eq!(error["field"], json!("channels[1].preferred"));
+
+    let lost = call(
+        &server,
+        "move_opportunity_stage",
+        json!({
+            "opportunityId": opportunity.id,
+            "toStageId": lost_stage.id,
+            "expectedVersion": opportunity.version,
+        }),
+    );
+    let error = &lost["structuredContent"]["error"];
+    assert_eq!(error["kind"], json!("missing_lost_reason"));
+    assert_eq!(error["recordId"], json!(opportunity.id));
+}
+
+// ---------------------------------------------------------------------------
+// The remaining AI-backed tools
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explain_attention_flag_answers_the_flag_get_attention_flags_returned() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let stale = make_contact(&mut storage, "Stale Sam");
+    application::log_activity(
+        &mut storage,
+        LogActivityRequest {
+            actor: Actor::User,
+            parent_type: "contact".into(),
+            parent_id: stale.id.clone(),
+            activity: ActivityPatch {
+                kind: "call".into(),
+                direction: Some("outbound".into()),
+                occurred_at: Some(
+                    (Utc::now() - Duration::days(40)).to_rfc3339_opts(SecondsFormat::Millis, true),
+                ),
+                summary: "Phone call".into(),
+                body: None,
+            },
+        },
+    )
+    .expect("log activity");
+    turn_the_assistant_on(&mut storage);
+    let provider = Arc::new(CannedProvider::new(
+        "Sam has gone quiet for 40 days. Call him this week.",
+    ));
+    let server = server(&temp, storage, Mode::ReadOnly).with_provider(provider.clone());
+
+    let flags = ok(&server, "get_attention_flags", json!({}));
+    let flag_id = flags[0]["id"].as_str().expect("a flag id").to_owned();
+    assert!(flag_id.starts_with("stale_lead:"), "{flag_id}");
+
+    // The preview names the flagged lead and sends nothing.
+    let preview = ok(
+        &server,
+        "preview_context",
+        json!({"tool": "explain_attention_flag", "arguments": {"flagId": flag_id}}),
+    );
+    assert_eq!(preview["purpose"], json!("explain_attention_flag"));
+    assert_eq!(
+        preview["includedRecordRefs"][0]["entityId"],
+        json!(stale.id)
+    );
+    assert_eq!(provider.call_count(), 0);
+
+    let explanation = ok(
+        &server,
+        "explain_attention_flag",
+        json!({"flagId": flag_id}),
+    );
+    assert_eq!(provider.call_count(), 1);
+    assert_eq!(explanation["flagId"], json!(flag_id));
+    assert_eq!(explanation["explanation"]["model"], json!("canned-model"));
+
+    // A flag that is no longer current is not_found.
+    assert_eq!(
+        kind(
+            &server,
+            "explain_attention_flag",
+            json!({"flagId": "stale_lead:gone"})
+        ),
+        "not_found"
+    );
+}
+
+#[test]
+fn propose_followup_drafts_from_a_template_and_applies_as_a_task() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    // The assistant stays OFF: drafting must still work from the template.
+    let server = server(&temp, storage, Mode::ReadWrite);
+    handshake(&server, "Claude Desktop");
+
+    let draft = ok(
+        &server,
+        "propose_followup",
+        json!({"parentType": "contact", "parentId": contact.id}),
+    );
+    assert_eq!(draft["usedProvider"], json!(false));
+    assert!(!draft["draftText"].as_str().expect("draft text").is_empty());
+    assert_eq!(
+        draft["includedRecordRefs"].as_array().expect("refs").len(),
+        0,
+        "template-only drafting sends nothing"
+    );
+    let proposal = &draft["proposal"];
+    assert_eq!(proposal["kind"], json!("create_followup_task"));
+
+    let applied = ok(
+        &server,
+        "apply_proposal",
+        json!({"proposalId": proposal["id"]}),
+    );
+    assert_eq!(applied["entityType"], json!("task"));
+    let tasks = ok(
+        &server,
+        "list_tasks",
+        json!({"parentType": "contact", "parentId": contact.id}),
+    );
+    assert_eq!(tasks.as_array().expect("tasks").len(), 1);
+
+    // An unknown template id is a caller error, not a silent fallback.
+    assert_eq!(
+        kind(
+            &server,
+            "propose_followup",
+            json!({"parentType": "contact", "parentId": contact.id, "templateId": "nope"})
+        ),
+        "not_found"
+    );
+}
+
+#[test]
+fn preview_context_covers_propose_update_and_refuses_an_unpreviewable_tool() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let provider = Arc::new(CannedProvider::new("unused"));
+    let server = server(&temp, storage, Mode::ReadOnly).with_provider(provider.clone());
+
+    let preview = ok(
+        &server,
+        "preview_context",
+        json!({
+            "tool": "propose_update",
+            "arguments": {
+                "entityType": "contact",
+                "entityId": contact.id,
+                "expectedVersion": contact.version,
+            },
+        }),
+    );
+    assert_eq!(preview["purpose"], json!("propose_update"));
+    assert!(preview["contextText"]
+        .as_str()
+        .expect("context text")
+        .contains("Dana Ruiz"));
+    assert_eq!(
+        preview["includedRecordRefs"][0]["entityId"],
+        json!(contact.id)
+    );
+    assert_eq!(provider.call_count(), 0, "a preview sends nothing");
+
+    // A stale version is caught before any model would be asked.
+    assert_eq!(
+        kind(
+            &server,
+            "preview_context",
+            json!({
+                "tool": "propose_update",
+                "arguments": {
+                    "entityType": "contact",
+                    "entityId": contact.id,
+                    "expectedVersion": contact.version + 5,
+                },
+            })
+        ),
+        "version_conflict"
+    );
+    assert_eq!(
+        kind(
+            &server,
+            "preview_context",
+            json!({"tool": "list_contacts", "arguments": {}})
+        ),
+        "invalid_input"
     );
 }
 

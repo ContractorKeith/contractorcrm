@@ -888,6 +888,33 @@ mod tests {
     }
 
     #[test]
+    fn a_request_timeout_is_clamped_into_a_usable_range() {
+        assert_eq!(
+            request_with_context().timeout(),
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
+            "no timeout means the default"
+        );
+        assert_eq!(
+            ProviderRequest {
+                timeout_seconds: Some(0),
+                ..request_with_context()
+            }
+            .timeout(),
+            Duration::from_secs(1),
+            "a zero timeout would fail every call"
+        );
+        assert_eq!(
+            ProviderRequest {
+                timeout_seconds: Some(10_000),
+                ..request_with_context()
+            }
+            .timeout(),
+            Duration::from_secs(MAX_TIMEOUT_SECONDS),
+            "a slow model can never hang the app indefinitely"
+        );
+    }
+
+    #[test]
     fn completion_call_targets_the_chat_endpoint_with_the_configured_model() {
         let provider = OpenAiCompatibleProvider::new(
             "Local model",
