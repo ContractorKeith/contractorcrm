@@ -776,6 +776,31 @@ export interface SetAiSettingsRequest {
   model: string;
 }
 
+// One record whose facts were included in a provider call — the disclosure
+// list shown with every explanation.
+export interface RecordRef {
+  entityType: string;
+  entityId: string;
+  label: string;
+}
+
+// One model completion plus the provenance shown next to it.
+export interface ProviderCompletion {
+  purpose: string;
+  model: string;
+  text: string;
+  includedRecordRefs: RecordRef[];
+}
+
+// Plain-language explanation of one deterministic attention flag. Explanation
+// only — the flag itself still comes from the rules, never from the model.
+export interface AttentionExplanation {
+  flagId: string;
+  endpointHost: string;
+  local: boolean;
+  explanation: ProviderCompletion;
+}
+
 // Result of an explicit connection test — never run on its own.
 export interface ProviderCheck {
   providerLabel: string;

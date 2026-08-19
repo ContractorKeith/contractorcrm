@@ -77,7 +77,19 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
   `affectedVersions` names the record and the version the draft was built from.
 - `propose_followup(parentType, parentId, objective?)` — drafts follow-up wording plus an optional task
 - `summarize_history(parentType, parentId, window?)` — explanation only, no proposal ID
-- `explain_attention_flag(flagId)` — explanation only
+- `explain_attention_flag(flagId)` — implemented; explanation only, no proposal
+  and no writes. Re-evaluates the deterministic flags, finds `flagId` (the
+  stable `<rule>:<recordId>` identity `get_attention_flags` returns), and sends
+  a bounded projection — rule name, its thresholds, the dates that tripped it,
+  and the one flagged record's label, type, and id — through the provider seam.
+  Never sends other records, timelines, attachment bodies, or credentials.
+  Returns `AttentionExplanation { flagId, endpointHost, local, explanation:
+  ProviderCompletion { purpose, model, text, includedRecordRefs } }`, so the UI
+  can always show which model answered and where the record details went. A
+  flag that is no longer current (already handled, or from a stale screen) is
+  `not_found`; a switched-off or unconfigured assistant is
+  `provider_unavailable` and reads neither the credential store nor the
+  network.
 
 Proposal tools return a typed diff, warnings, affected versions, and an opaque proposal ID. They do not mutate CRM data.
 

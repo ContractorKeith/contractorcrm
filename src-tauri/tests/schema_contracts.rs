@@ -1,5 +1,5 @@
 use contractorcrm_lib::{
-    ai::{AiSettings, ProviderCheck, SetAiSettingsRequest},
+    ai::{AiSettings, ProviderCheck, ProviderCompletion, RecordRef, SetAiSettingsRequest},
     application::{
         ContactImportMapping, CreateTagRequest, CustomFieldValueInput, ImportContactsRequest,
         ProductInfo, SavedView, SavedViewDefinition, SavedViewEntityType, SavedViewFilter,
@@ -10,6 +10,7 @@ use contractorcrm_lib::{
         AddAttachmentRequest, Attachment, AttachmentParentType, RemoveAttachmentRequest,
     },
     error::ApplicationError,
+    explain::AttentionExplanation,
     proposals::{
         ApplyProposalRequest, FieldChange, Proposal, ProposalApplied, ProposalEntityType,
         ProposalKind, ProposalUndone, RecordVersion, UndoProposalRequest,
@@ -977,4 +978,55 @@ fn assert_published_shape<T: serde::Serialize>(schema: &Value, name: &str, value
     expected.sort();
     assert_eq!(expected, actual, "{name} wire shape");
     assert_eq!(schema["wireTypes"][name]["additionalProperties"], false);
+}
+
+#[test]
+fn attention_explanations_match_the_published_v1_contract() {
+    let schema: Value = serde_json::from_str(LOCAL_API_SCHEMA).expect("valid local API schema");
+    let command = schema["commands"]
+        .as_array()
+        .expect("commands array")
+        .iter()
+        .find(|command| command["name"] == "explain_attention_flag")
+        .expect("explain_attention_flag must be published");
+    assert_eq!(command["mode"], "read");
+    assert_eq!(command["output"], "AttentionExplanation");
+    assert_eq!(command["input"][0]["name"], "flagId");
+
+    let explanation = serde_json::to_value(AttentionExplanation {
+        flag_id: "stale_lead:contact-1".into(),
+        endpoint_host: "127.0.0.1:11434".into(),
+        local: true,
+        explanation: ProviderCompletion {
+            purpose: "explain_attention_flag".into(),
+            model: "llama3.1".into(),
+            text: "Dana has gone quiet — call this week.".into(),
+            included_record_refs: vec![RecordRef {
+                entity_type: "contact".into(),
+                entity_id: "contact-1".into(),
+                label: "Dana Ruiz".into(),
+            }],
+        },
+    })
+    .expect("serialize attention explanation");
+
+    for (wire_type, actual) in [
+        ("AttentionExplanation", &explanation),
+        ("ProviderCompletion", &explanation["explanation"]),
+    ] {
+        let mut actual_fields = actual
+            .as_object()
+            .unwrap_or_else(|| panic!("{wire_type} object"))
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        actual_fields.sort();
+        let mut expected_fields = string_array(&schema["wireTypes"][wire_type], "required");
+        expected_fields.sort();
+        assert_eq!(expected_fields, actual_fields, "{wire_type}");
+        assert_eq!(
+            schema["wireTypes"][wire_type]["additionalProperties"],
+            false
+        );
+    }
 }

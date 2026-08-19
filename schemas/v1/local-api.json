@@ -88,7 +88,8 @@
     {"name":"propose_record","mode":"read","input":[{"name":"kind","type":"ProposalEntityType","required":true},{"name":"description","type":"string","required":true}],"output":"Proposal"},
     {"name":"propose_update","mode":"read","input":[{"name":"entityType","type":"ProposalEntityType","required":true},{"name":"entityId","type":"string","required":true},{"name":"request","type":"string","required":true},{"name":"expectedVersion","type":"integer","required":true}],"output":"Proposal"},
     {"name":"apply_proposal","mode":"write","input":[{"name":"request","type":"ApplyProposalRequest","required":true}],"output":"ProposalApplied"},
-    {"name":"undo_proposal","mode":"write","input":[{"name":"request","type":"UndoProposalRequest","required":true}],"output":"ProposalUndone"}
+    {"name":"undo_proposal","mode":"write","input":[{"name":"request","type":"UndoProposalRequest","required":true}],"output":"ProposalUndone"},
+    {"name":"explain_attention_flag","mode":"read","input":[{"name":"flagId","type":"string","required":true}],"output":"AttentionExplanation"}
   ],
   "wireTypes": {
     "SearchEntityType": {"enum":["contact","company","opportunity","activity"]},
@@ -213,7 +214,9 @@
         "proposalId":{"type":"string","required":false},
         "command":{"type":"string","required":false}
       }
-    }
+    },
+    "ProviderCompletion": {"type":"object","additionalProperties":false,"description":"one model completion plus the provenance shown with it","required":["purpose","model","text","includedRecordRefs"],"properties":{"purpose":{"type":"string"},"model":{"type":"string"},"text":{"type":"string"},"includedRecordRefs":{"type":"RecordRef[]"}}},
+    "AttentionExplanation": {"type":"object","additionalProperties":false,"description":"plain-language explanation of one deterministic attention flag; explanation only, never a write","required":["flagId","endpointHost","local","explanation"],"properties":{"flagId":{"type":"string"},"endpointHost":{"type":"string"},"local":{"type":"boolean"},"explanation":{"type":"ProviderCompletion"}}}
   },
   "errorKinds": [
     "invalid_input",

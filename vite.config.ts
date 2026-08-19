@@ -23,6 +23,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Agent worktrees live under .claude/ inside the repo; never run their
+    // duplicate copies of the suites.
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/src-tauri/**"],
     // The UI suites are interaction-heavy; one worker avoids 5s false
     // timeouts when several jsdom environments contend on CI or dev laptops.
     maxWorkers: 1,

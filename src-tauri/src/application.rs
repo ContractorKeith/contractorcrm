@@ -3284,14 +3284,14 @@ pub fn set_attention_thresholds(
     })
 }
 
-/// Compute the needs-attention flags: gather the facts (last activity per
-/// contact including related opportunities, stage entry times, open tasks) and
-/// hand them to the pure rules in `attention`. `reference_time` defaults to
-/// now; results are never stored.
-pub fn get_attention_flags(
+/// Gather the facts the attention rules run on (last activity per contact
+/// including related opportunities, stage entry times, open tasks).
+/// `reference_time` defaults to now. Exposed so the AI explanation layer can
+/// quote the very facts a flag was computed from instead of re-deriving them.
+pub fn attention_inputs(
     storage: &Storage,
     reference_time: Option<String>,
-) -> Result<Vec<AttentionFlag>, ApplicationError> {
+) -> Result<AttentionInputs, ApplicationError> {
     let reference_time = match optional_text(reference_time) {
         Some(value) => DateTime::parse_from_rfc3339(&value)
             .map(|parsed| parsed.with_timezone(&Utc))
@@ -3302,14 +3302,25 @@ pub fn get_attention_flags(
         None => Utc::now(),
     };
     let connection = storage.connection();
-    let inputs = AttentionInputs {
+    Ok(AttentionInputs {
         reference_time,
         thresholds: get_attention_thresholds(storage)?,
         contacts: load_contact_facts(connection)?,
         opportunities: load_opportunity_facts(connection)?,
         tasks: load_task_facts(connection)?,
-    };
-    Ok(attention::evaluate(&inputs))
+    })
+}
+
+/// Compute the needs-attention flags from those facts with the pure rules in
+/// `attention`. Results are never stored.
+pub fn get_attention_flags(
+    storage: &Storage,
+    reference_time: Option<String>,
+) -> Result<Vec<AttentionFlag>, ApplicationError> {
+    Ok(attention::evaluate(&attention_inputs(
+        storage,
+        reference_time,
+    )?))
 }
 
 /// Read one app_settings value, if present.

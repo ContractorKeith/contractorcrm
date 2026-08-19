@@ -78,6 +78,7 @@ import type {
   ProposalEntityType,
   ProposalUndone,
   UndoProposalRequest,
+  AttentionExplanation,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -176,6 +177,7 @@ export interface CoreClient {
   ): Promise<Proposal>;
   applyProposal(request: ApplyProposalRequest): Promise<ProposalApplied>;
   undoProposal(request: UndoProposalRequest): Promise<ProposalUndone>;
+  explainAttentionFlag(flagId: string): Promise<AttentionExplanation>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -268,4 +270,5 @@ export const tauriCoreClient: CoreClient = {
     invoke("propose_update", { entityType, entityId, request, expectedVersion }),
   applyProposal: (request) => invoke("apply_proposal", { request }),
   undoProposal: (request) => invoke("undo_proposal", { request }),
+  explainAttentionFlag: (flagId) => invoke("explain_attention_flag", { flagId }),
 };

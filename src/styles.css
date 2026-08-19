@@ -1593,13 +1593,41 @@ h1 {
 }
 
 .attention-flag {
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-hairline) solid var(--color-divider);
+  font-size: var(--font-size-table);
+}
+
+.attention-flag__row {
   display: flex;
   align-items: baseline;
   gap: var(--space-4);
   min-height: var(--row-h);
-  padding: var(--space-2) 0;
-  border-bottom: var(--border-hairline) solid var(--color-divider);
-  font-size: var(--font-size-table);
+}
+
+/* Explain sits at the end of the row, quiet until the user wants it. */
+.attention-explain {
+  margin-left: auto;
+}
+
+/* AI explanation panel — always under the deterministic flag it explains. */
+.attention-ai {
+  padding: var(--space-2) 0 var(--space-1);
+}
+
+.attention-ai__text {
+  margin: 0;
+}
+
+.attention-ai__meta {
+  margin: var(--space-1) 0 0;
+  color: var(--color-neutral-700);
+  font-size: var(--font-size-meta);
+}
+
+.attention-ai__error {
+  margin: var(--space-1) 0 0;
+  color: var(--state-attention);
 }
 
 .attention-link {
