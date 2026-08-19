@@ -86,6 +86,10 @@ Identical to ContractorProject:
 - Attachments are referenced files in a managed assets directory, not database blobs.
 - Core workflows never require network access.
 
+Crash semantics, the forward-only migration model, the automatic `.bak` files,
+and what to do with a damaged database are documented in
+[docs/RECOVERY.md](RECOVERY.md).
+
 ## AI rules
 
 Identical to ContractorProject:

@@ -306,7 +306,7 @@ meanings overlap. The published list is `errorKinds` in
 - `proposal_expired` — the draft is unknown, expired, or already applied; carries `proposalId`
 - `missing_lost_reason` — moving to the lost stage without a reason
 - `provider_unavailable` — the assistant is off, unconfigured, or the endpoint could not answer; carries safe `reason` text, never a key
-- `invalid_stored_data` — a stored row or setting could not be read as its current shape
+- `invalid_stored_data` — a stored row or setting could not be read as its current shape, or the database file itself is damaged and cannot be opened (the message names the file and points at `docs/RECOVERY.md`)
 - `backup_failed`, `restore_invalid` — the backup and restore commands (desktop only)
 - `storage_unavailable` — the local database itself refused the work
 - `io` — a filesystem failure behind an attachment, export, or archive command
