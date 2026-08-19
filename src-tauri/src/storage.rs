@@ -10,9 +10,11 @@ use crate::error::StorageError;
 pub const DATABASE_FILE_NAME: &str = "contractorcrm.sqlite3";
 
 /// One forward-only schema migration; SQL runs inside a single transaction.
-struct Migration {
-    version: i64,
-    sql: &'static str,
+/// Public only so tests can drive `Storage::open_with_migrations`; the real
+/// list is `MIGRATIONS` and stays private.
+pub struct Migration {
+    pub version: i64,
+    pub sql: &'static str,
 }
 
 /// v1 core tables per docs/DATA_MODEL.md — companies, contacts, contact
@@ -540,6 +542,16 @@ impl Storage {
     /// Open (creating if needed) the database at an explicit path — the test
     /// seam. Production callers use `open_in_app_data`.
     pub fn open(database_path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::open_with_migrations(database_path, MIGRATIONS)
+    }
+
+    /// Open (creating if needed) and apply an explicit migration list. Only
+    /// `open` (with the real `MIGRATIONS`) and the migration-failure tests use
+    /// this; everything else goes through `open`.
+    pub fn open_with_migrations(
+        database_path: impl AsRef<Path>,
+        migrations: &[Migration],
+    ) -> Result<Self, StorageError> {
         let database_path = database_path.as_ref().to_path_buf();
         let database_existed = database_path.exists();
         if let Some(parent) = database_path.parent() {
@@ -548,13 +560,23 @@ impl Storage {
 
         let connection = Connection::open(&database_path)?;
         // WAL for concurrent read friendliness; foreign keys are per-connection.
-        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        // A damaged file fails here (SQLite opens lazily), so map it to
+        // actionable guidance instead of a raw SQLite code.
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .map_err(|error| unreadable_database(&database_path, error))?;
 
         let mut storage = Self {
             database_path,
             connection,
         };
-        storage.migrate(database_existed)?;
+        let database_path = storage.database_path.clone();
+        storage
+            .migrate(database_existed, migrations)
+            .map_err(|error| match error {
+                StorageError::Database(inner) => unreadable_database(&database_path, inner),
+                other => other,
+            })?;
         Ok(storage)
     }
 
@@ -565,7 +587,9 @@ impl Storage {
     pub fn open_existing(database_path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let database_path = database_path.as_ref().to_path_buf();
         let connection = Connection::open(&database_path)?;
-        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+            .map_err(|error| unreadable_database(&database_path, error))?;
         Ok(Self {
             database_path,
             connection,
@@ -582,7 +606,7 @@ impl Storage {
             database_path: PathBuf::from(":memory:"),
             connection,
         };
-        storage.migrate(false)?;
+        storage.migrate(false, MIGRATIONS)?;
         Ok(storage)
     }
 
@@ -758,7 +782,11 @@ impl Storage {
 
     /// Apply any pending migrations; already-applied versions are skipped, so
     /// re-running on an existing database is a no-op.
-    fn migrate(&mut self, database_existed: bool) -> Result<(), StorageError> {
+    fn migrate(
+        &mut self,
+        database_existed: bool,
+        migrations: &[Migration],
+    ) -> Result<(), StorageError> {
         self.connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -766,7 +794,7 @@ impl Storage {
              );",
         )?;
 
-        for migration in MIGRATIONS {
+        for migration in migrations {
             if migration_applied(&self.connection, migration.version)? {
                 continue;
             }
@@ -804,6 +832,29 @@ impl Storage {
         }
         Ok(())
     }
+}
+
+/// Turn a damaged-file SQLite failure into a user-actionable storage error;
+/// every other database error passes through untouched. Cheap: it only looks
+/// at an error that already happened, so healthy opens pay nothing.
+fn unreadable_database(database_path: &Path, error: rusqlite::Error) -> StorageError {
+    let corrupted = matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if matches!(
+                inner.code,
+                rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt
+            )
+    );
+    if !corrupted {
+        return StorageError::Database(error);
+    }
+    StorageError::InvalidStoredData(format!(
+        "the database file at {} could not be read and looks damaged ({error}). \
+         Restore the newest backup (a .bak file next to it) or import a portable \
+         archive — see docs/RECOVERY.md",
+        database_path.display()
+    ))
 }
 
 /// Latest schema version this build knows how to open.

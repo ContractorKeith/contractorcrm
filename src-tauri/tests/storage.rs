@@ -1,5 +1,37 @@
-use contractorcrm_lib::storage::{new_id, now_utc, Storage};
+use contractorcrm_lib::error::{ApplicationError, StorageError};
+use contractorcrm_lib::storage::{new_id, now_utc, Migration, Storage};
 use rusqlite::params;
+use std::io::{Seek, SeekFrom, Write};
+
+/// Test-only migration list: the first statement succeeds, the second is not
+/// SQL. Runs on top of an already-migrated database through
+/// `Storage::open_with_migrations`.
+const FAILING_MIGRATIONS: &[Migration] = &[Migration {
+    version: 9001,
+    sql: "CREATE TABLE half_applied_v9001 (id TEXT PRIMARY KEY);\n\
+          ALTER TABLE contacts ADD COLUMN half_applied_column TEXT;\n\
+          THIS IS NOT SQL;",
+}];
+
+/// `Storage` is not `Debug`, so unwrap the failure side by hand.
+fn expect_open_failure(result: Result<Storage, StorageError>, context: &str) -> StorageError {
+    match result {
+        Ok(_) => panic!("{context}"),
+        Err(error) => error,
+    }
+}
+
+/// Schema version recorded in a database file, read without migrating it.
+fn backup_schema_version(path: &std::path::Path) -> i64 {
+    let connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open backup read-only");
+    connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .expect("read backup version")
+}
 
 /// Table names the migrations must create, plus the migration ledger itself.
 const EXPECTED_TABLES: &[&str] = &[
@@ -291,4 +323,207 @@ fn populated_v8_database_gains_contact_external_ids() {
     assert!(database_path
         .with_file_name("contractorcrm.sqlite3.pre-migration-v9.bak")
         .is_file());
+}
+
+#[test]
+fn a_failing_migration_leaves_no_schema_or_ledger_trace() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    let storage = Storage::open(&database_path).expect("create current database");
+    let now = now_utc();
+    storage
+        .connection()
+        .execute(
+            "INSERT INTO contacts (id,display_name,kind,created_at,updated_at,version)
+             VALUES ('pre-migration-contact','Pre Migration','client',?1,?1,1)",
+            [&now],
+        )
+        .expect("seed contact");
+    drop(storage);
+
+    let failure = expect_open_failure(
+        Storage::open_with_migrations(&database_path, FAILING_MIGRATIONS),
+        "a broken migration must not open",
+    );
+    assert!(
+        matches!(failure, StorageError::Database(_)),
+        "unexpected error: {failure}"
+    );
+    // The safety net still ran: an existing database gets a copy before the
+    // migration touches it, whether or not the migration then succeeds.
+    assert!(database_path
+        .with_file_name("contractorcrm.sqlite3.pre-migration-v9001.bak")
+        .is_file());
+
+    // Reopening the normal way must find the old version, untouched.
+    let reopened = Storage::open(&database_path).expect("reopen after failed migration");
+    assert_eq!(
+        applied_versions(&reopened),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "the failed version must not be recorded"
+    );
+    assert_eq!(table_names(&reopened), EXPECTED_TABLES);
+    let half_applied: i64 = reopened
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'half_applied_v9001'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("look for the rolled-back table");
+    assert_eq!(half_applied, 0, "the failed migration's table survived");
+    let column_added: i64 = reopened
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('contacts')
+             WHERE name = 'half_applied_column'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("look for the rolled-back column");
+    assert_eq!(column_added, 0, "the failed migration's column survived");
+    let integrity: String = reopened
+        .connection()
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .expect("integrity check");
+    assert_eq!(integrity, "ok");
+    assert_eq!(
+        reopened
+            .connection()
+            .query_row::<String, _, _>(
+                "SELECT display_name FROM contacts WHERE id='pre-migration-contact'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("data survives a failed migration"),
+        "Pre Migration"
+    );
+}
+
+#[test]
+fn restoring_a_pre_migration_backup_returns_to_the_old_version_and_re_migrates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    let storage = Storage::open(&database_path).expect("create current database");
+    let now = now_utc();
+    storage
+        .connection()
+        .execute(
+            "INSERT INTO contacts (id,display_name,kind,created_at,updated_at,version)
+             VALUES ('v9-contact','V9 Contact','client',?1,?1,1)",
+            [&now],
+        )
+        .expect("seed contact");
+    // Return the fixture to a populated v9 database (pre-attachments).
+    storage
+        .connection()
+        .execute_batch(
+            "DROP TRIGGER attachments_owner_insert;
+             DROP TRIGGER attachments_owner_update;
+             DROP TRIGGER contacts_attachments_delete;
+             DROP TRIGGER opportunities_attachments_delete;
+             DROP TABLE attachments;
+             DELETE FROM schema_migrations WHERE version=10;",
+        )
+        .expect("downgrade fixture to v9");
+    drop(storage);
+
+    // Upgrading writes the pre-migration copy of the v9 database.
+    let mut upgraded = Storage::open(&database_path).expect("upgrade v9 to v10");
+    assert_eq!(
+        applied_versions(&upgraded),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
+    let backup_path = database_path.with_file_name("contractorcrm.sqlite3.pre-migration-v10.bak");
+    assert!(backup_path.is_file());
+    assert_eq!(backup_schema_version(&backup_path), 9, "backup is at v9");
+    Storage::verify_backup_file(&backup_path).expect("pre-migration backup verifies");
+
+    // Something written after the upgrade must not survive the restore.
+    let now = now_utc();
+    upgraded
+        .connection()
+        .execute(
+            "INSERT INTO contacts (id,display_name,kind,created_at,updated_at,version)
+             VALUES ('post-upgrade-contact','Post Upgrade','client',?1,?1,1)",
+            [&now],
+        )
+        .expect("seed post-upgrade contact");
+
+    let safety_copy = upgraded
+        .restore_from(&backup_path)
+        .expect("restore the pre-migration backup");
+    assert!(safety_copy.is_file(), "pre-restore safety copy is kept");
+    assert_eq!(
+        backup_schema_version(&safety_copy),
+        10,
+        "the safety copy holds the state we restored away from"
+    );
+
+    // Restoring reopens through the normal path, so v10 is re-applied cleanly.
+    assert_eq!(
+        applied_versions(&upgraded),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
+    assert_eq!(table_names(&upgraded), EXPECTED_TABLES);
+    let survivors: Vec<String> = {
+        let mut statement = upgraded
+            .connection()
+            .prepare("SELECT id FROM contacts ORDER BY id")
+            .expect("prepare survivor listing");
+        statement
+            .query_map([], |row| row.get(0))
+            .expect("query survivors")
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .expect("collect survivors")
+    };
+    assert_eq!(survivors, vec!["v9-contact".to_string()]);
+}
+
+#[test]
+fn a_damaged_database_file_opens_with_actionable_guidance() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    drop(Storage::open(&database_path).expect("create database"));
+
+    // Scribble over the SQLite file header — the classic damaged-file shape.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&database_path)
+        .expect("open database file");
+    file.seek(SeekFrom::Start(0)).expect("seek");
+    file.write_all(&[0x7f; 64]).expect("scribble header");
+    file.flush().expect("flush");
+    drop(file);
+
+    let failure = expect_open_failure(
+        Storage::open(&database_path),
+        "a damaged file must not open",
+    );
+    let message = failure.to_string();
+    assert!(
+        matches!(failure, StorageError::InvalidStoredData(_)),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("looks damaged") && message.contains("docs/RECOVERY.md"),
+        "message should point at recovery: {message}"
+    );
+    // The UI and agent surfaces both see the same stable kind.
+    assert_eq!(
+        ApplicationError::from(failure).kind(),
+        "invalid_stored_data"
+    );
+
+    // The read-only helper path reports it the same way.
+    let read_only = expect_open_failure(
+        Storage::open_existing(&database_path),
+        "damaged file stays closed",
+    );
+    assert!(matches!(read_only, StorageError::InvalidStoredData(_)));
+
+    // And it is refused as a restore source rather than silently accepted.
+    let as_backup =
+        Storage::verify_backup_file(&database_path).expect_err("damaged file is not a backup");
+    assert!(matches!(as_backup, StorageError::RestoreInvalid(_)));
 }
