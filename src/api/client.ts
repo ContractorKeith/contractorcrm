@@ -63,6 +63,12 @@ import type {
   ArchiveExportReport,
   ArchiveImportPreview,
   ArchiveImportReport,
+  AddAttachmentRequest,
+  Attachment,
+  AttachmentLocation,
+  AttachmentParentType,
+  AttachmentRemoval,
+  RemoveAttachmentRequest,
 } from "./types";
 
 // Seam for talking to the Rust core; tests inject a fake, the app uses Tauri.
@@ -142,6 +148,10 @@ export interface CoreClient {
   exportArchive(path: string, overwrite: boolean): Promise<ArchiveExportReport>;
   previewArchiveImport(path: string): Promise<ArchiveImportPreview>;
   importArchive(path: string): Promise<ArchiveImportReport>;
+  addAttachment(request: AddAttachmentRequest): Promise<Attachment>;
+  listAttachments(parentType: AttachmentParentType, parentId: string): Promise<Attachment[]>;
+  removeAttachment(request: RemoveAttachmentRequest): Promise<AttachmentRemoval>;
+  attachmentPath(attachmentId: string): Promise<AttachmentLocation>;
 }
 
 // Production client — one invoke per registered Tauri command.
@@ -220,4 +230,8 @@ export const tauriCoreClient: CoreClient = {
   exportArchive: (path, overwrite) => invoke("export_archive", { path, overwrite }),
   previewArchiveImport: (path) => invoke("preview_archive_import", { path }),
   importArchive: (path) => invoke("import_archive", { path }),
+  addAttachment: (request) => invoke("add_attachment", { request }),
+  listAttachments: (parentType, parentId) => invoke("list_attachments", { parentType, parentId }),
+  removeAttachment: (request) => invoke("remove_attachment", { request }),
+  attachmentPath: (attachmentId) => invoke("attachment_path", { attachmentId }),
 };

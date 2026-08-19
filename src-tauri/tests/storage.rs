@@ -5,6 +5,7 @@ use rusqlite::params;
 const EXPECTED_TABLES: &[&str] = &[
     "activities",
     "app_settings",
+    "attachments",
     "command_log",
     "companies",
     "contact_channels",
@@ -79,12 +80,18 @@ fn schema_migrations_records_versions_and_rerunning_is_a_no_op() {
     let database_path = temp.path().join("contractorcrm.sqlite3");
 
     let storage = Storage::open(&database_path).expect("first open");
-    assert_eq!(applied_versions(&storage), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(
+        applied_versions(&storage),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
     drop(storage);
 
     // Reopening re-runs the migration framework; applied versions are skipped.
     let reopened = Storage::open(&database_path).expect("second open");
-    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(
+        applied_versions(&reopened),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
     assert_eq!(table_names(&reopened), EXPECTED_TABLES);
 }
 
@@ -176,7 +183,10 @@ fn populated_v7_database_upgrades_with_backup_and_preserves_core_projections() {
     drop(storage);
 
     let upgraded = Storage::open(&database_path).expect("upgrade v7 to v8");
-    assert_eq!(applied_versions(&upgraded), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(
+        applied_versions(&upgraded),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
     assert_eq!(
         upgraded
             .connection()
@@ -211,7 +221,10 @@ fn populated_v7_database_upgrades_with_backup_and_preserves_core_projections() {
     drop(upgraded);
 
     let reopened = Storage::open(&database_path).expect("idempotent reopen");
-    assert_eq!(applied_versions(&reopened), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(
+        applied_versions(&reopened),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
 }
 
 #[test]
@@ -239,7 +252,10 @@ fn populated_v8_database_gains_contact_external_ids() {
     drop(storage);
 
     let upgraded = Storage::open(&database_path).expect("upgrade v8 to v9");
-    assert_eq!(applied_versions(&upgraded), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(
+        applied_versions(&upgraded),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
     let external_id: Option<String> = upgraded
         .connection()
         .query_row(

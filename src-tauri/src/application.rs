@@ -5028,7 +5028,7 @@ fn bounded_fts_query(query: &str) -> String {
         .join(" AND ")
 }
 
-fn check_version(
+pub(crate) fn check_version(
     resource: &'static str,
     id: &str,
     expected: i64,

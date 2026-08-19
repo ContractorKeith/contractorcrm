@@ -3,7 +3,8 @@
 Issue: #20
 Status: implemented
 Updated: 2026-08-18 (review round: dry-run verification, parsed record
-counts, untrusted-input bounds, destination guards, structural minimum)
+counts, untrusted-input bounds, destination guards, structural minimum;
+noted superseded-by-#21 table-file forward compatibility)
 
 ## Boundary
 
@@ -46,18 +47,28 @@ through a native file dialog.
   `manifest.recordCounts` (`record_count_mismatch`). Trusting the manifest's
   claimed count let an attacker (or a hand-edited archive) pair an inflated
   count with an emptied data file and have it summarized as a full archive.
-- **PRAGMA-driven row validation for forward compatibility — narrowly.**
-  `table_columns` reads column name, declared SQLite type, and `NOT NULL`
-  straight from `PRAGMA table_info(<table>)` instead of a hand-maintained
-  column list, so the archive format can never drift from the live
-  migrations. A column *missing from a row* in an older archive is accepted
-  (defaults to `NULL`) only when the live column is nullable — that is the
-  entire forward-compatibility mechanism. It does not extend to a missing
-  *table file*: all 16 `data/<table>.json` files are required, so an archive
-  written before a table existed does not import (`missing_table_file`), and
-  it does not extend to non-archived state — `app_settings` and the
-  needs-attention thresholds it holds never travel in an archive at all,
-  because that table is excluded from the archive entirely.
+- **PRAGMA-driven row validation for forward compatibility — narrowly, at the
+  time.** `table_columns` reads column name, declared SQLite type, and
+  `NOT NULL` straight from `PRAGMA table_info(<table>)` instead of a
+  hand-maintained column list, so the archive format can never drift from the
+  live migrations. A column *missing from a row* in an older archive is
+  accepted (defaults to `NULL`) only when the live column is nullable — that
+  was, at this milestone, the entire forward-compatibility mechanism: it did
+  not extend to a missing *table file* (all 16 `data/<table>.json` files were
+  required, so an archive written before a table existed did not import,
+  `missing_table_file`), and it does not extend to non-archived state —
+  `app_settings` and the needs-attention thresholds it holds never travel in
+  an archive at all, because that table is excluded from the archive
+  entirely. **Superseded by issue #21.** Attachments (migration 010)
+  introduced `TABLE_INTRODUCED_IN`, a map from each canonical table to the
+  migration that created it, and a missing `data/<table>.json` is now
+  tolerated as zero rows whenever the archive's `databaseMigrationVersion`
+  predates that table's introduction — an archive written at migration 9, for
+  example, has no `data/attachments.json` and still imports cleanly. See
+  `docs/DATA_MODEL.md` "Archive contract" and
+  `docs/features/attachments/IMPLEMENTATION_BRIEF.md` for the current rule;
+  the "all 16 table files are always required" wording above is historical,
+  describing the state as of this brief's own milestone.
 - **`databaseMigrationVersion` gates direction, not equality.** An archive
   written at an older migration version imports forward (missing nullable
   columns are simply absent from its JSON rows); an archive written at a

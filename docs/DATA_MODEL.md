@@ -124,7 +124,39 @@ Completing a task can optionally log a linked activity in the same transaction.
 
 ### `attachments`
 
-Metadata plus a managed relative path under the app assets directory: parent type + id, filename, media type, size, checksum. File content stays outside SQLite and inside the portable archive.
+A contact or opportunity attachment (issue #21, implemented in migration 010) is a copy of the
+user's file taken under application management, laid out on disk as
+`<app data>/attachments/<attachment id>/<file name>`. The row is the record of truth:
+
+- `id`
+- `parent_type` + `parent_id` — contact or opportunity, enforced by trigger (SQLite cannot express
+  a foreign key selected by a column, the same `record_tags`-style pattern as migration 8); the
+  parent must exist and not be archived, and a parent cannot be deleted while it still has
+  attachments
+- `file_name` — sanitized display name, which is also the on-disk file name (traversal/control
+  characters and invisible Unicode format characters — bidi overrides, zero-width spaces, variation
+  selectors — stripped so a right-to-left override can't disguise an executable as a PDF, Windows
+  reserved device names prefixed with `_`, length capped at 120 bytes with the extension preserved)
+- `relative_path` — internal, `UNIQUE`, `<id>/<file_name>`; never exposed over the wire, only used
+  to resolve the managed file path
+- `media_type` nullable — looked up from a small file-extension map, `application/octet-stream`
+  for anything unrecognized
+- `size_bytes`, `sha256` — recorded when the file is copied into management
+- `created_at`, `version`
+
+Managed files are capped at 256 MiB each — the same per-entry cap the portable archive already
+enforces, so anything that can be attached can also be exported. File content lives outside SQLite,
+under the attachments root; the database backup/restore commands are database-file only and never
+touch attachment files (see "Archive contract" below for how attachments travel in a portable
+archive, and how a restored database can end up with rows that reference missing files).
+
+Four commands cover the surface: `add_attachment` (copies a file from `sourcePath` under
+management; refuses a `sourcePath` that already resolves inside the managed root, so a managed
+file can't be attached to itself), `list_attachments`, `remove_attachment` (versioned; deletes the
+row first, then best-effort removes the managed file — `fileRemoved` reports whether that cleanup
+succeeded), and `attachment_path` (resolves the absolute path plus whether the file still exists on
+disk, for the frontend to hand to the `tauri-plugin-opener` opener rather than building a path
+itself). FTS indexing of attachment file names and merge-import are both out of scope for v1.
 
 ### `saved_views`
 
@@ -170,27 +202,49 @@ Same as ContractorProject:
 
 ## Archive contract
 
-The portable archive (issue #20, implemented) is a versioned ZIP:
+The portable archive (issue #20, extended with attachments in issue #21) is a versioned ZIP:
 
 - `manifest.json` — `schemaVersion` (currently `1`), `product` (name +
   app version), `exportedAt`, `databaseMigrationVersion`, one
   `ArchiveFileEntry` (`path`, `sha256`, `bytes`) per archived file, and
   `recordCounts` per table.
 - `data/<table>.json` — one pretty-printed JSON array per canonical table, in
-  camelCase, for all 16 archived tables: `companies`, `contacts`,
+  camelCase, for all 17 archived tables: `companies`, `contacts`,
   `contact_channels`, `pipelines`, `stages`, `lost_reasons`, `opportunities`,
   `stage_history`, `activities`, `tasks`, `saved_views`, `tags`,
   `record_tags`, `custom_field_defs`, `custom_field_options`,
-  `custom_field_values`. `command_log`, `app_settings`, `search_index`, and
-  `schema_migrations` are deliberately excluded — history/preferences are
-  local, the FTS index is rebuilt on import, and migrations belong to the
-  database, not the archive.
+  `custom_field_values`, `attachments`. `command_log`, `app_settings`,
+  `search_index`, and `schema_migrations` are deliberately excluded —
+  history/preferences are local, the FTS index is rebuilt on import, and
+  migrations belong to the database, not the archive.
 - `csv/contacts.csv` and `csv/opportunities.csv` — human-readable convenience
   copies of the CSV export; `import_archive` ignores them.
-- `assets/` — an empty directory entry reserved for attachments. Any file
-  under `assets/` is refused (`unexpected_asset`) until issue #21 defines a
-  checksummed, size-bounded attachment format; a placeholder directory entry
-  with no files is fine.
+- `assets/<attachment id>/<file name>` — the managed attachment files
+  themselves, one per `attachments` row, at the same relative path they hold
+  on disk under the attachments root. Export reads each managed file fresh
+  and refuses (`attachment_file_missing`) if one is gone, so an archive can
+  never claim a file it doesn't actually carry. The directory entry is always
+  present, even with zero attachments, so the layout is stable.
+
+Export enforces the same ~1 GiB total-uncompressed cap import reads against (`MAX_ARCHIVE_BYTES`):
+before building the ZIP, `export_archive` sums the archived table JSON, the CSV convenience copies,
+and every attachment's `size_bytes` (from its row, not a re-read of the file) as it goes, and
+refuses (`validation_failed` / `archive_too_large`) the moment the running total would exceed the
+limit — an archive too large to ever be imported back is refused at export time instead of being
+written and only failing later.
+
+Attachment files are cross-checked against their row on top of the manifest's own per-file
+checksum: every `attachments` row must have a matching `assets/<id>/<file_name>` entry
+(`attachment_file_missing`), whose byte count and SHA-256 must match the row's `size_bytes` and
+`sha256` (`attachment_size_mismatch`, `attachment_checksum_mismatch`); any file under `assets/`
+that no row claims is `unexpected_asset`. Only once every attachment file verifies clean are its
+bytes handed on to import.
+
+On import, verified attachment bytes are written into a fresh `.import-staging-<id>` directory
+under the attachments root before the database transaction runs, then swapped into place after the
+transaction commits — see "A successful import..." below for the full stage/commit/swap/sweep
+sequence and its honest recovery story (there is no directory-swap recovery; a stranded staging
+directory is only ever swept and discarded, never resumed).
 
 Archive schema version and database migration version are tracked
 independently. Verification (shared by `preview_archive_import` and
@@ -209,25 +263,39 @@ succeed) never writes to the live database and runs, in order:
    trailing `too_many_issues` summarizing how many more were found.
 2. **Product and version gates.** An archive from a different product
    (`wrong_product`) short-circuits the rest of verification — one clear
-   problem instead of sixteen missing table files. Otherwise
+   problem instead of seventeen missing table files. Otherwise
    `schemaVersion == 1` (`unsupported_schema_version`) and
    `databaseMigrationVersion <= supported` (`unsupported_migration_version`;
    an older archive imports forward, a newer one is rejected until the app is
    updated) are checked next.
 3. **Checksums and row shape.** Every manifest-listed file must be present
    with a matching size and SHA-256 (`missing_file`, `size_mismatch`,
-   `checksum_mismatch`), every entry in the archive must be listed
-   (`unlisted_file`), and all 16 table files must be present — an archive
-   from before a table existed does not import (`missing_table_file`).
-   Every row is checked against the live schema read via `PRAGMA
-   table_info` (unknown/missing columns, type/nullability mismatches, blank
-   ids, invalid versions, duplicate primary keys — `record_tags` keys on
-   `(tag_id, entity_type, record_id)`, every other table on `id`). A column
-   *missing* from an older archive's row is allowed only when the live
-   column is nullable (defaults to `NULL`) — this is the only forward-
-   compatibility mechanism; a whole missing table file is not tolerated, and
-   `app_settings`/needs-attention thresholds never travel in the archive at
-   all, since that table is excluded entirely.
+   `checksum_mismatch`), and every entry in the archive must be listed
+   (`unlisted_file`). A missing `data/<table>.json` is a `missing_table_file`
+   issue *unless* the archive's `databaseMigrationVersion` predates the
+   migration that introduced the table (`TABLE_INTRODUCED_IN`) — an archive
+   written before migration 10, for example, has no `attachments` file and
+   still imports cleanly, treated as zero attachment rows. This supersedes
+   the earlier "all 16 table files are always required" rule from issue #20;
+   it is forward-compatibility for whole tables, layered on top of the
+   existing per-column tolerance below. Every row is checked against the
+   live schema read via `PRAGMA table_info` (unknown/missing columns,
+   type/nullability mismatches, blank ids, invalid versions, duplicate
+   primary keys — `record_tags` keys on `(tag_id, entity_type, record_id)`,
+   every other table on `id`). A column *missing* from an older archive's
+   row is allowed only when the live column is nullable (defaults to
+   `NULL`). `app_settings`/needs-attention thresholds never travel in the
+   archive at all, since that table is excluded entirely.
+   Attachment files under `assets/` are then cross-checked against the
+   `attachments` rows. Each row's `id` and `file_name` must be safe,
+   validated path segments and its `relative_path` must equal
+   `<id>/<file_name>` (`invalid_value` for an unsafe id or file name,
+   `attachment_path_mismatch` for a `relative_path` that doesn't match) —
+   a hostile archive can never plant a row that addresses anything outside
+   the attachments root. Only once a row passes that check is its asset file
+   verified (`attachment_file_missing`, `attachment_size_mismatch`,
+   `attachment_checksum_mismatch`, `unexpected_asset` — see "Archive
+   contract" above).
 4. **Record counts.** The manifest's claimed `recordCounts` are compared
    against the rows actually parsed per table (`record_count_mismatch`) —
    an inflated manifest count over an emptied data file would otherwise
@@ -236,7 +304,7 @@ succeed) never writes to the live database and runs, in order:
 5. **References and structure** (only once every row parsed cleanly —
    referential and structural checks are skipped when earlier issues exist,
    so fixing those issues and re-previewing the file can surface new ones).
-   Referential integrity is checked in memory across all 16 tables,
+   Referential integrity is checked in memory across all 17 tables,
    including polymorphic `parent_type`/`parent_id` and
    `entity_type`/`record_id` ownership (`missing_reference`,
    `unknown_parent_type`). Structurally, the archive must contain at least
@@ -250,19 +318,35 @@ succeed) never writes to the live database and runs, in order:
    `constraint_violation`. This is what makes "empty issues" true by
    construction rather than by hope.
 
-A successful import takes its timestamped safety backup
-(`<database>.pre-import-<stamp>.bak`) only after verification passes with no
-issues, then replaces every canonical row — delete all 16 tables in reverse
-dependency order, insert from the archive in dependency order, rebuild the
-FTS index — in one transaction. If that real apply somehow fails despite the
-dry run having passed, the transaction rolls back and the orphaned safety
-backup is removed, and the failure is reported as `validation_failed` /
-`archive_invalid` — the live database and filesystem are left exactly as
-they were. Only full replace is supported in v1; merge-import is out of
-scope. Export and import each write one `command_log` row (`export`/`archive`
-and `import`/`archive`).
+A successful import sweeps any `.import-staging-*` directory a previous crashed import left
+behind, stages the verified attachment files into a fresh staging directory under the attachments
+root, then takes its timestamped safety backup (`<database>.pre-import-<stamp>.bak`) only after
+verification passes with no issues, then replaces every canonical row — delete all 17 tables in
+reverse dependency order, insert from the archive in dependency order, rebuild the FTS index — in
+one transaction. If the real row-replace apply somehow fails despite the dry run having passed,
+the transaction rolls back, the orphaned safety backup and staging directory are removed, and the
+failure is reported as `validation_failed` / `archive_invalid` — the live database and filesystem
+are left exactly as they were. Only full replace is supported in v1; merge-import is out of scope.
 
-`export_archive` (and the CSV exports) refuse to write onto the live
-database file itself or its `-wal`/`-shm` sidecars and `.bak` safety copies
-(`destination_is_database`), so an export can never overwrite the data it
-was meant to preserve.
+Once the transaction commits, the import is committed and done as far as the database is
+concerned — the row replace is irreversible from here, whatever happens next. The swap from the
+staging directory into the live attachments root (clear the old managed files, move the staged
+ones in) is attempted, retried once on failure, and then abandoned silently if it still fails:
+`import_archive` always returns its `ArchiveImportReport` (with the safety backup path) rather
+than surfacing a post-commit filesystem error the caller can't undo anyway. A swap that never
+completes leaves some attachment rows pointing at files that aren't there yet; `attachment_path`
+reports those as `exists: false` until the archive is imported again, which re-stages and
+re-attempts the swap from scratch. Export and import each write one `command_log` row
+(`export`/`archive` and `import`/`archive`).
+
+`export_archive` also sweeps any leftover `.import-staging-*` directory before it reads the
+attachments root, since export is the other routine opportunity (besides the next import) to clear
+bytes a crashed import stranded. `export_archive` (and the CSV exports) refuse to write onto the
+live database file itself or its `-wal`/`-shm` sidecars and `.bak` safety copies
+(`destination_is_database`), so an export can never overwrite the data it was meant to preserve.
+
+Backup/restore (`backup_to` / `restore_from`) is a separate, database-file-only mechanism — it
+never copies or restores attachment files. Restoring a database backup can leave `attachments`
+rows that reference files no longer on disk; `attachment_path` still resolves the row's path but
+reports `exists: false`, so the frontend can surface the gap rather than fail silently. The
+portable archive is the only mechanism that carries attachment bytes.

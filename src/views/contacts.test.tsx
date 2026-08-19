@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { App } from "../App";
-import { makeCompany, makeContact, stubClient } from "../test/stub-client";
+import { makeAttachment, makeCompany, makeContact, stubClient } from "../test/stub-client";
 import { formatLocalDateTime } from "./date-format";
 
 // Native file dialogs only exist inside Tauri, so stand them in for tests.
@@ -283,6 +283,25 @@ describe("contact list and detail", () => {
 
     expect(client.archiveContact).toHaveBeenCalledWith({ id: "c1", expectedVersion: 2 });
     expect(await screen.findByRole("button", { name: "Unarchive" })).toBeVisible();
+  });
+
+  it("shows the contact's attachments in the detail view", async () => {
+    const user = userEvent.setup();
+    const contact = makeContact({ id: "c1", displayName: "Dana Ruiz" });
+    const client = stubClient({
+      listContacts: vi.fn().mockResolvedValue([contact]),
+      getContact: vi.fn().mockResolvedValue(contact),
+      listAttachments: vi
+        .fn()
+        .mockResolvedValue([makeAttachment({ parentId: "c1", fileName: "site-plan.pdf" })]),
+    });
+
+    render(<App client={client} />);
+    await user.click(await screen.findByText("Dana Ruiz"));
+
+    const attachments = await screen.findByRole("region", { name: "Attachments" });
+    expect(within(attachments).getByText("site-plan.pdf")).toBeInTheDocument();
+    expect(client.listAttachments).toHaveBeenCalledWith("contact", "c1");
   });
 
   it("exports contacts to the chosen file and confirms the row count", async () => {

@@ -19,6 +19,9 @@ use crate::application::{
     check_export_destination, csv_bytes, immediate, log_command, rebuild_search_index,
     write_contacts_csv, write_export_file, write_opportunities_csv, ProductInfo,
 };
+use crate::attachments::{
+    file_path_under, sweep_import_staging, AttachmentStore, IMPORT_STAGING_PREFIX,
+};
 use crate::domain::Actor;
 use crate::error::ApplicationError;
 use crate::storage::{self, now_utc, Storage};
@@ -26,6 +29,10 @@ use crate::storage::{self, now_utc, Storage};
 /// Archive schema version — additive changes only within a major version;
 /// breaking changes bump this number.
 pub const ARCHIVE_SCHEMA_VERSION: i64 = 1;
+
+/// Directory inside an archive holding managed attachment files, one
+/// `assets/<attachment id>/<file name>` entry per attachments row.
+const ASSET_PREFIX: &str = "assets/";
 
 /// Canonical tables carried by an archive, in dependency order: inserting in
 /// this order and deleting in reverse never trips a foreign key or a
@@ -49,6 +56,31 @@ const ARCHIVE_TABLES: &[&str] = &[
     "custom_field_defs",
     "custom_field_options",
     "custom_field_values",
+    "attachments",
+];
+
+/// Migration that first created each canonical table. An archive written
+/// before a table existed cannot carry its data file, so a missing file is
+/// tolerated as "no rows" when the archive predates the table — and is still
+/// an issue for any archive that should have written it.
+const TABLE_INTRODUCED_IN: &[(&str, i64)] = &[
+    ("companies", 1),
+    ("contacts", 1),
+    ("contact_channels", 1),
+    ("pipelines", 2),
+    ("stages", 2),
+    ("lost_reasons", 2),
+    ("opportunities", 2),
+    ("stage_history", 2),
+    ("activities", 4),
+    ("tasks", 5),
+    ("saved_views", 7),
+    ("tags", 8),
+    ("record_tags", 8),
+    ("custom_field_defs", 8),
+    ("custom_field_options", 8),
+    ("custom_field_values", 8),
+    ("attachments", 10),
 ];
 
 /// Plain foreign keys checked in memory before any write: (table, column,
@@ -79,6 +111,7 @@ const ARCHIVE_POLYMORPHIC_KEYS: &[(&str, &str, &str)] = &[
     ("tasks", "parent_type", "parent_id"),
     ("record_tags", "entity_type", "record_id"),
     ("custom_field_values", "entity_type", "record_id"),
+    ("attachments", "parent_type", "parent_id"),
 ];
 
 /// Table each polymorphic `*_type` value points at.
@@ -248,10 +281,14 @@ fn table_columns(
 /// user-initiated, so the command log actor is always `user`.
 pub fn export_archive(
     storage: &mut Storage,
+    store: &AttachmentStore,
     path: &str,
     overwrite: bool,
 ) -> Result<ArchiveExportReport, ApplicationError> {
     let path = check_export_destination(storage, path, overwrite)?;
+    // Housekeeping first: a crashed import can strand a staging directory in
+    // the managed root, and nothing else ever clears it.
+    sweep_import_staging(store);
     let connection = storage.connection();
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -260,6 +297,31 @@ pub fn export_archive(
         let (rows, count) = export_table(connection, table)?;
         record_counts.insert((*table).to_owned(), count);
         files.push((format!("data/{table}.json"), rows));
+    }
+    // The archive is assembled in memory (streaming is a later change), so the
+    // total is tracked as it grows: an archive past the import limit could
+    // never be read back, and the attachment sizes are known from their rows
+    // before a single byte is read.
+    let mut total_bytes: u64 = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    // Managed attachment files travel with their rows; a row whose file is
+    // gone would produce an archive that can never be imported, so it is an
+    // error here rather than a surprise on the other side.
+    for (id, file_name, relative_path, size_bytes) in attachment_files(connection)? {
+        total_bytes = total_bytes.saturating_add(size_bytes.max(0) as u64);
+        if total_bytes > MAX_ARCHIVE_BYTES {
+            return Err(archive_too_large());
+        }
+        let managed = store.file_path(&relative_path)?;
+        let bytes =
+            std::fs::read(&managed).map_err(|error| ApplicationError::ValidationFailed {
+                code: "attachment_file_missing",
+                field: "path".into(),
+                message: format!(
+                    "attachment {id} (\"{file_name}\") is missing its file at {}: {error}",
+                    managed.display()
+                ),
+            })?;
+        files.push((format!("{ASSET_PREFIX}{id}/{file_name}"), bytes));
     }
 
     // Human-readable convenience copies; import ignores them.
@@ -272,6 +334,14 @@ pub fn export_archive(
         "csv/opportunities.csv".to_owned(),
         csv_bytes(opportunities_csv)?,
     ));
+    if files
+        .iter()
+        .map(|(_, bytes)| bytes.len() as u64)
+        .sum::<u64>()
+        > MAX_ARCHIVE_BYTES
+    {
+        return Err(archive_too_large());
+    }
 
     let manifest = ArchiveManifest {
         schema_version: ARCHIVE_SCHEMA_VERSION,
@@ -305,7 +375,7 @@ pub fn export_archive(
         writer.start_file(name, options).map_err(zip_write_error)?;
         writer.write_all(bytes)?;
     }
-    // Reserved for attachments (issue #21); empty for now.
+    // Always present, even with no attachments, so the layout is stable.
     writer
         .add_directory("assets", options)
         .map_err(zip_write_error)?;
@@ -358,6 +428,35 @@ fn export_table(connection: &Connection, table: &str) -> Result<(Vec<u8>, i64), 
     Ok((json, count))
 }
 
+/// Every attachment's id, display name, managed relative path, and size.
+fn attachment_files(
+    connection: &Connection,
+) -> Result<Vec<(String, String, String, i64)>, ApplicationError> {
+    let mut statement = connection.prepare(
+        "SELECT id, file_name, relative_path, size_bytes
+         FROM attachments ORDER BY created_at, id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// One archive has to fit inside the limit import will read it back under.
+fn archive_too_large() -> ApplicationError {
+    ApplicationError::ValidationFailed {
+        code: "archive_too_large",
+        field: "path".into(),
+        message: format!(
+            "this database's records and attachments are larger than the \
+             {MAX_ARCHIVE_BYTES} byte archive limit; remove some attachments \
+             and export again"
+        ),
+    }
+}
+
 /// Stored value to archive JSON. Blobs never appear in the CRM schema, so one
 /// showing up means the database is not ours.
 fn value_to_json(value: ValueRef<'_>) -> rusqlite::Result<serde_json::Value> {
@@ -388,7 +487,7 @@ fn zip_write_error(error: zip::result::ZipError) -> ApplicationError {
 /// Caps on what an untrusted archive may expand to. Deflate hides its ratio
 /// until decompression, so entries are read through a limit instead of trusted:
 /// a real contractor database is a few megabytes, and these leave headroom.
-const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Most issues a preview reports; the payload crosses an IPC boundary, so a
@@ -407,6 +506,9 @@ struct VerifiedArchive {
     manifest: ArchiveManifest,
     tables: BTreeMap<&'static str, Vec<ArchiveRow>>,
     record_counts: BTreeMap<String, i64>,
+    /// Verified attachment bytes keyed by managed relative path
+    /// (`<attachment id>/<file name>`); empty unless the archive is clean.
+    assets: BTreeMap<String, Vec<u8>>,
     issues: Vec<ArchiveIssue>,
 }
 
@@ -504,6 +606,7 @@ fn verify_archive(
         manifest,
         tables: BTreeMap::new(),
         record_counts: BTreeMap::new(),
+        assets: BTreeMap::new(),
         issues: Vec::new(),
     };
 
@@ -534,7 +637,9 @@ fn verify_archive(
             let columns = table_columns(connection, table)?;
             let file = format!("data/{table}.json");
             let Some(content) = entries.get(&file) else {
-                issues.push("missing_table_file", format!("archive has no {file}"));
+                if !table_predates_archive(table, verified.manifest.database_migration_version) {
+                    issues.push("missing_table_file", format!("archive has no {file}"));
+                }
                 continue;
             };
             if let Some(rows) = parse_table(table, &columns, content, &mut issues) {
@@ -550,13 +655,16 @@ fn verify_archive(
         verify_record_counts(&verified.manifest, &verified.record_counts, &mut issues);
     }
 
-    // References, structure, and the dry run only mean anything once the rows
-    // themselves parsed cleanly.
+    // References, assets, structure, and the dry run only mean anything once
+    // the rows themselves parsed cleanly.
     if issues.is_empty() {
         verify_references(connection, &verified.tables, &mut issues)?;
     }
     if issues.is_empty() {
         verify_structure(connection, &verified.tables, &mut issues)?;
+    }
+    if issues.is_empty() {
+        verified.assets = verify_assets(connection, &verified.tables, &entries, &mut issues)?;
     }
     if issues.is_empty() {
         dry_run_apply(connection, &verified.tables, &mut issues)?;
@@ -567,8 +675,8 @@ fn verify_archive(
 }
 
 /// Read every acceptable entry into memory under the size caps. Files under
-/// `assets/` are refused outright in v1 — attachments arrive with issue #21 and
-/// an unread, unchecksummed area has no business in an archive before then.
+/// `assets/` are attachment bytes: they are read like any other entry, so the
+/// manifest checksum and the owning attachments row both get to verify them.
 fn read_entries<R: Read + std::io::Seek>(
     zip: &mut zip::ZipArchive<R>,
     path: &str,
@@ -586,13 +694,6 @@ fn read_entries<R: Read + std::io::Seek>(
             continue;
         }
         if entry.is_dir() {
-            continue;
-        }
-        if name.starts_with("assets/") {
-            issues.push(
-                "unexpected_asset",
-                format!("entry \"{name}\" is an attachment; archives do not carry them yet"),
-            );
             continue;
         }
         // Read through a limit rather than trusting the declared size: a
@@ -1098,6 +1199,135 @@ fn verify_references(
     Ok(())
 }
 
+/// True when the archive was written before the table existed, which is the
+/// only case where a missing data file is normal rather than a problem.
+fn table_predates_archive(table: &str, archive_migration_version: i64) -> bool {
+    TABLE_INTRODUCED_IN
+        .iter()
+        .find(|(name, _)| *name == table)
+        .is_some_and(|(_, introduced)| archive_migration_version < *introduced)
+}
+
+/// Attachment files and attachments rows must match one for one: every row
+/// needs its bytes, every `assets/` entry needs its row, and the bytes have to
+/// match the size and checksum the row recorded (on top of the manifest
+/// checksum every archived file already passes). Returns the verified bytes
+/// keyed by managed relative path.
+fn verify_assets(
+    connection: &Connection,
+    tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
+    entries: &BTreeMap<String, Vec<u8>>,
+    issues: &mut IssueLog,
+) -> Result<BTreeMap<String, Vec<u8>>, ApplicationError> {
+    let specs = all_table_columns(connection)?;
+    let empty = Vec::new();
+    let rows = tables.get("attachments").unwrap_or(&empty);
+
+    let mut verified = BTreeMap::new();
+    let mut expected = BTreeSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        let (Some(id), Some(file_name)) = (
+            cell(&specs, "attachments", row, "id"),
+            cell(&specs, "attachments", row, "file_name"),
+        ) else {
+            continue; // both columns are NOT NULL, so parsing already reported this
+        };
+        // The id and file name become on-disk path segments, and the stored
+        // relative_path is what every later command hands to the filesystem —
+        // all three are validated here so a hostile archive can never plant a
+        // row that addresses anything outside the attachments root.
+        if !crate::attachments::valid_path_component(&id)
+            || crate::attachments::sanitized_file_name(&file_name)
+                .ok()
+                .as_deref()
+                != Some(file_name.as_str())
+        {
+            issues.push(
+                "invalid_value",
+                format!("attachments row {index} has an unsafe id or file name"),
+            );
+            continue;
+        }
+        let relative_path = format!("{id}/{file_name}");
+        if cell(&specs, "attachments", row, "relative_path").as_deref()
+            != Some(relative_path.as_str())
+        {
+            issues.push(
+                "attachment_path_mismatch",
+                format!("attachments row {index} records a path other than \"{relative_path}\""),
+            );
+            continue;
+        }
+        let entry_name = format!("{ASSET_PREFIX}{relative_path}");
+        expected.insert(entry_name.clone());
+        let Some(content) = entries.get(&entry_name) else {
+            issues.push(
+                "attachment_file_missing",
+                format!("attachments row {index} has no \"{entry_name}\" in the archive"),
+            );
+            continue;
+        };
+        let claimed_size = number_cell(&specs, "attachments", row, "size_bytes");
+        if claimed_size != Some(content.len() as i64) {
+            issues.push(
+                "attachment_size_mismatch",
+                format!(
+                    "\"{entry_name}\" is {} bytes but its row records {}",
+                    content.len(),
+                    claimed_size.unwrap_or_default()
+                ),
+            );
+            continue;
+        }
+        if cell(&specs, "attachments", row, "sha256").as_deref() != Some(&sha256_hex(content)) {
+            issues.push(
+                "attachment_checksum_mismatch",
+                format!("\"{entry_name}\" does not match the checksum its row records"),
+            );
+            continue;
+        }
+        verified.insert(relative_path, content.clone());
+        if issues.is_full() {
+            return Ok(BTreeMap::new());
+        }
+    }
+
+    for name in entries.keys() {
+        if !name.starts_with(ASSET_PREFIX) || expected.contains(name) {
+            continue;
+        }
+        issues.push(
+            "unexpected_asset",
+            format!("\"{name}\" has no attachments row that claims it"),
+        );
+        if issues.is_full() {
+            break;
+        }
+    }
+    if !issues.is_empty() {
+        // Only a clean archive hands its bytes on to the import.
+        return Ok(BTreeMap::new());
+    }
+    Ok(verified)
+}
+
+/// Integer value of one column in a parsed row, if it is set.
+fn number_cell(
+    specs: &BTreeMap<&'static str, Vec<ColumnSpec>>,
+    table: &str,
+    row: &ArchiveRow,
+    column: &str,
+) -> Option<i64> {
+    let position = specs
+        .get(table)?
+        .iter()
+        .position(|spec| spec.name == column)?;
+    match &row.values[position] {
+        Value::Integer(number) => Some(*number),
+        _ => None,
+    }
+}
+
 /// The pipeline shape the app itself seeds and depends on: without a pipeline
 /// whose stages cover open, won, and lost, creating an opportunity is
 /// impossible and the imported database would be unusable.
@@ -1249,6 +1479,7 @@ pub fn preview_archive_import(
 /// filesystem — exactly as it was.
 pub fn import_archive(
     storage: &mut Storage,
+    store: &AttachmentStore,
     path: &str,
 ) -> Result<ArchiveImportReport, ApplicationError> {
     let verified = verify_archive(storage.connection(), path)?;
@@ -1257,8 +1488,21 @@ pub fn import_archive(
     }
     let specs = all_table_columns(storage.connection())?;
 
+    // Attachment bytes land in a staging directory first: everything that can
+    // fail on the filesystem fails before the database transaction, and the
+    // swap afterwards is only renames. Any staging directory a previous run
+    // left behind is cleared before this one starts.
+    sweep_import_staging(store);
+    let staging = stage_assets(store, &verified.assets)?;
+
     // Only now, with nothing left to reject, is the live database touched.
-    let safety_backup_path = storage.safety_copy("pre-import")?;
+    let safety_backup_path = match storage.safety_copy("pre-import") {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error.into());
+        }
+    };
     let transaction = immediate(storage)?;
     let outcome = replace_rows(&transaction, &specs, &verified.tables)
         .map_err(|(table, error)| {
@@ -1281,9 +1525,11 @@ pub fn import_archive(
         Ok(record_counts) => record_counts,
         Err(problem) => {
             // The dry run passed, so this is unexpected — roll back and take the
-            // untouched safety copy with us rather than leaving an orphan.
+            // untouched safety copy and staging directory with us rather than
+            // leaving orphans.
             drop(transaction);
             let _ = std::fs::remove_file(&safety_backup_path);
+            let _ = std::fs::remove_dir_all(&staging);
             return Err(archive_invalid(&[problem]));
         }
     };
@@ -1301,10 +1547,80 @@ pub fn import_archive(
     )?;
     transaction.commit()?;
 
+    // Ordering contract: the database is authoritative and the transaction has
+    // committed, so the import has happened whatever the filesystem does next.
+    // The swap gets one retry (a transient lock or a stray file handle is the
+    // realistic failure), and a still-failing swap is not an error the caller
+    // sees — surfacing one would throw away the safety backup path they need.
+    // The attachments simply report `exists: false` until the archive is
+    // imported again.
+    if swap_staged_assets(store, &staging).is_err() {
+        let _ = swap_staged_assets(store, &staging);
+    }
+
     Ok(ArchiveImportReport {
         record_counts,
         safety_backup_path: safety_backup_path.to_string_lossy().into_owned(),
     })
+}
+
+/// Write verified attachment bytes into a fresh staging directory under the
+/// attachments root. Any failure clears the staging directory so a refused
+/// import leaves the filesystem exactly as it was.
+fn stage_assets(
+    store: &AttachmentStore,
+    assets: &BTreeMap<String, Vec<u8>>,
+) -> Result<std::path::PathBuf, ApplicationError> {
+    store.ensure_root()?;
+    let staging = store
+        .absolute_root()
+        .join(format!("{IMPORT_STAGING_PREFIX}{}", storage::new_id()));
+    let staged = (|| -> Result<(), ApplicationError> {
+        std::fs::create_dir_all(&staging)?;
+        for (relative_path, bytes) in assets {
+            // Same validated segment rules as the managed root: a stored path
+            // is never folded into a filesystem path unchecked.
+            let destination = file_path_under(&staging, relative_path)?;
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&destination, bytes)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = staged {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(staging)
+}
+
+/// Replace the managed attachment files with the staged ones: clear the old
+/// directories, move the staged ones into place, then drop the staging
+/// directory. Called only after the import transaction commits.
+fn swap_staged_assets(
+    store: &AttachmentStore,
+    staging: &std::path::Path,
+) -> Result<(), ApplicationError> {
+    let root = store.absolute_root();
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(IMPORT_STAGING_PREFIX) {
+            continue; // this import's staging, or a leftover from a crashed one
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    for entry in std::fs::read_dir(staging)? {
+        let entry = entry?;
+        std::fs::rename(entry.path(), root.join(entry.file_name()))?;
+    }
+    std::fs::remove_dir_all(staging)?;
+    Ok(())
 }
 
 /// Turn verification issues into the single refusal the caller sees.

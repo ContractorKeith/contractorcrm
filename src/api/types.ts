@@ -710,6 +710,49 @@ export interface ArchiveImportReport {
   safetyBackupPath: string;
 }
 
+// ---------------------------------------------------------------------------
+// Attachments (managed file copies on contacts and opportunities)
+// ---------------------------------------------------------------------------
+
+export type AttachmentParentType = "contact" | "opportunity";
+
+// One managed file. The path is never built by the UI — ask attachment_path.
+export interface Attachment {
+  id: string;
+  parentType: AttachmentParentType;
+  parentId: string;
+  fileName: string;
+  mediaType: string | null;
+  sizeBytes: number;
+  sha256: string;
+  createdAt: string;
+  version: number;
+}
+
+export interface AddAttachmentRequest {
+  actor?: Actor;
+  parentType: AttachmentParentType;
+  parentId: string;
+  sourcePath: string;
+}
+
+export interface RemoveAttachmentRequest {
+  actor?: Actor;
+  attachmentId: string;
+  expectedVersion: number;
+}
+
+// Whether the managed file went with the row.
+export interface AttachmentRemoval {
+  fileRemoved: boolean;
+}
+
+// Absolute location of a managed file, for opening it with the OS.
+export interface AttachmentLocation {
+  path: string;
+  exists: boolean;
+}
+
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,
 // human message, plus flattened per-kind details.
 export type CommandError =

@@ -448,6 +448,43 @@ CREATE UNIQUE INDEX contacts_external_id_unique
     ON contacts(external_id) WHERE external_id IS NOT NULL;
 ";
 
+/// v10 attachments — managed files on contacts and opportunities. The row is
+/// the record of truth; the bytes live under the attachments root as
+/// `<attachment id>/<file name>` (`relative_path`, unique so two rows can never
+/// claim the same managed file). Parent existence is enforced with triggers
+/// because SQLite cannot express a foreign key selected by a column, following
+/// the record_tags precedent in migration 8.
+const MIGRATION_010: &str = "\
+CREATE TABLE attachments (
+    id TEXT PRIMARY KEY,
+    parent_type TEXT NOT NULL CHECK (parent_type IN ('contact', 'opportunity')),
+    parent_id TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    media_type TEXT,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0)
+);
+CREATE INDEX attachments_parent ON attachments(parent_type, parent_id, created_at);
+
+CREATE TRIGGER attachments_owner_insert BEFORE INSERT ON attachments BEGIN
+ SELECT CASE WHEN NEW.parent_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.parent_id) THEN RAISE(ABORT, 'missing attachment parent')
+ WHEN NEW.parent_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.parent_id) THEN RAISE(ABORT, 'missing attachment parent') END;
+END;
+CREATE TRIGGER attachments_owner_update BEFORE UPDATE ON attachments BEGIN
+ SELECT CASE WHEN NEW.parent_type = 'contact' AND NOT EXISTS (SELECT 1 FROM contacts WHERE id = NEW.parent_id) THEN RAISE(ABORT, 'missing attachment parent')
+ WHEN NEW.parent_type = 'opportunity' AND NOT EXISTS (SELECT 1 FROM opportunities WHERE id = NEW.parent_id) THEN RAISE(ABORT, 'missing attachment parent') END;
+END;
+CREATE TRIGGER contacts_attachments_delete BEFORE DELETE ON contacts
+WHEN EXISTS (SELECT 1 FROM attachments WHERE parent_type='contact' AND parent_id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'contact attachments must be removed first'); END;
+CREATE TRIGGER opportunities_attachments_delete BEFORE DELETE ON opportunities
+WHEN EXISTS (SELECT 1 FROM attachments WHERE parent_type='opportunity' AND parent_id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'opportunity attachments must be removed first'); END;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -485,6 +522,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 9,
         sql: MIGRATION_009,
+    },
+    Migration {
+        version: 10,
+        sql: MIGRATION_010,
     },
 ];
 

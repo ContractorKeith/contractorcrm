@@ -6,6 +6,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 
 import { App } from "../App";
 import {
+  makeAttachment,
   makeContact,
   makeLostReason,
   makeOpportunity,
@@ -414,6 +415,22 @@ describe("opportunity detail and stage moves", () => {
 
     expect(await screen.findByText(/changed outside this form/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Reload latest" })).toBeVisible();
+  });
+
+  it("shows the opportunity's attachments in the detail view", async () => {
+    const user = userEvent.setup();
+    const client = detailClient({
+      listAttachments: vi.fn().mockResolvedValue([
+        makeAttachment({ parentType: "opportunity", parentId: "opp-1", fileName: "bid-set.pdf" }),
+      ]),
+    });
+
+    render(<App client={client} />);
+    await openDetail(user);
+
+    const attachments = await screen.findByRole("region", { name: "Attachments" });
+    expect(within(attachments).getByText("bid-set.pdf")).toBeInTheDocument();
+    expect(client.listAttachments).toHaveBeenCalledWith("opportunity", "opp-1");
   });
 
   it("shows an em dash for the source when the kind is unset, even with a label", async () => {
