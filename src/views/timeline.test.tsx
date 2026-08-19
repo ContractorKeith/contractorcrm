@@ -178,12 +178,12 @@ describe("activity timeline", () => {
     await openContactDetail(user);
 
     const list = await screen.findByRole("list", { name: "Activity entries" });
-    await user.click(within(list).getByRole("button", { name: "Edit" }));
+    await user.click(within(list).getByRole("button", { name: "Edit call — Old summary" }));
 
     const summary = screen.getAllByLabelText("Summary")[1]!; // entry form, not log form
     await user.clear(summary);
     await user.type(summary, "Corrected summary");
-    await user.click(screen.getByRole("button", { name: "Save entry" }));
+    await user.click(screen.getByRole("button", { name: "Save call — Old summary" }));
 
     expect(client.updateActivity).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -207,11 +207,15 @@ describe("activity timeline", () => {
     await openContactDetail(user);
 
     const list = await screen.findByRole("list", { name: "Activity entries" });
-    await user.click(within(list).getByRole("button", { name: "Delete" }));
+    await user.click(
+      within(list).getByRole("button", { name: "Delete call — Called about the estimate" }),
+    );
     expect(client.deleteActivity).not.toHaveBeenCalled();
 
     confirmSpy.mockReturnValue(true);
-    await user.click(within(list).getByRole("button", { name: "Delete" }));
+    await user.click(
+      within(list).getByRole("button", { name: "Delete call — Called about the estimate" }),
+    );
     expect(client.deleteActivity).toHaveBeenCalledWith({ activityId: "a1", expectedVersion: 2 });
   });
 });

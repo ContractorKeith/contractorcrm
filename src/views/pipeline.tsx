@@ -139,8 +139,16 @@ export function PipelineBoard({ stages, opportunities, onOpen }: PipelineBoardPr
           >
             <header className="board-column__head">
               <span className="board-column__name">{stage.name}</span>
-              <span className="board-column__count">{items.length}</span>
-              <span className="board-column__total">{formatMoney(columnTotal(items))}</span>
+              {/* Bare numbers in a column head read as "3, 12,400" with nothing
+                  to anchor them; the units are added for assistive tech only. */}
+              <span className="board-column__count">
+                {items.length}
+                <span className="sr-only"> opportunities</span>
+              </span>
+              <span className="board-column__total">
+                {formatMoney(columnTotal(items))}
+                <span className="sr-only"> total value</span>
+              </span>
             </header>
             {closed ? null : items.length === 0 ? (
               <p className="board-column__empty">Nothing in this stage.</p>

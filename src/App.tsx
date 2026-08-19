@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { tauriCoreClient, type CoreClient } from "./api/client";
 import type { HealthReport, NavigationEntityType, SearchResult } from "./api/types";
@@ -37,6 +37,19 @@ export function App({ client = tauriCoreClient }: AppProps) {
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [view, setView] = useState<View>({ name: "contacts" });
+  const mainRef = useRef<HTMLElement>(null);
+  const firstViewRef = useRef(true);
+
+  // There is no router, so nothing moves focus when the workspace swaps views.
+  // Opening a record from a list would otherwise unmount the focused row and
+  // drop focus to <body>. Park focus on the workspace instead.
+  useEffect(() => {
+    if (firstViewRef.current) {
+      firstViewRef.current = false;
+      return;
+    }
+    mainRef.current?.focus();
+  }, [view]);
 
   useEffect(
     () =>
@@ -129,14 +142,15 @@ export function App({ client = tauriCoreClient }: AppProps) {
               <option value="dark">Dark</option>
             </select>
           </label>
-          <div className="storage-state" aria-label="Local storage status">
-            <span className="storage-state__dot" />
+          {/* role=status gives the aria-label a home; a bare <div> would drop it. */}
+          <div className="storage-state" role="status" aria-label="Local storage status">
+            <span className="storage-state__dot" aria-hidden="true" />
             {health ? `Core ready · v${health.version}` : "Local SQLite · on this device"}
           </div>
         </div>
       </header>
 
-      <main id="main" className="workspace">
+      <main id="main" ref={mainRef} tabIndex={-1} className="workspace">
         <nav className="view-tabs" aria-label="Records">
           <button
             type="button"

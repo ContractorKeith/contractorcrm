@@ -64,6 +64,12 @@ export function RecordTable<T extends { id: string }>({
 
   return (
     <table className="record-table" aria-label={label}>
+      {/* Screen-reader-only caption: the roving selection is not discoverable
+          from the markup alone, so the operating instructions live here. */}
+      <caption className="sr-only">
+        {label} — {rows.length} {rows.length === 1 ? "row" : "rows"}. Use the arrow keys to move
+        between rows and Enter to open the highlighted row.
+      </caption>
       <thead>
         <tr>
           {columns.map((column) => {
@@ -77,7 +83,14 @@ export function RecordTable<T extends { id: string }>({
                 aria-sort={sortableHere ? (sorted ?? "none") : undefined}
               >
                 {sortableHere ? (
-                  <button type="button" className="sort-header" onClick={() => onSort!(column.key)}>
+                  <button
+                    type="button"
+                    className="sort-header"
+                    // The column header text is the button's name; aria-sort on the
+                    // <th> carries the direction, so no extra label is added here
+                    // (it would also rename the column header for assistive tech).
+                    onClick={() => onSort!(column.key)}
+                  >
                     {column.header}
                     <span aria-hidden="true">
                       {sorted === "ascending" ? " ▲" : sorted === "descending" ? " ▼" : ""}

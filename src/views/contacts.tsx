@@ -193,7 +193,19 @@ export function ContactsView({ client, onOpen, onCreate }: ContactsViewProps) {
     {
       key: "favorite",
       header: "Favorite",
-      render: (contact) => (contact.favorite ? "★" : "—"),
+      // The star is decoration; the yes/no has to be readable text.
+      render: (contact) =>
+        contact.favorite ? (
+          <>
+            <span aria-hidden="true">★</span>
+            <span className="sr-only">Favorite</span>
+          </>
+        ) : (
+          <>
+            <span aria-hidden="true">—</span>
+            <span className="sr-only">Not a favorite</span>
+          </>
+        ),
     },
   ];
 

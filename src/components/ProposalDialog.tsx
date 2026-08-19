@@ -377,6 +377,10 @@ export function AssistantPrompt({
           }}
         />
       ) : null}
+      {/* Asking is a provider round-trip; say so rather than only disabling. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {busy ? "Asking the assistant…" : ""}
+      </span>
       {error ? (
         <span role="alert" className="saved-views__error">
           {error}

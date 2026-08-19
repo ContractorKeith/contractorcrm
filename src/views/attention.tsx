@@ -178,22 +178,28 @@ export function AttentionView({ client, onOpenRecord }: AttentionViewProps) {
                   <ContextDisclosure
                     client={client}
                     request={{ tool: "explain_attention_flag", flagId: flag.id }}
+                    about={flag.recordDisplayName}
                   />
                 ) : null}
 
-                {state?.status === "loading" ? (
-                  <p className="attention-ai__meta">Asking the model…</p>
-                ) : null}
+                {/* One live region per flag so the wait and the answer are both
+                    announced; the container is always present so the update is
+                    seen as a change rather than a new node. */}
+                <div role="status" aria-live="polite">
+                  {state?.status === "loading" ? (
+                    <p className="attention-ai__meta">Asking the model…</p>
+                  ) : null}
+                  {state?.status === "ready" ? (
+                    <div className="attention-ai">
+                      <p className="attention-ai__text">{state.explanation.explanation.text}</p>
+                      <p className="attention-ai__meta">{disclosure(state.explanation)}</p>
+                    </div>
+                  ) : null}
+                </div>
                 {state?.status === "error" ? (
                   <p role="alert" className="attention-ai__error">
                     {state.message}
                   </p>
-                ) : null}
-                {state?.status === "ready" ? (
-                  <div className="attention-ai">
-                    <p className="attention-ai__text">{state.explanation.explanation.text}</p>
-                    <p className="attention-ai__meta">{disclosure(state.explanation)}</p>
-                  </div>
                 ) : null}
               </li>
             );

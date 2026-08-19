@@ -83,7 +83,8 @@ export function RecordMetadata({ client, entityType, recordId, expectedVersion, 
       <h3 id="record-metadata-title">Tags and custom fields</h3>
       <button ref={manageButtonRef} type="button" className="button" onClick={() => setManaging(true)}>Manage tags and fields</button>
     </div>
-    <div className="record-metadata__tags" aria-label="Assigned tags">
+    {/* role=group gives the aria-label a home; a bare <div> would drop it. */}
+    <div className="record-metadata__tags" role="group" aria-label="Assigned tags">
       {activeTags.map((tag) => <span key={tag.id} className="metadata-tag">{tag.label}{tag.archivedAt ? " (archived)" : null}<button type="button" aria-label={`Remove ${tag.label} tag`} onClick={() => removeTag(tag.id)}>×</button></span>)}
       <label> Add tag <select value="" onChange={(event) => assignTag(event.target.value)}><option value="">Select a tag</option>{availableTags.map((tag) => <option key={tag.id} value={tag.id}>{tag.label}</option>)}</select></label>
     </div>

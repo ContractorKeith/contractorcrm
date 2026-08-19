@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoreClient } from "../api/client";
 import { HistorySummaryPanel } from "../components/FollowupDraft";
@@ -23,6 +23,12 @@ export const ACTIVITY_KIND_OPTIONS: { value: ActivityKind; label: string }[] = [
 
 export function activityKindLabel(kind: ActivityKind): string {
   return ACTIVITY_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+}
+
+// Short name for one entry, used in per-row control labels so "Edit" and
+// "Delete" are distinguishable when read out of context.
+export function entryName(activity: Activity): string {
+  return `${activityKindLabel(activity.kind).toLowerCase()} — ${activity.summary}`;
 }
 
 // Direction only applies to two-way communication kinds.
@@ -168,6 +174,17 @@ export function ActivityTimeline({ client, parentType, parentId }: ActivityTimel
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<ActivityDraft>(emptyDraft);
   const [error, setError] = useState<SaveError>(NO_SAVE_ERROR);
+  // Edit swaps an entry for a form in place; without this the keyboard user is
+  // dropped on <body> when the form closes again.
+  const editReturnRef = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const restoreFocusId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = restoreFocusId.current;
+    if (editingId !== null || id === null) return;
+    restoreFocusId.current = null;
+    queueMicrotask(() => editReturnRef.current.get(id)?.focus());
+  }, [editingId, entries]);
 
   // Opportunities are the leaf — related roll-up only applies upward.
   const allowIncludeRelated = parentType !== "opportunity";
@@ -271,13 +288,25 @@ export function ActivityTimeline({ client, parentType, parentId }: ActivityTimel
               <li key={activity.id} className="timeline-entry timeline-entry--editing">
                 <ActivityFields draft={editDraft} onChange={setEditDraft} errors={error.fields} />
                 <div className="form-actions">
-                  <button type="button" className="button" onClick={() => setEditingId(null)}>
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label={`Cancel editing ${entryName(activity)}`}
+                    onClick={() => {
+                      restoreFocusId.current = activity.id;
+                      setEditingId(null);
+                    }}
+                  >
                     Cancel
                   </button>
                   <button
                     type="button"
                     className="button button--primary"
-                    onClick={() => saveEdit(activity)}
+                    aria-label={`Save ${entryName(activity)}`}
+                    onClick={() => {
+                      restoreFocusId.current = activity.id;
+                      void saveEdit(activity);
+                    }}
                   >
                     Save entry
                   </button>
@@ -300,6 +329,12 @@ export function ActivityTimeline({ client, parentType, parentId }: ActivityTimel
                   <button
                     type="button"
                     className="button"
+                    // Every entry has an Edit and a Delete; the name has to say which.
+                    aria-label={`Edit ${entryName(activity)}`}
+                    ref={(element) => {
+                      if (element) editReturnRef.current.set(activity.id, element);
+                      else editReturnRef.current.delete(activity.id);
+                    }}
                     onClick={() => {
                       setError(NO_SAVE_ERROR);
                       setEditDraft(draftFrom(activity));
@@ -308,7 +343,12 @@ export function ActivityTimeline({ client, parentType, parentId }: ActivityTimel
                   >
                     Edit
                   </button>
-                  <button type="button" className="button" onClick={() => remove(activity)}>
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label={`Delete ${entryName(activity)}`}
+                    onClick={() => remove(activity)}
+                  >
                     Delete
                   </button>
                 </div>
