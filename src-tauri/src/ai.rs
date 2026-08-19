@@ -138,6 +138,13 @@ pub trait CompletionProvider: Send + Sync {
     /// Human-readable provider name for disclosure lines.
     fn label(&self) -> &str;
 
+    /// Base URL this provider sends to, when it has one. Callers use it for
+    /// the "sent to <host>" disclosure; providers that send nowhere (the test
+    /// doubles) leave it absent.
+    fn endpoint(&self) -> Option<&str> {
+        None
+    }
+
     /// Send one request and return the completion text.
     fn complete(&self, request: &ProviderRequest) -> Result<ProviderCompletion, ApplicationError>;
 
@@ -248,6 +255,10 @@ impl OpenAiCompatibleProvider {
 impl CompletionProvider for OpenAiCompatibleProvider {
     fn label(&self) -> &str {
         &self.label
+    }
+
+    fn endpoint(&self) -> Option<&str> {
+        Some(&self.base_url)
     }
 
     fn complete(&self, request: &ProviderRequest) -> Result<ProviderCompletion, ApplicationError> {

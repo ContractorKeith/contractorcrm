@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { CoreClient } from "../api/client";
-import { isCommandError, type AiSettings } from "../api/types";
+import { isCommandError, type AiSettings, type FollowupTemplate } from "../api/types";
 import { ArchiveImportDialog, totalRecords } from "../components/ArchiveImportDialog";
 import { Field } from "./form-support";
 
@@ -214,6 +214,95 @@ function AiAssistantSection({ client }: SettingsViewProps) {
   );
 }
 
+/** Follow-up templates: the wordings drafting starts from. Usable with the
+ *  assistant off, so this section is always available. */
+function FollowupTemplatesSection({ client }: SettingsViewProps) {
+  const [templates, setTemplates] = useState<FollowupTemplate[]>([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    void client
+      .getFollowupTemplates()
+      .then((stored) => setTemplates(stored.templates))
+      .catch((rejection: unknown) =>
+        setError(
+          isCommandError(rejection) ? rejection.message : "Templates could not be loaded.",
+        ),
+      );
+  };
+
+  useEffect(load, [client]);
+
+  const edit = (index: number, field: "name" | "body", value: string) =>
+    setTemplates((current) =>
+      current.map((template, position) =>
+        position === index ? { ...template, [field]: value } : template,
+      ),
+    );
+
+  const save = async (next: FollowupTemplate[]) => {
+    setError(null);
+    setStatus("");
+    try {
+      const stored = await client.setFollowupTemplates({ templates: next });
+      setTemplates(stored.templates);
+      setStatus("Follow-up templates saved.");
+    } catch (rejection) {
+      setError(
+        isCommandError(rejection) ? rejection.message : "The templates could not be saved.",
+      );
+    }
+  };
+
+  return (
+    <div className="data-section">
+      <h3>Follow-up templates</h3>
+      <p>
+        These are the wordings a follow-up starts from. They work as written with the assistant
+        off; with it on, the assistant adjusts one to fit the record's history.
+      </p>
+
+      {templates.map((template, index) => (
+        <div key={template.id} className="followup">
+          <Field label="Template name">
+            <input
+              type="text"
+              value={template.name}
+              onChange={(event) => edit(index, "name", event.target.value)}
+            />
+          </Field>
+          <Field label="Wording">
+            <textarea
+              rows={4}
+              value={template.body}
+              onChange={(event) => edit(index, "body", event.target.value)}
+            />
+          </Field>
+        </div>
+      ))}
+
+      <div className="data-section__actions">
+        <button type="button" className="button" onClick={() => void save(templates)}>
+          Save templates
+        </button>
+        <button type="button" className="button" onClick={() => void save([])}>
+          Reset to defaults
+        </button>
+      </div>
+
+      <p className="data-section__result" role="status" aria-live="polite">
+        {status}
+      </p>
+      {error ? (
+        <p role="alert" className="saved-views__error">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Backup & Data: portable archive export and import for this device. */
 export function SettingsView({ client }: SettingsViewProps) {
   const [importPath, setImportPath] = useState<string | null>(null);
@@ -292,6 +381,8 @@ export function SettingsView({ client }: SettingsViewProps) {
       </div>
 
       <AiAssistantSection client={client} />
+
+      <FollowupTemplatesSection client={client} />
 
       {importPath ? (
         <ArchiveImportDialog

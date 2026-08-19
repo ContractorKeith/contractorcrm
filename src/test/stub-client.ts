@@ -5,6 +5,10 @@ import type {
   Activity,
   Attachment,
   AttentionExplanation,
+  FollowupDraft,
+  FollowupTemplates,
+  HistorySummary,
+  Proposal,
   AttentionFlag,
   Company,
   Contact,
@@ -127,6 +131,10 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   applyProposal: vi.fn(),
   undoProposal: vi.fn(),
   explainAttentionFlag: vi.fn().mockResolvedValue(makeAttentionExplanation()),
+  getFollowupTemplates: vi.fn().mockResolvedValue(makeFollowupTemplates()),
+  setFollowupTemplates: vi.fn().mockResolvedValue(makeFollowupTemplates()),
+  summarizeHistory: vi.fn().mockResolvedValue(makeHistorySummary()),
+  proposeFollowup: vi.fn().mockResolvedValue(makeFollowupDraft()),
   ...overrides,
 });
 
@@ -335,3 +343,62 @@ export const makeOpportunityDetail = (
   const { stageName: _s, contactDisplayName: _c, companyName: _n, ...record } = makeOpportunity();
   return { ...record, stageHistory: [makeStageHistoryEntry()], ...overrides };
 };
+
+// Built-in follow-up templates, matching the core's defaults closely enough
+// for the editor and the drafting flow to be exercised.
+export const makeFollowupTemplates = (
+  overrides: Partial<FollowupTemplates> = {},
+): FollowupTemplates => ({
+  version: 1,
+  templates: [
+    { id: "call_followup", name: "Call follow-up", body: "Thanks for taking the time on the phone." },
+    { id: "proposal_chaser", name: "Proposal follow-up", body: "Checking in on the proposal." },
+    { id: "site_visit_note", name: "Post-site-visit note", body: "Thanks for having me out." },
+  ],
+  ...overrides,
+});
+
+export const makeHistorySummary = (overrides: Partial<HistorySummary> = {}): HistorySummary => ({
+  parentType: "contact",
+  parentId: "contact-1",
+  endpointHost: "127.0.0.1:11434",
+  local: true,
+  model: "llama3.1",
+  summary: "Dana asked for a gate quote in June and has gone quiet since.",
+  suggestedNextActions: ["Call Dana this week", "Send the revised quote"],
+  includedRecordRefs: [{ entityType: "contact", entityId: "contact-1", label: "Dana Ruiz" }],
+  ...overrides,
+});
+
+export const makeFollowupProposal = (overrides: Partial<Proposal> = {}): Proposal => ({
+  id: "proposal-1",
+  kind: "create_followup_task",
+  entityType: "task",
+  entityId: null,
+  summary: "Follow up with Dana Ruiz",
+  changes: [
+    { field: "title", before: null, after: "Follow up: Dana Ruiz" },
+    { field: "body", before: null, after: "Checking in on the proposal." },
+  ],
+  warnings: [],
+  affectedVersions: [],
+  createdAt: "2026-08-19T12:00:00.000Z",
+  expiresAt: "2026-08-19T12:15:00.000Z",
+  ...overrides,
+});
+
+export const makeFollowupDraft = (overrides: Partial<FollowupDraft> = {}): FollowupDraft => ({
+  parentType: "contact",
+  parentId: "contact-1",
+  templateId: "proposal_chaser",
+  templateName: "Proposal follow-up",
+  draftText: "Checking in on the proposal.",
+  usedProvider: true,
+  endpointHost: "127.0.0.1:11434",
+  local: true,
+  model: "llama3.1",
+  includedRecordRefs: [{ entityType: "contact", entityId: "contact-1", label: "Dana Ruiz" }],
+  warnings: [],
+  proposal: makeFollowupProposal(),
+  ...overrides,
+});

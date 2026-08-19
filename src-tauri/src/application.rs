@@ -2690,6 +2690,24 @@ pub fn delete_task(
     Ok(())
 }
 
+/// Read one task by id. Exposed so the proposal engine can version-check a
+/// drafted follow-up task without opening a write transaction.
+pub fn get_task(storage: &Storage, task_id: &str) -> Result<Task, ApplicationError> {
+    let row = storage
+        .connection()
+        .query_row(
+            &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
+            [task_id],
+            task_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| ApplicationError::NotFound {
+            resource: "task",
+            id: task_id.into(),
+        })?;
+    finish_task(row)
+}
+
 /// List tasks ordered by due date (nulls last), then priority (high first),
 /// then id. Overdue means status open with due_at before now — UTC ISO-8601
 /// strings compare correctly as text.
@@ -3592,6 +3610,11 @@ pub fn check_company_patch(patch: &CompanyPatch) -> Result<(), ApplicationError>
 /// Validate a drafted opportunity patch; the result is discarded.
 pub fn check_opportunity_patch(patch: &OpportunityPatch) -> Result<(), ApplicationError> {
     validate_opportunity_patch(patch.clone()).map(|_| ())
+}
+
+/// Validate a drafted task patch; the result is discarded.
+pub fn check_task_patch(patch: &TaskPatch) -> Result<(), ApplicationError> {
+    validate_task_patch(patch.clone()).map(|_| ())
 }
 
 /// Company patch after validation, with parsed enums and trimmed text.

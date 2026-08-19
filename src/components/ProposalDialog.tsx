@@ -39,6 +39,13 @@ const FIELD_LABELS: Record<string, string> = {
   sourceLabel: "Source detail",
   contactId: "Contact",
   companyId: "Company",
+  title: "Title",
+  dueAt: "Due",
+  remindAt: "Remind",
+  priority: "Priority",
+  parentType: "Linked to",
+  parentId: "Linked record",
+  body: "Message",
 };
 
 export function fieldLabel(field: string): string {

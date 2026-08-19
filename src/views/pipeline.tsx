@@ -22,6 +22,7 @@ import {
   type Stage,
   type StageKind,
 } from "../api/types";
+import { FollowupDraftPanel } from "../components/FollowupDraft";
 import { AssistantPrompt } from "../components/ProposalDialog";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordAttachments } from "../components/RecordAttachments";
@@ -911,6 +912,8 @@ export function OpportunityDetailView({
       )}
 
       {/* Activities are a separate section from the append-only stage history. */}
+      <FollowupDraftPanel client={client} parentType="opportunity" parentId={detail.id} />
+
       <RecordAttachments client={client} parentType="opportunity" parentId={detail.id} />
 
       <ActivityTimeline client={client} parentType="opportunity" parentId={detail.id} />

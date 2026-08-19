@@ -815,7 +815,8 @@ export interface ProviderCheck {
 // Proposals (src-tauri/src/proposals.rs)
 // ---------------------------------------------------------------------------
 
-export type ProposalEntityType = "contact" | "company" | "opportunity";
+// "task" only ever comes from the follow-up drafting seam.
+export type ProposalEntityType = "contact" | "company" | "opportunity" | "task";
 
 export type ProposalKind =
   | "create_contact"
@@ -823,7 +824,8 @@ export type ProposalKind =
   | "create_opportunity"
   | "update_contact"
   | "update_company"
-  | "update_opportunity";
+  | "update_opportunity"
+  | "create_followup_task";
 
 // One field a draft would change; before is null when the record is new.
 export interface FieldChange {
@@ -876,12 +878,66 @@ export interface ProposalApplied {
   undoExpiresAt: string;
 }
 
-// What an undo did: archived (undoing a create) or reverted (undoing a change).
+// What an undo did: archived (undoing a created record), dropped (undoing a
+// created follow-up task), or reverted (undoing a change).
 export interface ProposalUndone {
   entityType: ProposalEntityType;
   entityId: string;
-  action: "archived" | "reverted";
+  action: "archived" | "dropped" | "reverted";
   version: number;
+}
+
+// ---------------------------------------------------------------------------
+// Follow-ups (src-tauri/src/followups.rs)
+// ---------------------------------------------------------------------------
+
+// One reusable follow-up wording. Plain text, usable exactly as written when
+// the assistant is off.
+export interface FollowupTemplate {
+  id: string;
+  name: string;
+  body: string;
+}
+
+export interface FollowupTemplates {
+  version: number;
+  templates: FollowupTemplate[];
+}
+
+// Saving an empty list restores the built-in templates.
+export interface SetFollowupTemplatesRequest {
+  actor?: Actor;
+  templates: FollowupTemplate[];
+}
+
+// A recap of one record's recent history plus suggested next actions.
+// Explanation only — no proposal, no writes.
+export interface HistorySummary {
+  parentType: ParentType;
+  parentId: string;
+  endpointHost: string;
+  local: boolean;
+  model: string;
+  summary: string;
+  suggestedNextActions: string[];
+  includedRecordRefs: RecordRef[];
+}
+
+// Drafted follow-up wording plus the proposal that would file it as a task.
+// usedProvider is false when the template was used exactly as written.
+export interface FollowupDraft {
+  parentType: ParentType;
+  parentId: string;
+  templateId: string;
+  templateName: string;
+  draftText: string;
+  usedProvider: boolean;
+  endpointHost: string | null;
+  local: boolean;
+  model: string | null;
+  includedRecordRefs: RecordRef[];
+  warnings: string[];
+  proposal: Proposal;
 }
 
 // Error wire shape (CommandError in src-tauri/src/lib.rs): stable kind,

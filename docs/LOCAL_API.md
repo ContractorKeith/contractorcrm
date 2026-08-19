@@ -75,8 +75,38 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
   fields that actually change appear. Record links (company/contact) are never
   re-pointed by a plain-language edit. Returns a `Proposal` whose
   `affectedVersions` names the record and the version the draft was built from.
-- `propose_followup(parentType, parentId, objective?)` — drafts follow-up wording plus an optional task
-- `summarize_history(parentType, parentId, window?)` — explanation only, no proposal ID
+- `summarize_history(parentType, parentId, window?)` — implemented; explanation
+  only, no proposal and no writes. Builds a bounded projection of one record's
+  own timeline (`window` is a day count, default 90, capped at 3650): the
+  record's label, type, and id, then up to 25 entries newest-first with
+  summaries and bodies truncated. Related-record activity, other records,
+  attachment bodies, and credentials are never included, and the call's
+  disclosure list names exactly the one record. Returns `HistorySummary
+  { parentType, parentId, endpointHost, local, model, summary,
+  suggestedNextActions, includedRecordRefs }`; a prose-only answer parses as
+  all summary with no suggestions rather than failing. A switched-off or
+  unconfigured assistant is `provider_unavailable` and reads neither the
+  credential store nor the network.
+- `propose_followup(parentType, parentId, objective?, templateId?)` —
+  implemented. Picks a follow-up template (`templateId` outright — an unknown
+  id is `not_found`; otherwise the closest match to `objective`, falling back
+  to the first template) and drafts the wording. With the assistant on, the
+  template body plus the same bounded history projection go through the
+  provider, which personalizes it; with the assistant off, the template body
+  comes back verbatim, nothing is sent, and no credential is read. Either way
+  the result carries a `Proposal` of kind `create_followup_task` for a task
+  linked to the record, validated with exactly the rules `create_task` runs.
+  Nothing is written until `apply_proposal`; `undo_proposal` drops the created
+  task (never deletes it). Returns `FollowupDraft { parentType, parentId,
+  templateId, templateName, draftText, usedProvider, endpointHost, local,
+  model, includedRecordRefs, warnings, proposal }`.
+- `get_followup_templates()` / `set_followup_templates(request)` — the stored
+  template set (`{version, templates: [{id, name, body}]}`) in `app_settings`,
+  following the AI-settings pattern: the built-in set (call follow-up, proposal
+  follow-up, post-site-visit note) is returned until the user edits it, and
+  saving an empty list restores it. Names and bodies are required and trimmed,
+  at most 20 templates, names 80 characters, bodies 2000; a blank id is derived
+  from the name, and duplicate ids are `invalid_input`.
 - `explain_attention_flag(flagId)` — implemented; explanation only, no proposal
   and no writes. Re-evaluates the deterministic flags, finds `flagId` (the
   stable `<rule>:<recordId>` identity `get_attention_flags` returns), and sends

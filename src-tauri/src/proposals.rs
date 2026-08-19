@@ -30,8 +30,9 @@ use crate::ai::{
 };
 use crate::application::{
     self, ArchiveRequest, ChannelInput, CompanyPatch, ContactPatch, CreateCompanyRequest,
-    CreateContactRequest, CreateOpportunityRequest, OpportunityPatch, UpdateCompanyRequest,
-    UpdateContactRequest, UpdateOpportunityRequest,
+    CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, OpportunityPatch,
+    TaskActionRequest, TaskPatch, UpdateCompanyRequest, UpdateContactRequest,
+    UpdateOpportunityRequest,
 };
 use crate::domain::{Actor, Company, Contact, Opportunity};
 use crate::error::ApplicationError;
@@ -90,27 +91,30 @@ sourceLabel (text), notes (text)";
 // Wire types
 // ---------------------------------------------------------------------------
 
-/// Which record surface a proposal is about.
+/// Which record surface a proposal is about. `Task` only ever arrives through
+/// the follow-up drafting seam — plain-language create/update drafts refuse it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalEntityType {
     Contact,
     Company,
     Opportunity,
+    Task,
 }
 
 impl ProposalEntityType {
-    fn as_wire_value(self) -> &'static str {
+    pub(crate) fn as_wire_value(self) -> &'static str {
         match self {
             Self::Contact => "contact",
             Self::Company => "company",
             Self::Opportunity => "opportunity",
+            Self::Task => "task",
         }
     }
 }
 
-/// What a proposal would do. New kinds (follow-ups arrive in a later slice)
-/// are added here without changing anything already published.
+/// What a proposal would do. New kinds are added here without changing
+/// anything already published.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalKind {
@@ -120,6 +124,8 @@ pub enum ProposalKind {
     UpdateContact,
     UpdateCompany,
     UpdateOpportunity,
+    /// A follow-up task drafted from a template (see `followups.rs`).
+    CreateFollowupTask,
 }
 
 /// One field the proposal would change. `before` is absent on a create.
@@ -229,6 +235,8 @@ enum ProposalPayload {
         after: OpportunityPatch,
         before: OpportunityPatch,
     },
+    /// A follow-up task drafted from a template; applying creates the task.
+    CreateFollowupTask(TaskPatch),
 }
 
 /// How an applied proposal is reversed.
@@ -251,6 +259,9 @@ enum UndoAction {
         opportunity_id: String,
         before: OpportunityPatch,
     },
+    /// Undoing a created follow-up task drops it — tasks have no archive flag,
+    /// and dropping keeps the row (and its history) instead of deleting it.
+    DropTask { task_id: String },
 }
 
 impl UndoAction {
@@ -260,6 +271,7 @@ impl UndoAction {
             Self::RevertContact { .. } => ProposalEntityType::Contact,
             Self::RevertCompany { .. } => ProposalEntityType::Company,
             Self::RevertOpportunity { .. } => ProposalEntityType::Opportunity,
+            Self::DropTask { .. } => ProposalEntityType::Task,
         }
     }
 
@@ -269,6 +281,7 @@ impl UndoAction {
             Self::RevertContact { contact_id, .. } => contact_id,
             Self::RevertCompany { company_id, .. } => company_id,
             Self::RevertOpportunity { opportunity_id, .. } => opportunity_id,
+            Self::DropTask { task_id } => task_id,
         }
     }
 }
@@ -444,7 +457,7 @@ pub fn propose_record_with_provider(
     let completion = provider.complete(&ProviderRequest {
         purpose: "propose_record".into(),
         system_text: EXTRACTION_SYSTEM_PROMPT.into(),
-        user_text: create_prompt(kind, &description),
+        user_text: create_prompt(kind, &description)?,
         context_text: None,
         included_record_refs: Vec::new(),
         max_output_tokens: Some(MAX_OUTPUT_TOKENS),
@@ -487,6 +500,8 @@ pub fn propose_record_with_provider(
                 label,
             )
         }
+        // Unreachable: `draft_fields` above already rejected a task draft.
+        ProposalEntityType::Task => return Err(unsupported_task_draft()),
     };
     drop(guard);
 
@@ -547,7 +562,7 @@ pub fn propose_update_with_provider(
     let completion = provider.complete(&ProviderRequest {
         purpose: "propose_update".into(),
         system_text: EXTRACTION_SYSTEM_PROMPT.into(),
-        user_text: update_prompt(entity_type, &request),
+        user_text: update_prompt(entity_type, &request)?,
         context_text: Some(snapshot.context.clone()),
         included_record_refs: vec![RecordRef {
             entity_type: entity_type.as_wire_value().into(),
@@ -939,6 +954,21 @@ fn apply_payload(
                 },
             ))
         }
+        ProposalPayload::CreateFollowupTask(task) => {
+            let created = application::create_task(storage, CreateTaskRequest { actor, task })?;
+            Ok((
+                applied(
+                    ProposalEntityType::Task,
+                    &created.id,
+                    true,
+                    created.version,
+                    &token,
+                ),
+                UndoAction::DropTask {
+                    task_id: created.id,
+                },
+            ))
+        }
     }
 }
 
@@ -968,6 +998,8 @@ fn undo_action(
                 ProposalEntityType::Opportunity => {
                     application::archive_opportunity(storage, request)?.version
                 }
+                // Tasks are undone by dropping them, never by this arm.
+                ProposalEntityType::Task => return Err(unsupported_task_draft()),
             };
             Ok(ProposalUndone {
                 entity_type,
@@ -1026,6 +1058,22 @@ fn undo_action(
                 opportunity_id,
                 reverted.version,
             ))
+        }
+        UndoAction::DropTask { task_id } => {
+            let dropped = application::drop_task(
+                storage,
+                TaskActionRequest {
+                    actor,
+                    task_id: task_id.clone(),
+                    expected_version,
+                },
+            )?;
+            Ok(ProposalUndone {
+                entity_type: ProposalEntityType::Task,
+                entity_id: task_id,
+                action: "dropped".into(),
+                version: dropped.version,
+            })
         }
     }
 }
@@ -1123,6 +1171,7 @@ fn resource_name(entity_type: ProposalEntityType) -> &'static str {
         ProposalEntityType::Contact => "contact",
         ProposalEntityType::Company => "company",
         ProposalEntityType::Opportunity => "opportunity",
+        ProposalEntityType::Task => "task",
     }
 }
 
@@ -1131,6 +1180,7 @@ fn parse_entity_type(value: &str) -> Result<ProposalEntityType, ApplicationError
         "contact" => Ok(ProposalEntityType::Contact),
         "company" => Ok(ProposalEntityType::Company),
         "opportunity" => Ok(ProposalEntityType::Opportunity),
+        "task" => Ok(ProposalEntityType::Task),
         _ => Err(ApplicationError::InvalidInput {
             field: "expectedVersions".into(),
             message: format!("unknown record type \"{value}\""),
@@ -1149,6 +1199,7 @@ fn current_version(
         ProposalEntityType::Opportunity => Ok(application::get_opportunity(storage, entity_id)?
             .opportunity
             .version),
+        ProposalEntityType::Task => Ok(application::get_task(storage, entity_id)?.version),
     }
 }
 
@@ -1229,6 +1280,7 @@ fn load_snapshot(
                 before: RecordPatch::Opportunity(patch),
             }
         }
+        ProposalEntityType::Task => return Err(unsupported_task_draft()),
     };
     if snapshot.version != expected_version {
         return Err(version_conflict(
@@ -1369,6 +1421,42 @@ fn opportunity_projection(patch: &OpportunityPatch) -> Projection {
     ]
 }
 
+fn task_projection(patch: &TaskPatch) -> Projection {
+    vec![
+        ("title", non_empty(&patch.title)),
+        ("body", text(&patch.body)),
+        ("dueAt", text(&patch.due_at)),
+        ("remindAt", text(&patch.remind_at)),
+        ("priority", text(&patch.priority)),
+        ("parentType", text(&patch.parent_type)),
+        ("parentId", text(&patch.parent_id)),
+    ]
+}
+
+/// Build a follow-up task draft. Validated with exactly the rules
+/// `create_task` runs, stored in the same TTL'd draft store, and applied and
+/// undone through the same path as every other proposal. Writes nothing.
+pub fn followup_task_proposal(
+    store: &ProposalStore,
+    task: TaskPatch,
+    summary: String,
+    warnings: Vec<String>,
+) -> Result<Proposal, ApplicationError> {
+    application::check_task_patch(&task)?;
+    let changes = diff(None, &task_projection(&task));
+    Ok(finish_proposal(
+        store,
+        ProposalPayload::CreateFollowupTask(task),
+        ProposalKind::CreateFollowupTask,
+        ProposalEntityType::Task,
+        None,
+        summary,
+        changes,
+        warnings,
+        Vec::new(),
+    ))
+}
+
 fn text(value: &Option<String>) -> Option<String> {
     value
         .as_ref()
@@ -1485,29 +1573,44 @@ fn checked_description(value: &str) -> Result<String, ApplicationError> {
     Ok(value)
 }
 
-fn create_prompt(kind: ProposalEntityType, description: &str) -> String {
-    let fields = match kind {
-        ProposalEntityType::Contact => CONTACT_FIELDS,
-        ProposalEntityType::Company => COMPANY_FIELDS,
-        ProposalEntityType::Opportunity => OPPORTUNITY_FIELDS,
-    };
-    format!(
-        "Draft a new {} record from this note.\n\nFields you may use:\n{fields}\n\nNote:\n{description}",
-        kind.as_wire_value()
-    )
+/// The field list the model may fill for a record surface. Tasks are not a
+/// plain-language drafting surface — they arrive through `propose_followup`.
+fn draft_fields(kind: ProposalEntityType) -> Result<&'static str, ApplicationError> {
+    match kind {
+        ProposalEntityType::Contact => Ok(CONTACT_FIELDS),
+        ProposalEntityType::Company => Ok(COMPANY_FIELDS),
+        ProposalEntityType::Opportunity => Ok(OPPORTUNITY_FIELDS),
+        ProposalEntityType::Task => Err(unsupported_task_draft()),
+    }
 }
 
-fn update_prompt(entity_type: ProposalEntityType, request: &str) -> String {
-    let fields = match entity_type {
-        ProposalEntityType::Contact => CONTACT_FIELDS,
-        ProposalEntityType::Company => COMPANY_FIELDS,
-        ProposalEntityType::Opportunity => OPPORTUNITY_FIELDS,
-    };
-    format!(
+/// Tasks are only drafted through `propose_followup`; every other drafting
+/// entry point refuses them rather than guessing a shape.
+fn unsupported_task_draft() -> ApplicationError {
+    ApplicationError::InvalidInput {
+        field: "entityType".into(),
+        message: "tasks are drafted with the follow-up assistant, not this one".into(),
+    }
+}
+
+fn create_prompt(kind: ProposalEntityType, description: &str) -> Result<String, ApplicationError> {
+    let fields = draft_fields(kind)?;
+    Ok(format!(
+        "Draft a new {} record from this note.\n\nFields you may use:\n{fields}\n\nNote:\n{description}",
+        kind.as_wire_value()
+    ))
+}
+
+fn update_prompt(
+    entity_type: ProposalEntityType,
+    request: &str,
+) -> Result<String, ApplicationError> {
+    let fields = draft_fields(entity_type)?;
+    Ok(format!(
         "Update this existing {} record. Include ONLY the fields that should \
          change; leave everything else out.\n\nFields you may use:\n{fields}\n\nRequested change:\n{request}",
         entity_type.as_wire_value()
-    )
+    ))
 }
 
 /// A parsed model answer. Reading a field consumes it, so whatever is left at
