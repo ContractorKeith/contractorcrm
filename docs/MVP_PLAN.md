@@ -1,7 +1,7 @@
 # MVP delivery plan
 
-Status: active — Slice 4 (search, views, and data in/out) complete
-Updated: 2026-08-18
+Status: active — Slice 5 (local AI and agent interface) complete
+Updated: 2026-08-19
 
 The work is sequenced as tracer slices, mirroring ContractorProject's plan. Each slice leaves a usable path through the real desktop app and keeps records, persistence, UI, and agent interfaces aligned. Because the sibling module already proved the stack, ContractorCRM skips the platform spikes and reuses its CI, packaging, and release patterns.
 
@@ -66,12 +66,12 @@ Exit: a contractor can bring in an existing contact spreadsheet, find anything i
 
 ## 5. Local AI and agent interface
 
-- [ ] Port the provider interface, OS credential storage, and local OpenAI-compatible adapter from the sibling.
-- [ ] Natural-language record creation and updates as typed proposals with diffs, validation, explicit apply, undo, and audit records.
-- [ ] History summaries, next-action suggestions, and follow-up drafting from templates.
-- [ ] AI explanations layered on the deterministic attention flags.
-- [ ] MCP stdio helper with read-only/read-write onboarding and the contact-data context preview.
-- [ ] Document and test every MCP tool, size limit, error kind, and version conflict.
+- [x] Provider interface, OS credential storage, and local OpenAI-compatible adapter (implemented fresh — the sibling had no code to port; its documented architecture was followed).
+- [x] Natural-language record creation and updates as typed proposals with diffs, validation, explicit apply, undo, and audit records.
+- [x] History summaries, next-action suggestions, and follow-up drafting from templates.
+- [x] AI explanations layered on the deterministic attention flags.
+- [x] MCP stdio helper with read-only/read-write onboarding and the contact-data context preview.
+- [x] Document and test every MCP tool, size limit, error kind, and version conflict (coverage table: docs/SLICE5_COVERAGE.md).
 
 Exit: the app remains fully useful with AI disabled; with AI enabled, no model output mutates data without validated user acceptance, and no contact data reaches a provider without an explicit, inspectable call.
 

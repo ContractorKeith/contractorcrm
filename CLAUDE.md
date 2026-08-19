@@ -31,8 +31,23 @@ Versioned portable archive export/import (checksum- and referential-integrity-
 verified ZIP, full-replace with a pre-import safety backup) is implemented.
 Attachments as managed files on contacts and opportunities (sanitized on-disk
 copies under the app data directory, exported/imported as real files inside the
-portable archive) are implemented, closing issues #19–#21. Next up is Slice 5
-(local AI and the agent interface).
+portable archive) are implemented, closing issues #19–#21. Slice 5 (local AI
+and the agent interface) is complete, closing issues #31–#37: a narrow
+provider seam (local OpenAI-compatible endpoints and BYOK through one
+interface, API keys in the OS keychain, provider network calls never under
+the storage mutex); natural-language record creation/updates as typed
+proposals (field-level diffs, deterministic re-validation, explicit apply,
+version-pinned undo, audited, held in memory with a 15-minute TTL — only
+apply_proposal writes); history summaries, next-action suggestions, and
+follow-up drafting from built-in templates that work verbatim with AI off;
+AI explanations layered on the untouched deterministic attention flags; and
+a contractorcrm-mcp stdio helper (39 tools, read-only by default, write
+tools only with --read-write, preview_context shows exactly what a provider
+call would send before it goes out — on both the MCP and desktop surfaces).
+docs/SLICE5_COVERAGE.md maps every tool, limit, error kind, and version-
+conflict path to its documentation and tests. The slice passed an
+independent full-diff review; all findings were fixed before acceptance.
+Next up is Slice 6 (suite hand-off and hardening).
 
 ## Planning baseline
 
