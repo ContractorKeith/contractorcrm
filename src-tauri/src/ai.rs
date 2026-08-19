@@ -23,7 +23,7 @@
 
 use std::time::Duration;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::application::{immediate, log_command};
@@ -52,6 +52,13 @@ const MAX_TIMEOUT_SECONDS: u64 = 300;
 
 /// Most model lists we will ever show in the connection test.
 const MAX_LISTED_MODELS: usize = 50;
+
+/// Hard bounds on provider-controlled strings at the seam. Feature layers
+/// (summaries, drafts, explanations) apply their own tighter caps on top;
+/// these exist so a hostile or broken endpoint cannot hand the app an
+/// unbounded string in the first place.
+const MAX_COMPLETION_CHARS: usize = 8000;
+const MAX_MODEL_NAME_CHARS: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Provider interface
@@ -171,12 +178,37 @@ pub trait CompletionProvider: Send + Sync {
 
 /// A prepared HTTP call. Built as pure data so tests can assert the URL,
 /// headers, and body — in particular that the API key is only ever a header.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HttpCall {
     pub method: &'static str,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<serde_json::Value>,
+}
+
+/// Debug by hand: the Authorization header carries the API key, and a derived
+/// Debug would leak it into any log line or panic message that prints a call.
+impl std::fmt::Debug for HttpCall {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers = self
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                if name.eq_ignore_ascii_case("authorization") {
+                    (name.clone(), "<redacted>".to_owned())
+                } else {
+                    (name.clone(), value.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+        formatter
+            .debug_struct("HttpCall")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &headers)
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 /// Chat-completions adapter for any OpenAI-compatible endpoint: Ollama,
@@ -284,9 +316,12 @@ impl CompletionProvider for OpenAiCompatibleProvider {
                     "{} returned a response ContractorCRM could not read.",
                     endpoint_host(&self.base_url)
                 ),
-            })?
-            .to_owned();
-        let model = response["model"].as_str().unwrap_or(&self.model).to_owned();
+            })?;
+        let model = response["model"].as_str().unwrap_or(&self.model);
+        // Everything past this point is provider-controlled text, so it is
+        // bounded here at the seam. Feature layers keep their tighter caps.
+        let text = truncate(text, MAX_COMPLETION_CHARS);
+        let model = truncate(model, MAX_MODEL_NAME_CHARS);
         Ok(ProviderCompletion {
             purpose: request.purpose.clone(),
             model,
@@ -403,6 +438,14 @@ fn describe_transport_error(host: &str, error: &ureq::Error) -> String {
         ureq::Error::Timeout(_) => format!("{host} did not answer in time."),
         _ => format!("Couldn't reach {host}."),
     }
+}
+
+/// Shorten a provider-supplied string to a character (not byte) cap.
+fn truncate(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    value.chars().take(max_chars).collect()
 }
 
 /// Join a base URL and a path with exactly one slash between them.
@@ -617,7 +660,9 @@ pub fn get_ai_settings(
 ) -> Result<AiSettings, ApplicationError> {
     match read_stored_settings(storage)? {
         Some(stored) => {
-            let has_api_key = credentials.get_api_key()?.is_some();
+            // Only an enabled provider justifies reading the credential store,
+            // exactly as `set_ai_settings` does.
+            let has_api_key = stored.enabled && credentials.get_api_key()?.is_some();
             Ok(to_wire(stored, has_api_key))
         }
         None => Ok(to_wire(StoredAiSettings::default(), false)),
@@ -765,6 +810,8 @@ fn to_wire(stored: StoredAiSettings, has_api_key: bool) -> AiSettings {
 }
 
 fn read_stored_settings(storage: &Storage) -> Result<Option<StoredAiSettings>, ApplicationError> {
+    // `.optional()` and not `.ok()`: a missing row is normal, a database
+    // failure is not and must not be reported as "never configured".
     let value: Option<String> = storage
         .connection()
         .query_row(
@@ -772,7 +819,7 @@ fn read_stored_settings(storage: &Storage) -> Result<Option<StoredAiSettings>, A
             [AI_SETTINGS_KEY],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
     let Some(value) = value else {
         return Ok(None);
     };
@@ -974,6 +1021,19 @@ mod tests {
             !call.url.contains("sk-secret-key"),
             "URL must not carry the key"
         );
+    }
+
+    #[test]
+    fn debugging_a_call_never_prints_the_api_key() {
+        let provider = OpenAiCompatibleProvider::new(
+            "Cloud model",
+            "https://api.example.com/v1",
+            "gpt-test",
+            Some("sk-secret-key".into()),
+        );
+        let printed = format!("{:?}", provider.completion_call(&request_with_context()));
+        assert!(!printed.contains("sk-secret-key"), "{printed}");
+        assert!(printed.contains("<redacted>"));
     }
 
     #[test]

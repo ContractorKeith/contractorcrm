@@ -273,6 +273,32 @@ fn a_disabled_assistant_reaches_no_provider_and_no_credential_store() {
     );
 }
 
+/// Reading settings is not a reason to touch the keychain: with the assistant
+/// off, `get_ai_settings` stays away from it entirely (and so reports no key).
+#[test]
+fn reading_settings_while_disabled_never_reads_the_credential_store() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let credentials = InMemoryCredentialStore::with_key("sk-secret-key");
+    set_ai_settings(
+        &mut storage,
+        &credentials,
+        local_settings(false, "http://127.0.0.1:11434/v1"),
+    )
+    .expect("save disabled settings");
+
+    let before = credentials.read_count();
+    let settings = get_ai_settings(&storage, &credentials).expect("read stored settings");
+
+    assert!(!settings.enabled);
+    assert!(!settings.has_api_key);
+    assert_eq!(
+        credentials.read_count(),
+        before,
+        "a disabled assistant must not read the credential store"
+    );
+}
+
 #[test]
 fn an_enabled_assistant_builds_a_provider_with_the_stored_key() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -379,6 +405,31 @@ fn a_successful_completion_returns_the_text_and_the_records_that_were_included()
     assert_eq!(completion.model, "llama3.1");
     assert_eq!(completion.purpose, "draft_follow_up");
     assert_eq!(completion.included_record_refs.len(), 1);
+}
+
+/// The provider controls both strings, so both are bounded at the seam before
+/// any feature layer sees them.
+#[test]
+fn an_oversized_completion_and_model_name_are_truncated_at_the_seam() {
+    let body: &'static str = Box::leak(
+        format!(
+            "{{\"model\":\"{}\",\"choices\":[{{\"message\":{{\"content\":\"{}\"}}}}]}}",
+            "m".repeat(500),
+            "x".repeat(20_000)
+        )
+        .into_boxed_str(),
+    );
+    let provider = OpenAiCompatibleProvider::new("Local model", serve_once(body), "llama3.1", None);
+
+    let completion = provider
+        .complete(&ProviderRequest {
+            timeout_seconds: Some(5),
+            ..ProviderRequest::new("summarize_history", "system", "user")
+        })
+        .expect("completion");
+
+    assert_eq!(completion.text.chars().count(), 8000);
+    assert_eq!(completion.model.chars().count(), 200);
 }
 
 #[test]
