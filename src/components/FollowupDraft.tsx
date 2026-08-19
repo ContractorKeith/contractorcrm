@@ -89,8 +89,9 @@ export function HistorySummaryPanel({ client, parentType, parentId }: HistorySum
     }
   };
 
+  // role=group gives the aria-label a home; a bare <div> would drop it.
   return (
-    <div className="followup" aria-label="History summary">
+    <div className="followup" role="group" aria-label="History summary">
       <button
         type="button"
         className="button"
@@ -104,31 +105,37 @@ export function HistorySummaryPanel({ client, parentType, parentId }: HistorySum
         request={{ tool: "summarize_history", parentType, parentId }}
       />
 
-      {state.status === "loading" ? <p className="attention-ai__meta">Asking the model…</p> : null}
+      {/* Always-present live region so both the wait and the recap are spoken;
+          mounting the region with its content is announced unreliably. */}
+      <div role="status" aria-live="polite">
+        {state.status === "loading" ? (
+          <p className="attention-ai__meta">Asking the model…</p>
+        ) : null}
+        {state.status === "ready" ? (
+          <div className="attention-ai">
+            <p className="attention-ai__text">{state.summary.summary}</p>
+            {state.summary.suggestedNextActions.length > 0 ? (
+              <ul className="followup__actions" aria-label="Suggested next actions">
+                {state.summary.suggestedNextActions.map((action) => (
+                  <li key={action}>{action}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="attention-ai__meta">
+              {disclosure(
+                state.summary.model,
+                state.summary.endpointHost,
+                state.summary.local,
+                state.summary.includedRecordRefs,
+              )}
+            </p>
+          </div>
+        ) : null}
+      </div>
       {state.status === "error" ? (
         <p role="alert" className="attention-ai__error">
           {state.message}
         </p>
-      ) : null}
-      {state.status === "ready" ? (
-        <div className="attention-ai">
-          <p className="attention-ai__text">{state.summary.summary}</p>
-          {state.summary.suggestedNextActions.length > 0 ? (
-            <ul className="followup__actions" aria-label="Suggested next actions">
-              {state.summary.suggestedNextActions.map((action) => (
-                <li key={action}>{action}</li>
-              ))}
-            </ul>
-          ) : null}
-          <p className="attention-ai__meta">
-            {disclosure(
-              state.summary.model,
-              state.summary.endpointHost,
-              state.summary.local,
-              state.summary.includedRecordRefs,
-            )}
-          </p>
-        </div>
       ) : null}
     </div>
   );
@@ -246,6 +253,11 @@ export function FollowupDraftPanel({
         }}
         label={enabled ? "See what will be sent" : "See what would be sent if the assistant is on"}
       />
+
+      {/* Drafting is a provider round-trip; say so rather than only disabling. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {busy ? "Drafting the follow-up…" : draft ? `Follow-up drafted from ${draft.templateName}.` : ""}
+      </p>
 
       {error ? (
         <p role="alert" className="saved-views__error">

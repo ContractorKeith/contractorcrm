@@ -336,8 +336,15 @@ function FollowupTemplatesSection({ client }: SettingsViewProps) {
         off; with it on, the assistant adjusts one to fit the record's history.
       </p>
 
+      {/* Every template repeats the same two field labels, so the group name is
+          what tells one "Template name" box from the next. */}
       {templates.map((template, index) => (
-        <div key={template.id} className="followup">
+        <div
+          key={template.id}
+          className="followup"
+          role="group"
+          aria-label={`Template ${index + 1} of ${templates.length}`}
+        >
           <Field label="Template name">
             <input
               type="text"

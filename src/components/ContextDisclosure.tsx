@@ -9,6 +9,11 @@ interface ContextDisclosureProps {
   request: PreviewContextRequest;
   /** Override for surfaces where nothing is sent unless the assistant is on. */
   label?: string;
+  /**
+   * What this disclosure is about — appended to the accessible name so a list
+   * of otherwise identical "See what will be sent" toggles stays telling apart.
+   */
+  about?: string;
 }
 
 /**
@@ -21,6 +26,7 @@ export function ContextDisclosure({
   client,
   request,
   label = "See what will be sent",
+  about,
 }: ContextDisclosureProps) {
   const [preview, setPreview] = useState<ContextPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +51,13 @@ export function ContextDisclosure({
         if (event.currentTarget.open) void load();
       }}
     >
-      <summary className="context-disclosure__summary">{label}</summary>
+      <summary
+        className="context-disclosure__summary"
+        // Keeps the visible text inside the accessible name (WCAG 2.5.3).
+        aria-label={about ? `${label} for ${about}` : undefined}
+      >
+        {label}
+      </summary>
       {error ? (
         <p role="alert" className="attention-ai__error">
           {error}
@@ -56,7 +68,16 @@ export function ContextDisclosure({
           <p className="attention-ai__meta">
             {preview.includedRecordRefs.map((record) => record.label).join(", ") || "no records"}
           </p>
-          <pre className="context-disclosure__text">{preview.contextText}</pre>
+          {/* The preview box scrolls, so it needs to be a focusable named region
+              or keyboard-only users cannot reach the clipped text (WCAG 2.1.1). */}
+          <pre
+            className="context-disclosure__text"
+            tabIndex={0}
+            role="region"
+            aria-label={about ? `Context to be sent for ${about}` : "Context to be sent"}
+          >
+            {preview.contextText}
+          </pre>
         </>
       ) : null}
     </details>

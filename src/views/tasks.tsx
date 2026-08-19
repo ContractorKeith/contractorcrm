@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoreClient } from "../api/client";
 import type {
@@ -116,6 +116,14 @@ export function TasksView({ client }: TasksViewProps) {
   const [logToTimeline, setLogToTimeline] = useState(false);
   const [error, setError] = useState<SaveError>(NO_SAVE_ERROR);
   const [loadError, setLoadError] = useState(false);
+  // The editor opens in place above the table, so focus has to be sent into it
+  // and handed back to "New task" when it closes.
+  const titleRef = useRef<HTMLInputElement>(null);
+  const newTaskRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (editing !== null) titleRef.current?.focus();
+  }, [editing]);
 
   const load = useCallback(() => {
     client
@@ -169,6 +177,7 @@ export function TasksView({ client }: TasksViewProps) {
   const closeEditor = () => {
     setEditing(null);
     setError(NO_SAVE_ERROR);
+    queueMicrotask(() => newTaskRef.current?.focus());
   };
 
   const set = <K extends keyof TaskDraft>(key: K, value: TaskDraft[K]) =>
@@ -253,6 +262,7 @@ export function TasksView({ client }: TasksViewProps) {
           </div>
           <span className="list-count">{tasks?.length ?? 0}</span>
           <button
+            ref={newTaskRef}
             type="button"
             className="button button--primary"
             onClick={() => openEditor("new")}
@@ -270,7 +280,11 @@ export function TasksView({ client }: TasksViewProps) {
           <GeneralError message={error.general} />
           <div className="form-grid">
             <Field label="Title" error={error.fields.title}>
-              <input value={draft.title} onChange={(event) => set("title", event.target.value)} />
+              <input
+                ref={titleRef}
+                value={draft.title}
+                onChange={(event) => set("title", event.target.value)}
+              />
             </Field>
             <Field label="Linked to" error={error.fields.parentId ?? error.fields.parentType}>
               <select value={draft.parent} onChange={(event) => set("parent", event.target.value)}>

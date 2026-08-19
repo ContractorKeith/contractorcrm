@@ -137,7 +137,7 @@ describe("SavedViews", () => {
     );
     const picker = await screen.findByRole("combobox", { name: "Saved company view" });
     await user.selectOptions(picker, "view-1");
-    await user.click(screen.getByRole("button", { name: "Update" }));
+    await user.click(screen.getByRole("button", { name: "Update All companies" }));
     expect(client.updateSavedView).toHaveBeenNthCalledWith(1, {
       savedViewId: "view-1",
       expectedVersion: 1,
@@ -145,7 +145,7 @@ describe("SavedViews", () => {
       definition,
     });
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: "Rename All companies" }));
     const input = screen.getByRole("textbox", { name: "View name" });
     await user.clear(input);
     await user.type(input, "Key companies");
@@ -157,7 +157,7 @@ describe("SavedViews", () => {
       definition,
     });
 
-    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Delete Key companies" }));
     expect(screen.getByRole("dialog", { name: "Delete Key companies?" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Delete view" }));

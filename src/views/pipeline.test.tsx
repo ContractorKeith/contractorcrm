@@ -213,7 +213,7 @@ describe("pipeline table", () => {
     expect(await screen.findByRole("combobox", { name: "Saved pipeline view" })).toHaveValue(
       "view-pipeline",
     );
-    expect(screen.getByRole("button", { name: "Update" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Update / })).toBeVisible();
   });
 
   it("keeps core-matched typed filters out of Board controls", async () => {

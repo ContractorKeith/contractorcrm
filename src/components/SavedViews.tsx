@@ -233,13 +233,30 @@ export function SavedViews({
       {selected ? (
         <>
           {modified ? <span className="cell-flag">Modified</span> : null}
-          <button type="button" className="button" onClick={() => void update()}>
+          {/* Named after the selected view — "Update"/"Delete" alone say nothing
+              once the control is read out of its visual context. */}
+          <button
+            type="button"
+            className="button"
+            aria-label={`Update ${selected.name}`}
+            onClick={() => void update()}
+          >
             Update
           </button>
-          <button type="button" className="button" onClick={(event) => openDialog("rename", event.currentTarget)}>
+          <button
+            type="button"
+            className="button"
+            aria-label={`Rename ${selected.name}`}
+            onClick={(event) => openDialog("rename", event.currentTarget)}
+          >
             Rename
           </button>
-          <button type="button" className="button" onClick={(event) => openDialog("delete", event.currentTarget)}>
+          <button
+            type="button"
+            className="button"
+            aria-label={`Delete ${selected.name}`}
+            onClick={(event) => openDialog("delete", event.currentTarget)}
+          >
             Delete
           </button>
         </>
