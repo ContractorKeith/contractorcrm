@@ -1,0 +1,428 @@
+name: Release
+
+# Cuts a DRAFT GitHub Release from a version tag. Nothing here publishes:
+# promotion from draft to public is always a manual click.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# workflow_dispatch runs the same pipeline; leave dry_run on to rehearse the
+# build (artifacts land in the run, no release is touched).
+#
+# Signing is optional. Missing secrets produce unsigned artifacts and a visible
+# ::notice:: line -- see docs/release/SIGNING.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check only; do not create or update a draft release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # macOS ships arm64 only. Universal binaries double build time and the x86_64
+  # half is untestable on the runners we use; see docs/release/SIGNING.md for
+  # the one-line change that adds Intel back.
+  MACOS_TARGET: aarch64-apple-darwin
+
+jobs:
+  # Resolves the version once so every downstream job names artifacts the same
+  # way, and refuses a tag that disagrees with the committed version.
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      dry_run: ${{ steps.resolve.outputs.dry_run }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Resolve version and release mode
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "${package_version}" != "${tauri_version}" ]; then
+            echo "::error::package.json (${package_version}) and tauri.conf.json (${tauri_version}) disagree on the version"
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            tag_version="${tag#v}"
+            if [ "${tag_version}" != "${package_version}" ]; then
+              echo "::error::tag ${tag} does not match the committed version ${package_version}"
+              exit 1
+            fi
+            dry_run="false"
+          else
+            tag="v${package_version}"
+            dry_run="${{ inputs.dry_run }}"
+          fi
+
+          {
+            echo "version=${package_version}"
+            echo "tag=${tag}"
+            echo "dry_run=${dry_run}"
+          } >>"${GITHUB_OUTPUT}"
+          echo "::notice::releasing ${tag} (dry_run=${dry_run})"
+
+  # Same checks as native-verification.yml, widened to Linux so the frontend
+  # suite from quality.yml runs too. A release never ships an unverified tree.
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-2025]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Tauri Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # Frontend suite on Linux only (1x billing); the native runners cover the
+      # platform-specific half.
+      - name: Typecheck
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run typecheck
+      - name: Frontend tests
+        if: matrix.os == 'ubuntu-latest'
+        run: npm test
+      - name: Frontend build
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run build
+
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: npm run tauri build -- --no-bundle
+
+  # License attribution. Platform-independent (both collectors read manifests,
+  # not build output), so it runs once on Linux.
+  notices:
+    name: Third-party notices
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+
+      - name: Install cargo-license
+        run: cargo install cargo-license --locked
+
+      - run: npm ci
+
+      - name: Generate THIRD_PARTY_NOTICES.md
+        run: scripts/generate-notices.sh "${GITHUB_WORKSPACE}/THIRD_PARTY_NOTICES.md"
+
+      - name: Upload notices
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notices
+          path: THIRD_PARTY_NOTICES.md
+          if-no-files-found: error
+
+  # Installers plus the MCP helper binary, one runner per platform.
+  package:
+    name: Package (${{ matrix.label }})
+    needs: [resolve, verify]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macos-arm64
+            rust_target: aarch64-apple-darwin
+          - os: windows-2025
+            label: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri -> target
+          key: package-${{ matrix.label }}
+
+      - run: npm ci
+
+      # `if:` cannot read secrets, so the guard is a shell check on env values
+      # mapped in here. Absent secrets leave the Tauri signing variables unset,
+      # which is exactly how an unsigned build is requested.
+      - name: Configure macOS signing
+        if: matrix.os == 'macos-14'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE}" ] || [ -z "${APPLE_SIGNING_IDENTITY}" ]; then
+            echo "::notice::macOS code signing skipped (APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set) -- the .dmg will be unsigned"
+            exit 0
+          fi
+          # The Tauri CLI imports this certificate into a throwaway keychain and
+          # signs with it; we only have to hand the values forward.
+          {
+            echo "APPLE_CERTIFICATE=${APPLE_CERTIFICATE}"
+            echo "APPLE_CERTIFICATE_PASSWORD=${APPLE_CERTIFICATE_PASSWORD}"
+            echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY}"
+          } >>"${GITHUB_ENV}"
+          echo "::notice::macOS code signing enabled"
+
+          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::notice::macOS notarization skipped (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID not set)"
+          else
+            {
+              echo "APPLE_ID=${APPLE_ID}"
+              echo "APPLE_PASSWORD=${APPLE_PASSWORD}"
+              echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+            } >>"${GITHUB_ENV}"
+            echo "::notice::macOS notarization enabled"
+          fi
+
+      # Bundle targets are chosen on the command line so tauri.conf.json keeps
+      # its platform-neutral "all" and app behavior is untouched.
+      - name: Build macOS bundle
+        if: matrix.os == 'macos-14'
+        run: npm run tauri build -- --target ${{ matrix.rust_target }} --bundles dmg
+
+      - name: Build Windows bundle
+        if: matrix.os == 'windows-2025'
+        run: npm run tauri build -- --target ${{ matrix.rust_target }} --bundles nsis
+
+      # The MCP helper is a second binary in the same crate and is not part of
+      # the Tauri bundle today, so it ships as its own artifact. If Slice 7A
+      # decides the helper belongs inside the installer, drop this step and the
+      # collection lines below that reference it.
+      - name: Build the MCP helper
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.rust_target }} --bin contractorcrm-mcp
+
+      - name: Sign the Windows installer
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
+            Write-Output "::notice::Windows code signing skipped (WINDOWS_CERTIFICATE not set) -- the installer will be unsigned and SmartScreen will warn on first run"
+            exit 0
+          }
+
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like "*\x64\*" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) {
+            Write-Output "::error::signtool.exe not found on the runner"
+            exit 1
+          }
+
+          $pfx = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+
+          $installers = Get-ChildItem -Path "src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis" -Filter *.exe
+          foreach ($installer in $installers) {
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+              /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD $installer.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Remove-Item $pfx -Force
+          Write-Output "::notice::Windows installer signed"
+
+      - name: Collect macOS artifacts
+        if: matrix.os == 'macos-14'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          mkdir -p dist-release
+          dmg="$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg" -name '*.dmg' | head -n 1)"
+          if [ -z "${dmg}" ]; then
+            echo "::error::no .dmg produced"
+            exit 1
+          fi
+          cp "${dmg}" "dist-release/ContractorCRM_${version}_macos-arm64.dmg"
+          cp "src-tauri/target/${{ matrix.rust_target }}/release/contractorcrm-mcp" \
+            "dist-release/contractorcrm-mcp_${version}_macos-arm64"
+          ls -l dist-release
+
+      - name: Collect Windows artifacts
+        if: matrix.os == 'windows-2025'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          mkdir -p dist-release
+          installer="$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis" -name '*.exe' | head -n 1)"
+          if [ -z "${installer}" ]; then
+            echo "::error::no NSIS installer produced"
+            exit 1
+          fi
+          cp "${installer}" "dist-release/ContractorCRM_${version}_windows-x64-setup.exe"
+          cp "src-tauri/target/${{ matrix.rust_target }}/release/contractorcrm-mcp.exe" \
+            "dist-release/contractorcrm-mcp_${version}_windows-x64.exe"
+          ls -l dist-release
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-${{ matrix.label }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums
+    needs: [notices, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: downloads
+
+      - name: Flatten and hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find downloads -type f -exec cp {} release/ \;
+          cd release
+          sha256sum -- * >SHA-256SUMS
+          cat SHA-256SUMS
+
+      - name: Upload SHA-256SUMS
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checksums
+          path: release/SHA-256SUMS
+          if-no-files-found: error
+
+  # Draft only. Someone reads the notes, downloads one artifact, checks it, and
+  # publishes by hand.
+  release:
+    name: Draft release
+    needs: [resolve, notices, package, checksums]
+    if: needs.resolve.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Download every artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: downloads
+
+      - name: Assemble the release directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find downloads -type f -exec cp {} release/ \;
+          ls -l release
+
+      - name: Create or update the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="docs/release/RELEASE_NOTES_v${VERSION}.md"
+          notes_args=()
+          if [ -f "${notes}" ]; then
+            notes_args=(--notes-file "${notes}")
+          else
+            echo "::notice::${notes} not found -- creating the draft with generated notes"
+            notes_args=(--generate-notes)
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --draft --title "ContractorCRM ${TAG}" "${notes_args[@]}"
+            gh release upload "${TAG}" release/* --clobber
+          else
+            gh release create "${TAG}" release/* \
+              --draft \
+              --title "ContractorCRM ${TAG}" \
+              "${notes_args[@]}"
+          fi
+          echo "::notice::draft release ${TAG} is ready -- publish it by hand once you have checked it"
