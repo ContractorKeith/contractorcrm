@@ -1,5 +1,10 @@
 use contractorcrm_lib::error::{ApplicationError, StorageError};
-use contractorcrm_lib::storage::{new_id, now_utc, Migration, Storage};
+use contractorcrm_lib::storage::{latest_migration_version, new_id, now_utc, Migration, Storage};
+
+/// Every shipped migration version, so assertions track new migrations.
+fn all_versions() -> Vec<i64> {
+    (1..=latest_migration_version()).collect()
+}
 use rusqlite::params;
 use std::io::{Seek, SeekFrom, Write};
 
@@ -359,7 +364,7 @@ fn a_failing_migration_leaves_no_schema_or_ledger_trace() {
     let reopened = Storage::open(&database_path).expect("reopen after failed migration");
     assert_eq!(
         applied_versions(&reopened),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        all_versions(),
         "the failed version must not be recorded"
     );
     assert_eq!(table_names(&reopened), EXPECTED_TABLES);
@@ -423,17 +428,17 @@ fn restoring_a_pre_migration_backup_returns_to_the_old_version_and_re_migrates()
              DROP TRIGGER contacts_attachments_delete;
              DROP TRIGGER opportunities_attachments_delete;
              DROP TABLE attachments;
-             DELETE FROM schema_migrations WHERE version=10;",
+             DELETE FROM schema_migrations WHERE version=10;
+             DROP INDEX IF EXISTS tasks_parent_status_due;
+             CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_type, parent_id);
+             DELETE FROM schema_migrations WHERE version=11;",
         )
         .expect("downgrade fixture to v9");
     drop(storage);
 
     // Upgrading writes the pre-migration copy of the v9 database.
-    let mut upgraded = Storage::open(&database_path).expect("upgrade v9 to v10");
-    assert_eq!(
-        applied_versions(&upgraded),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    );
+    let mut upgraded = Storage::open(&database_path).expect("upgrade v9 forward");
+    assert_eq!(applied_versions(&upgraded), all_versions());
     let backup_path = database_path.with_file_name("contractorcrm.sqlite3.pre-migration-v10.bak");
     assert!(backup_path.is_file());
     assert_eq!(backup_schema_version(&backup_path), 9, "backup is at v9");
@@ -456,15 +461,13 @@ fn restoring_a_pre_migration_backup_returns_to_the_old_version_and_re_migrates()
     assert!(safety_copy.is_file(), "pre-restore safety copy is kept");
     assert_eq!(
         backup_schema_version(&safety_copy),
-        10,
+        latest_migration_version(),
         "the safety copy holds the state we restored away from"
     );
 
-    // Restoring reopens through the normal path, so v10 is re-applied cleanly.
-    assert_eq!(
-        applied_versions(&upgraded),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    );
+    // Restoring reopens through the normal path, so the newer migrations are
+    // re-applied cleanly.
+    assert_eq!(applied_versions(&upgraded), all_versions());
     assert_eq!(table_names(&upgraded), EXPECTED_TABLES);
     let survivors: Vec<String> = {
         let mut statement = upgraded
