@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Local-first, AI-native CRM for contractors"
 authors = ["ContractorKeith"]
 edition = "2021"
+# The crate has several binaries (desktop app, MCP helper, dev seeder). Without
+# this, packaging picks a binary by name order and bundles the wrong executable.
+default-run = "contractorcrm"
 
 [lib]
 name = "contractorcrm_lib"

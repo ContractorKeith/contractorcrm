@@ -65,7 +65,14 @@ model endpoints, MCP, and provider context, with three fixes landed
 (Windows drive-relative path escape, CSV import bounds, MCP message bounds)
 and follow-ups filed as #46–#49. The slice passed an independent full-diff
 review across both repos and on-demand native verification on macOS and
-Windows. Next up is Slice 7 (release).
+Windows. Slice 7 (release) is under way: the release boundary is verified in a
+real packaged macOS build (`.app` + `.dmg`) and recorded in
+docs/release/ACCEPTANCE.md, which fixed three packaged-only breaks — the bundle
+shipped the MCP helper as the app executable, opening an attachment was refused
+by the opener capability, and the agent command line named a binary that is not
+on `PATH`. The MCP helper ships inside the app bundle next to the app
+executable. Signing, notarization, installed acceptance on clean accounts, and
+public-download verification are still open.
 
 ## Planning baseline
 

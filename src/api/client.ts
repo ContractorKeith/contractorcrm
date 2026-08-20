@@ -160,6 +160,8 @@ export interface CoreClient {
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
   // Where this device keeps its data — the agent helper needs the same path.
   getDatabaseInfo(): Promise<DatabaseInfo>;
+  // Absolute path of the packaged MCP helper, for the agent-access command line.
+  getAgentHelperPath(): Promise<string>;
   previewContactImport(path: string, mapping?: ContactImportMapping | null): Promise<ContactImportPreview>;
   importContacts(request: ImportContactsRequest): Promise<ContactImportSummary>;
   exportContactsCsv(path: string, overwrite: boolean): Promise<CsvExportReport>;
@@ -277,6 +279,7 @@ export const tauriCoreClient: CoreClient = {
   exportOpportunitiesCsv: (path, overwrite) =>
     invoke("export_opportunities_csv", { path, overwrite }),
   getDatabaseInfo: () => invoke("get_database_info"),
+  getAgentHelperPath: () => invoke("get_agent_helper_path"),
   exportArchive: (path, overwrite) => invoke("export_archive", { path, overwrite }),
   previewArchiveImport: (path) => invoke("preview_archive_import", { path }),
   importArchive: (path) => invoke("import_archive", { path }),

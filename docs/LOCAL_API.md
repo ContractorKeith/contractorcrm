@@ -2,7 +2,7 @@
 
 Status: v1 application command contract implemented; MCP adapter implemented
 and covered end to end (see `docs/SLICE5_COVERAGE.md`)
-Updated: 2026-08-19 (Slice 5 docs and test sweep)
+Updated: 2026-08-19 (Slice 7A packaged readiness sweep)
 
 The implemented command registry, named inputs, outputs, foundational wire
 types, and stable error kinds are published in `schemas/v1/local-api.json` and
@@ -17,9 +17,14 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 
 ## Agent onboarding
 
-The helper ships as a second binary, `contractorcrm-mcp`, alongside the
-desktop app (`src-tauri/src/mcp.rs` is the server; the binary only parses the
-command line). It speaks JSON-RPC 2.0 over stdio — one message per line, MCP
+The helper ships as a second binary, `contractorcrm-mcp`, inside the packaged
+application next to the app executable — `ContractorCRM.app/Contents/MacOS/`
+on macOS, beside `contractorcrm.exe` on Windows (`src-tauri/src/mcp.rs` is the
+server; the binary only parses the command line). It is not on the user's
+`PATH`, so Settings prints its absolute path, resolved at runtime by the
+`get_agent_helper_path` command.
+
+It speaks JSON-RPC 2.0 over stdio — one message per line, MCP
 revision `2025-06-18` (older `2025-03-26` and `2024-11-05` clients are accepted
 and echoed back). `initialize` reports the product version and the local API
 version; closing stdin is the graceful shutdown. No socket is opened.
@@ -28,8 +33,8 @@ Wire it into an agent client with the command line Settings → Backup & Data �
 "Agent access (MCP)" shows for this device:
 
 ```
-contractorcrm-mcp --database "<app data>/contractorcrm.sqlite3"
-contractorcrm-mcp --database "<app data>/contractorcrm.sqlite3" --read-write
+"<app>/Contents/MacOS/contractorcrm-mcp" --database "<app data>/contractorcrm.sqlite3"
+"<app>/Contents/MacOS/contractorcrm-mcp" --database "<app data>/contractorcrm.sqlite3" --read-write
 ```
 
 - **Read-only is the default.** Write tools are not listed at all; calling one

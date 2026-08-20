@@ -1,6 +1,6 @@
 # MVP delivery plan
 
-Status: active — Slice 6 (suite hand-off and hardening) complete
+Status: active — Slice 7 (release) in progress; packaged readiness sweep done on macOS
 Updated: 2026-08-19
 
 The work is sequenced as tracer slices, mirroring ContractorProject's plan. Each slice leaves a usable path through the real desktop app and keeps records, persistence, UI, and agent interfaces aligned. Because the sibling module already proved the stack, ContractorCRM skips the platform spikes and reuses its CI, packaging, and release patterns.
@@ -88,6 +88,7 @@ Exit: the CRM and ContractorProject demonstrably connect on a real machine witho
 
 ## 7. Release
 
+- [x] Verify the release boundary in a real packaged macOS build, fix the packaged-vs-dev breaks, and record the sweep (docs/release/ACCEPTANCE.md).
 - [ ] Freeze version and release notes at one exact commit.
 - [ ] Pass full macOS and Windows build/test/package matrices.
 - [ ] Sign and notarize the macOS package; sign the Windows installer.

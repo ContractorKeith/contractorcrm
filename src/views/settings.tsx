@@ -218,7 +218,26 @@ function AiAssistantSection({ client }: SettingsViewProps) {
  *  each mode allows. Read-only display — the mode is chosen at launch. */
 function AgentAccessSection({ client }: SettingsViewProps) {
   const [databasePath, setDatabasePath] = useState<string | null>(null);
+  const [helperPath, setHelperPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // The helper ships next to the app executable, so the command line the user
+  // copies has to name that file — it is not on anyone's PATH.
+  useEffect(() => {
+    let active = true;
+    void client
+      .getAgentHelperPath()
+      .then((resolved) => {
+        if (active) setHelperPath(resolved);
+      })
+      .catch(() => {
+        // Fall back to the bare name; the surrounding copy explains the rest.
+        if (active) setHelperPath(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [client]);
 
   useEffect(() => {
     let active = true;
@@ -241,6 +260,7 @@ function AgentAccessSection({ client }: SettingsViewProps) {
   }, [client]);
 
   const path = databasePath ?? "<your database path>";
+  const helper = helperPath ? `"${helperPath}"` : "contractorcrm-mcp";
 
   return (
     <div className="data-section">
@@ -252,7 +272,7 @@ function AgentAccessSection({ client }: SettingsViewProps) {
       </p>
 
       <Field label="Read-only (recommended)">
-        <input type="text" readOnly value={`contractorcrm-mcp --database "${path}"`} />
+        <input type="text" readOnly value={`${helper} --database "${path}"`} />
       </Field>
       <p>
         Look up contacts, companies, opportunities, history, tasks, and flags, and draft changes
@@ -263,7 +283,7 @@ function AgentAccessSection({ client }: SettingsViewProps) {
         <input
           type="text"
           readOnly
-          value={`contractorcrm-mcp --database "${path}" --read-write`}
+          value={`${helper} --database "${path}" --read-write`}
         />
       </Field>
       <p>

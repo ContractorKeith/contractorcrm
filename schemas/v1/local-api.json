@@ -69,6 +69,7 @@
     {"name":"backup_database","mode":"write","input":[{"name":"destinationPath","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"DatabaseInfo"},
     {"name":"restore_database","mode":"write","input":[{"name":"backupPath","type":"string","required":true}],"output":"RestoreReport"},
     {"name":"get_database_info","mode":"read","input":[],"output":"DatabaseInfo"},
+    {"name":"get_agent_helper_path","mode":"read","input":[],"output":"string"},
     {"name":"preview_contact_import","mode":"read","input":[{"name":"path","type":"string","required":true},{"name":"mapping","type":"ContactImportMapping","required":false}],"output":"ContactImportPreview"},
     {"name":"import_contacts","mode":"write","input":[{"name":"request","type":"ImportContactsRequest","required":true}],"output":"ContactImportSummary"},
     {"name":"export_contacts_csv","mode":"write","input":[{"name":"path","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"CsvExportReport"},

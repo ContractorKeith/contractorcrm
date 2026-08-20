@@ -129,6 +129,7 @@ macro_rules! with_local_api_v1_commands {
             backup_database,
             restore_database,
             get_database_info,
+            get_agent_helper_path,
             preview_contact_import,
             import_contacts,
             export_contacts_csv,
@@ -791,6 +792,26 @@ fn restore_database(
 fn get_database_info(storage: State<'_, SharedStorage>) -> Result<DatabaseInfo, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::get_database_info(&storage).map_err(Into::into)
+}
+
+/// Absolute path of the packaged MCP helper, which ships beside the app
+/// executable. Settings prints it verbatim, so an agent client can launch the
+/// helper without the user hunting inside the bundle.
+#[tauri::command]
+fn get_agent_helper_path() -> Result<String, CommandError> {
+    let executable = std::env::current_exe().map_err(error::ApplicationError::from)?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| error::ApplicationError::InvalidInput {
+            field: "executable".to_owned(),
+            message: "the app executable has no parent directory".to_owned(),
+        })?;
+    let helper = directory.join(if cfg!(windows) {
+        "contractorcrm-mcp.exe"
+    } else {
+        "contractorcrm-mcp"
+    });
+    Ok(helper.to_string_lossy().into_owned())
 }
 
 // CSV commands — mapped contact import plus contact and opportunity exports.

@@ -116,6 +116,9 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
     fileSizeBytes: 1024,
     lastBackupAt: null,
   }),
+  getAgentHelperPath: vi
+    .fn()
+    .mockResolvedValue("/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp"),
   addAttachment: vi.fn(),
   listAttachments: vi.fn().mockResolvedValue([]),
   removeAttachment: vi.fn().mockResolvedValue({ fileRemoved: true }),

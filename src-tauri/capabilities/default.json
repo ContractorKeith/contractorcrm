@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions for the main ContractorCRM window",
+  "description": "Core permissions for the main ContractorCRM window. open_path is scoped to the app's own attachments folder so a managed file can be opened with the OS default app and nothing else on disk can.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPDATA/attachments/**" }]
+    }
+  ]
 }

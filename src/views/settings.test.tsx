@@ -346,19 +346,22 @@ describe("AI assistant settings", () => {
         fileSizeBytes: 2048,
         lastBackupAt: null,
       }),
+      getAgentHelperPath: vi
+        .fn()
+        .mockResolvedValue("/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp"),
     });
 
     render(<App client={client} />);
     await openDataView(user);
     await screen.findByRole("heading", { name: "Agent access (MCP)" });
 
+    const helper = '"/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp"';
+    const database = '"/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3"';
     const readOnly = await screen.findByLabelText("Read-only (recommended)");
-    expect(readOnly).toHaveValue(
-      'contractorcrm-mcp --database "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3"',
-    );
+    await waitFor(() => expect(readOnly).toHaveValue(`${helper} --database ${database}`));
     expect(readOnly).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Read and write")).toHaveValue(
-      'contractorcrm-mcp --database "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3" --read-write',
+      `${helper} --database ${database} --read-write`,
     );
     expect(screen.getByText(/Nothing is written\./)).toBeVisible();
     expect(screen.getByText(/recorded in the audit log/)).toBeVisible();

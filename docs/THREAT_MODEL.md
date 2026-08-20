@@ -69,6 +69,7 @@ hostile archive) whose `relative_path` points somewhere else.
 | Parent must exist and be active | `src-tauri/src/attachments.rs:440-467` |
 | Row and audit entry commit together; a failed insert removes the copy | `src-tauri/src/attachments.rs:258-263` |
 | Deletion only ever touches `<root>/<validated id>` | `src-tauri/src/attachments.rs:583-593` |
+| Handing a path to the OS default application is capability-scoped to the managed attachments folder, so a webview compromise cannot open anything else on disk | `src-tauri/capabilities/default.json:11` |
 | Crashed-import staging directories are swept on the next import or export | `src-tauri/src/attachments.rs:565-578` |
 
 ### Adversarial findings
