@@ -9,6 +9,7 @@ pub mod explain;
 pub mod followups;
 pub mod mcp;
 pub mod proposals;
+pub mod seed;
 pub mod storage;
 
 use std::sync::{Arc, Mutex};

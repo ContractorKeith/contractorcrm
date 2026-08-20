@@ -1,6 +1,6 @@
 # Data model
 
-Status: implemented through database migration 010
+Status: implemented through database migration 011
 Updated: 2026-08-19
 
 The machine-readable v1 contract is `schemas/v1/data-model.json`, including
@@ -199,6 +199,10 @@ Same as ContractorProject:
   by a model ever reaches SQLite, a backup, or an archive.
 - FTS5 index over active contacts, companies, opportunities, and activity summaries/bodies, maintained by the repository layer inside the same transaction as the write. It is a rebuildable projection; archived records and deleted activities are removed immediately. Contact channel values are included.
 - Provider credentials never stored in these tables
+- Index choices that carry a measured cost are part of the contract:
+  `tasks(parent_type, parent_id, status, due_at)` (migration 11) is what makes
+  the contact and opportunity lists' "next open task" projection a covering
+  lookup instead of a scan of every open task per row — see Supported limits.
 
 ## Invariants
 
@@ -210,6 +214,61 @@ Same as ContractorProject:
 - Stage history is append-only.
 - Derived fields (last contacted, needs attention, opportunity counts) are reproducible from canonical inputs.
 - Imports use stable external IDs or an explicit mapping table so retries do not duplicate records.
+
+## Supported limits
+
+Two different things live here: **enforced caps**, which the code refuses to
+cross, and **tested-to guidance**, which is how far the app has actually been
+measured. Nothing outside the enforced list is a hard stop — past the tested
+sizes you are in untested territory, not blocked.
+
+### Enforced (the code refuses)
+
+| Limit | Value | Where |
+| --- | --- | --- |
+| Attachment file size | 256 MiB per file | `attachments::MAX_ATTACHMENT_BYTES` — refused on add |
+| Portable archive total | ~1 GiB uncompressed | `archive::MAX_ARCHIVE_BYTES` — checked on export *and* import |
+| Search results | 50 per query (25 default) | `search_records` clamps the caller's limit |
+| Agent list results | 500 rows per call | `mcp::MAX_LIST_LIMIT` |
+| Agent timeline results | 200 entries per call | `mcp::MAX_TIMELINE_ENTRIES` |
+| Proposal lifetime | 15 minutes, memory only | `proposals` TTL |
+
+### Tested to (measured, not enforced)
+
+Issue #42 measured a seeded database of 10,000 contacts, 2,000 companies,
+5,000 opportunities, 30,000 activities, 5,000 tasks, tags and custom fields on
+every tenth record — 62 MiB on disk. Release build, Apple Silicon laptop:
+
+| Command | Time |
+| --- | --- |
+| Open the database (cold) | 2 ms |
+| `list_contacts` (10,000 rows) | 440 ms |
+| `list_opportunities` (5,000 rows) | 47 ms |
+| `list_tasks` (5,000 open) | 10 ms |
+| `search_records` | under 2 ms |
+| `get_timeline` (252-entry contact) | 0.5 ms |
+
+Regenerate that database with the dev-only seeder and re-run the measurements:
+
+```bash
+cd src-tauri
+cargo run --release --bin seed-dev-db -- --database /tmp/scale.sqlite3 --contacts 10000
+SCALE_DB=/tmp/scale.sqlite3 cargo test --release --test scale -- --ignored --nocapture
+```
+
+The seeder writes every record through the application seam (never raw SQL), so
+the search index and command log match a database a real user produced. It is a
+binary, not a test — CI never pays for it, and the 10k marker test in
+`src-tauri/tests/scale.rs` is `#[ignore]`d.
+
+Guidance for the surfaces that are bounded by rendering rather than by SQL:
+
+- Record tables (contacts, companies, pipeline list, tasks) window their rows
+  above 150 rows, so a 10,000-row list mounts ~30 rows instead of 10,000.
+- The pipeline **board** draws at most 100 cards per stage column and says so
+  in the column footer; the list view is the complete view.
+- No cap is enforced on total records, attachments, or database size. A book an
+  order of magnitude past the tested sizes has not been measured.
 
 ## Archive contract
 

@@ -118,6 +118,13 @@ interface PipelineBoardProps {
   onOpen: (opportunityId: string) => void;
 }
 
+// The board is the glance view; the list is the working view. Past this many
+// cards a column stops being readable long before it stops being fast, so it
+// shows the top of the stack and points at the list for the rest. Counts and
+// totals in the column head always cover every opportunity in the stage.
+// (Issue #42: 5,000 open opportunities meant 5,000 cards and a 4.6s mount.)
+const MAX_BOARD_CARDS = 100;
+
 export function PipelineBoard({ stages, opportunities, onOpen }: PipelineBoardProps) {
   // Open stages in pipeline order, then Won and Lost as quiet summaries.
   const ordered = [...stages].sort((a, b) => a.sortKey - b.sortKey);
@@ -154,7 +161,7 @@ export function PipelineBoard({ stages, opportunities, onOpen }: PipelineBoardPr
               <p className="board-column__empty">Nothing in this stage.</p>
             ) : (
               <ul className="board-cards" aria-label={`${stage.name} opportunities`}>
-                {items.map((item) => (
+                {items.slice(0, MAX_BOARD_CARDS).map((item) => (
                   <li key={item.id}>
                     <button type="button" className="board-card" onClick={() => onOpen(item.id)}>
                       <span className="board-card__name">{item.name}</span>
@@ -169,6 +176,12 @@ export function PipelineBoard({ stages, opportunities, onOpen }: PipelineBoardPr
                 ))}
               </ul>
             )}
+            {!closed && items.length > MAX_BOARD_CARDS ? (
+              <p className="board-column__more">
+                Showing the first {MAX_BOARD_CARDS} of {items.length}. Switch to the list for all of
+                them.
+              </p>
+            ) : null}
           </section>
         );
       })}

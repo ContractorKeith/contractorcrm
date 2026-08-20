@@ -1592,25 +1592,22 @@ fn the_shipped_binary_serves_a_handshake_and_a_read_over_stdio() {
 // ---------------------------------------------------------------------------
 
 /// Undo the newest migration so the file looks like one written by an older
-/// build: drop what v10 created and forget it was ever applied.
+/// build: drop what v11 created, put back what it removed, and forget it was
+/// ever applied.
 fn roll_back_the_newest_migration(database_path: &std::path::Path) {
     assert_eq!(
         contractorcrm_lib::storage::latest_migration_version(),
-        10,
+        11,
         "update this fixture when a migration is added"
     );
     let connection = rusqlite::Connection::open(database_path).expect("open the database");
     connection
         .execute_batch(
-            "DROP TRIGGER opportunities_attachments_delete;
-             DROP TRIGGER contacts_attachments_delete;
-             DROP TRIGGER attachments_owner_update;
-             DROP TRIGGER attachments_owner_insert;
-             DROP INDEX attachments_parent;
-             DROP TABLE attachments;
-             DELETE FROM schema_migrations WHERE version = 10;",
+            "DROP INDEX tasks_parent_status_due;
+             CREATE INDEX tasks_parent ON tasks(parent_type, parent_id);
+             DELETE FROM schema_migrations WHERE version = 11;",
         )
-        .expect("roll back migration 10");
+        .expect("roll back migration 11");
 }
 
 fn stored_schema_version(database_path: &std::path::Path) -> i64 {
@@ -1637,11 +1634,11 @@ fn a_read_only_helper_refuses_an_older_database_instead_of_migrating_it() {
         .err()
         .expect("an older file is refused");
 
-    assert!(error.contains("schema v9"), "{error}");
+    assert!(error.contains("schema v10"), "{error}");
     assert!(error.contains("desktop app"), "{error}");
     assert_eq!(
         stored_schema_version(&database),
-        9,
+        10,
         "a read-only connection must not migrate the user's database"
     );
 }
@@ -1660,7 +1657,7 @@ fn a_read_write_helper_may_still_migrate_an_older_database() {
         "--read-write is an explicit write grant"
     );
 
-    assert_eq!(stored_schema_version(&database), 10);
+    assert_eq!(stored_schema_version(&database), 11);
 }
 
 #[test]

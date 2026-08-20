@@ -1013,7 +1013,9 @@ h1 {
   font-size: var(--font-size-meta);
 }
 
-.board-column__empty {
+.board-column__empty,
+/* Footer on a column that is showing only the top of a very deep stage. */
+.board-column__more {
   margin: 0;
   padding: var(--space-3);
   /* WCAG AA: neutral-500 measured 2.37:1 on the light column surface;
@@ -1057,6 +1059,21 @@ h1 {
 }
 
 /* — record tables: 28px rows, hairline dividers, condensed headers — */
+
+/* Long lists (over 150 rows) window their body, so they need their own
+   viewport to scroll in; the header stays pinned to the top of it. */
+.record-table-scroll {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.record-table-scroll .record-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg);
+}
 
 .record-table {
   width: 100%;

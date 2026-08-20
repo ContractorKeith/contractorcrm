@@ -487,6 +487,18 @@ WHEN EXISTS (SELECT 1 FROM attachments WHERE parent_type='opportunity' AND paren
 BEGIN SELECT RAISE(ABORT, 'opportunity attachments must be removed first'); END;
 ";
 
+/// v11 scale index (issue #42). The contact and opportunity list queries ask
+/// "the earliest open due date for this parent" once per row. With only
+/// `tasks(status, due_at)` and `tasks(parent_type, parent_id)` to choose from,
+/// SQLite picked the status index and walked every open task for every row —
+/// 51 s to list 10,000 contacts, 21 s for 5,000 opportunities. One index in
+/// predicate order turns that into a covering lookup. `tasks_parent` is dropped
+/// because the new index starts with exactly its columns.
+const MIGRATION_011: &str = "\
+CREATE INDEX tasks_parent_status_due ON tasks(parent_type, parent_id, status, due_at);
+DROP INDEX IF EXISTS tasks_parent;
+";
+
 /// Ordered, forward-only migration list; append new versions, never edit old ones.
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -528,6 +540,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 10,
         sql: MIGRATION_010,
+    },
+    Migration {
+        version: 11,
+        sql: MIGRATION_011,
     },
 ];
 
