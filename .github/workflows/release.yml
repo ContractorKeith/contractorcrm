@@ -263,6 +263,54 @@ jobs:
         if: matrix.os == 'macos-14'
         run: npm run tauri build -- --target ${{ matrix.rust_target }} --bundles dmg
 
+      # Tauri notarizes and staples the .app, not the disk image around it, so a
+      # downloaded .dmg has no ticket of its own and `spctl -t open` rejects it
+      # offline. Ticket the wrapper too. Same shell guard as the signing steps:
+      # `if:` cannot read secrets. Safe to rerun -- resubmitting and restapling
+      # an already-notarized image is fine, and `stapler validate` is the gate.
+      - name: Notarize and staple the macOS dmg
+        if: matrix.os == 'macos-14'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::notice::dmg notarization skipped (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID not set) -- the .dmg will carry no notarization ticket"
+            exit 0
+          fi
+
+          dmg="$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg" -name '*.dmg' | head -n 1)"
+          if [ -z "${dmg}" ]; then
+            echo "::error::no .dmg produced"
+            exit 1
+          fi
+
+          submission="$(xcrun notarytool submit "${dmg}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait --output-format json)"
+          echo "${submission}"
+          status="$(printf '%s' "${submission}" | jq -r '.status // "unknown"')"
+          if [ "${status}" != "Accepted" ]; then
+            id="$(printf '%s' "${submission}" | jq -r '.id // ""')"
+            if [ -n "${id}" ]; then
+              xcrun notarytool log "${id}" \
+                --apple-id "${APPLE_ID}" \
+                --password "${APPLE_PASSWORD}" \
+                --team-id "${APPLE_TEAM_ID}" || true
+            fi
+            echo "::error::dmg notarization returned ${status} (expected Accepted)"
+            exit 1
+          fi
+
+          xcrun stapler staple "${dmg}"
+          xcrun stapler validate "${dmg}"
+          echo "::notice::macOS dmg notarized and stapled"
+
       - name: Build Windows bundle
         if: matrix.os == 'windows-2025'
         run: npm run tauri build -- --target ${{ matrix.rust_target }} --bundles nsis
