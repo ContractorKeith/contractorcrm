@@ -1,8 +1,9 @@
 # Release acceptance
 
-Status: Slice 7A packaged readiness sweep complete on macOS; installed and
-public-download passes still open
-Updated: 2026-08-19
+Status: Slice 7A packaged readiness sweep and Slice 7D installed acceptance
+complete on macOS; Windows installed acceptance and the public-download pass are
+still open
+Updated: 2026-08-20
 
 This file is the running record of what has been verified in real, packaged
 builds of ContractorCRM — not in `npm run tauri dev`. Each section names the
@@ -118,15 +119,263 @@ Run on the final tree, all green: `cargo fmt --check`, `cargo clippy
 
 ## Installed acceptance — macOS
 
-_Not started._ To be filled by the pass that installs a signed, notarized build
-from the `.dmg` into `/Applications` on a clean account and repeats the
-checklist above.
+Issue: [#53](https://github.com/ContractorKeith/contractorcrm/issues/53)
+Branch: `docs/issue-53-installed-acceptance`
+Date: 2026-08-20
+
+This pass installed the real `v0.1.0` draft-release artifact — not a local
+build — into `/Applications`, ran the core workflow against a brand-new app data
+directory, quit and relaunched to check persistence, and then uninstalled.
+
+### Environment
+
+| Item | Value |
+| --- | --- |
+| Machine | Apple M2, arm64 |
+| OS | macOS 26.5.2 (build 25F84) |
+| Gatekeeper | `spctl --status` → `assessments enabled` |
+| Artifact | `ContractorCRM_0.1.0_macos-arm64.dmg`, 8,833,710 bytes, from the `v0.1.0` draft release |
+| How it was downloaded | `gh release download v0.1.0 --pattern 'ContractorCRM_0.1.0_macos-arm64.dmg' --pattern 'SHA-256SUMS'` (draft assets need an authenticated download; the public, unauthenticated download check is a separate pass below) |
+| Install location | `/Applications/ContractorCRM.app` (user-writable on this machine — no admin auth prompt) |
+| App data | `~/Library/Application Support/com.contractorkeith.contractorcrm`, created fresh by the first run |
+| How it was driven | macOS accessibility tree + synthetic keystrokes against the live window |
+| AI | left off (the fresh install shows the assistant off with no key saved) |
+
+### Artifact verification
+
+Checksum — the `gh` download matches the published `SHA-256SUMS` line:
+
+```
+$ grep 'ContractorCRM_0.1.0_macos-arm64.dmg' SHA-256SUMS | shasum -a 256 -c -
+ContractorCRM_0.1.0_macos-arm64.dmg: OK
+```
+
+Disk image signature:
+
+```
+$ codesign -dv --verbose=2 ContractorCRM_0.1.0_macos-arm64.dmg
+Executable=.../ContractorCRM_0.1.0_macos-arm64.dmg
+Identifier=ContractorCRM_0.1.0_aarch64
+Format=disk image
+CodeDirectory v=20200 size=315 flags=0x0(none) hashes=1+6 location=embedded
+Signature size=8984
+Authority=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=Aug 20, 2026 at 8:43:43 AM
+Info.plist=not bound
+TeamIdentifier=7J7BA9AK78
+Sealed Resources=none
+Internal requirements count=1 size=188
+```
+
+Disk image Gatekeeper assessment (network reachable, re-run twice):
+
+```
+$ spctl -a -t open --context context:primary-signature -vvv ContractorCRM_0.1.0_macos-arm64.dmg
+ContractorCRM_0.1.0_macos-arm64.dmg: rejected
+source=Unnotarized Developer ID
+origin=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+
+$ xcrun stapler validate ContractorCRM_0.1.0_macos-arm64.dmg
+Processing: .../ContractorCRM_0.1.0_macos-arm64.dmg
+ContractorCRM_0.1.0_macos-arm64.dmg does not have a ticket stapled to it.
+```
+
+**The `.dmg` wrapper is Developer ID signed but not itself notarized/stapled —
+the `.app` inside it is.** That is the one gap this pass found, and it did not
+cost the user anything in practice: with a browser-style quarantine attribute
+set on the disk image, Finder mounted it and the installed app launched with no
+Gatekeeper warning (see below). It is still worth closing, because a stapled
+disk image is what keeps the install clean if the machine is offline. Filed as
+[#58](https://github.com/ContractorKeith/contractorcrm/issues/58).
+
+Application signature, notarization, and nested-code verification, from the
+mounted volume:
+
+```
+$ codesign -dv --verbose=2 /Volumes/ContractorCRM/ContractorCRM.app
+Executable=/Volumes/ContractorCRM/ContractorCRM.app/Contents/MacOS/contractorcrm
+Identifier=com.contractorkeith.contractorcrm
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20500 size=134573 flags=0x10000(runtime) hashes=4198+3 location=embedded
+Signature size=8984
+Authority=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=Aug 20, 2026 at 8:43:13 AM
+Notarization Ticket=stapled
+Info.plist entries=15
+TeamIdentifier=7J7BA9AK78
+Runtime Version=14.5.0
+Sealed Resources version=2 rules=13 files=2
+Internal requirements count=1 size=196
+
+$ codesign --verify --deep --strict -vv /Volumes/ContractorCRM/ContractorCRM.app
+--prepared:/Volumes/ContractorCRM/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp
+--validated:/Volumes/ContractorCRM/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp
+/Volumes/ContractorCRM/ContractorCRM.app: valid on disk
+/Volumes/ContractorCRM/ContractorCRM.app: satisfies its Designated Requirement
+
+$ xcrun stapler validate /Volumes/ContractorCRM/ContractorCRM.app
+Processing: /Volumes/ContractorCRM/ContractorCRM.app
+The validate action worked!
+
+$ spctl -a -t exec -vv /Volumes/ContractorCRM/ContractorCRM.app
+/Volumes/ContractorCRM/ContractorCRM.app: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+```
+
+Hardened runtime is on (`flags=0x10000(runtime)`), the bundled
+`contractorcrm-mcp` helper is signed as nested code with the app, and the
+notarization ticket is stapled to the bundle, so it validates offline.
+
+### First-run simulation on a clean slate
+
+1. The real app data directory was moved aside before anything was installed
+   (`mv ~/Library/Application Support/com.contractorkeith.contractorcrm
+   <scratch>/appdata-real-backup`), with a SHA-256 manifest of all 11 files
+   taken first.
+2. A browser-style quarantine attribute was written on the disk image before
+   mounting, so the Gatekeeper check would be real:
+   `xattr -w com.apple.quarantine "0083;<hex time>;Safari;<uuid>" <dmg>`.
+3. Opening the quarantined `.dmg` from Finder (`open <dmg>`) showed the
+   **AGPL-3.0 license agreement sheet** (Agree / Disagree / Print / Save) before
+   mounting — that is the Tauri DMG SLA, not a security warning. After Agree the
+   volume mounted with `ContractorCRM.app` and the `/Applications` symlink. No
+   Gatekeeper alert appeared at mount despite the unnotarized wrapper.
+4. `cp -R /Volumes/ContractorCRM/ContractorCRM.app /Applications/` — the copy
+   inherited the disk image's quarantine
+   (`com.apple.quarantine: 0283;…;;<same uuid as the dmg>`), and a fresh
+   unassessed quarantine (`0083;…;Safari;<uuid>`) was then written on the
+   installed bundle to force a full first-launch assessment.
+5. `spctl --assess --type execute -vvv /Applications/ContractorCRM.app` →
+   `accepted / source=Notarized Developer ID`.
+6. `open -a /Applications/ContractorCRM.app` — **no Gatekeeper prompt of any
+   kind.** `CoreServicesUIAgent` had zero windows; the app launched straight to
+   its window. Because the bundle was copied with `cp` rather than dragged in
+   Finder, macOS ran the first launch through App Translocation
+   (`/private/var/folders/…/AppTranslocation/…/ContractorCRM.app`), which is
+   the expected behavior for a quarantined bundle that Finder did not move. The
+   quarantine attribute was then removed (what a Finder drag-install effectively
+   achieves) and the app was relaunched in place from
+   `/Applications/ContractorCRM.app` for the workflow below.
+7. First launch created the app data directory from scratch —
+   `contractorcrm.sqlite3` plus `-shm`/`-wal`, no migration backups — and the UI
+   showed the empty states ("No contacts yet", "Add your first lead, client,
+   sub, or vendor…"), confirming a genuine new-user run.
+
+### Core workflow in the installed app
+
+| # | Item | How verified | Result |
+| --- | --- | --- | --- |
+| 1 | Launch from `/Applications` | Window titled ContractorCRM, storage badge "Core ready · v0.1.0" | Pass |
+| 2 | Create a contact | "Marcus Villareal", city Ocoee, phone channel `407-555-0142` through the real form; detail view opened on the new record | Pass |
+| 3 | Create a company | "Winter Garden Ranch LLC", city Winter Garden | Pass |
+| 4 | Create an opportunity | "Villareal ranch fence", linked to the contact and the company, stage Estimating, value 18500 | Pass |
+| 5 | Move it through a stage | Estimating → Proposal Sent; stage history shows both rows with actor `user` and ISO timestamps (`— → Estimating`, `Estimating → Proposal Sent`) | Pass |
+| 6 | Log an activity | Note "Walked the ranch perimeter with Marcus" with details; appeared in the opportunity timeline immediately | Pass |
+| 7 | Create a task | "Send Villareal proposal PDF", due date set, linked to `Opportunity — Villareal ranch fence` | Pass |
+| 8 | Complete the task | Checked "Log to timeline" and pressed Complete; status flipped to Done under the ALL filter and an activity "Completed task: Send Villareal proposal PDF" was written | Pass |
+| 9 | Global search finds them | ⌘K "Villareal" → **3 results** (Opportunity, Contact, Activity); "Winter Garden" → **1 result** (Company); Enter opened the company detail | Pass |
+| 10 | Quit fully and relaunch | ⌘Q (process gone), then `open -a`; contact + phone, company, opportunity at Proposal Sent with `$18,500.00`, the completed task, and the logged activity (found again by ⌘K "perimeter") were all intact | Pass |
+| 11 | Agent helper path in the installed copy | Settings → Backup & Data printed `"/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp" --database "/Users/<user>/Library/Application Support/com.contractorkeith.contractorcrm/contractorcrm.sqlite3"` (and the `--read-write` variant) — the 7A fix resolves correctly from a real install | Pass |
+| 12 | No network from the app | `lsof -a -p <pid> -i` returned no sockets for the whole session | Pass |
+| 13 | AI off by default in a fresh install | Settings showed "Use an AI assistant" unchecked, "No key saved" | Pass |
+
+### Uninstall
+
+1. ⌘Q, confirmed no `ContractorCRM.app` processes remained.
+2. `rm -rf /Applications/ContractorCRM.app` — the app is a single bundle, so
+   dragging it to the Trash is the whole uninstall. `/Applications` no longer
+   contains it.
+3. **The app data directory survives the uninstall**, which is the documented
+   behavior: `~/Library/Application Support/com.contractorkeith.contractorcrm`
+   still held `contractorcrm.sqlite3` and its `-shm`/`-wal` files afterwards.
+   Deleting that folder is the user's explicit choice, and it is the only thing
+   they need to remove to erase their data.
+4. Residue to know about: macOS also keeps a WebKit data folder
+   (`~/Library/WebKit/com.contractorkeith.contractorcrm`) and a saved window
+   state folder (`~/Library/Saved Application State/…`). Both are OS-managed
+   caches with no CRM records in them.
+5. The disk image was ejected and the throwaway app data directory was moved to
+   scratch.
+
+### The real data directory was left exactly as it was found
+
+The user's real app data was moved aside before the install and moved back after
+the uninstall. A SHA-256 manifest of all 11 files taken before the pass and a
+manifest taken after the restore are identical (`diff` clean), so nothing in the
+live database, its migration backups, or the attachments folder was touched by
+this pass.
+
+### Honest caveats
+
+- **This ran on the primary user account, not a newly created macOS account.**
+  The clean slate was a fresh app data directory (the real one moved aside), not
+  a fresh home directory. That covers first-run database creation and empty
+  states, but it does not prove the experience on a machine that has never had
+  ContractorCRM's developer certificate accepted or any of its caches present.
+- The install was `cp -R` from the mounted volume plus a hand-written quarantine
+  attribute rather than a Finder drag, which is what triggered App Translocation
+  on the first launch. The Gatekeeper assessment itself was real and passed.
+- The draft assets were downloaded with an authenticated `gh`; an anonymous
+  browser download of the published release is the separate pass below.
+
+### Filed from this pass
+
+- [#58](https://github.com/ContractorKeith/contractorcrm/issues/58) — the `.dmg`
+  wrapper is signed but not notarized/stapled (the `.app` inside it is).
 
 ## Installed acceptance — Windows
 
-_Not started._ To be filled by the pass that installs the Windows package
-(MSI/NSIS) on a Windows machine and repeats the checklist above, including the
-`contractorcrm-mcp.exe` helper path shown in Settings.
+**Status: PENDING — escalated to Keith.** There is no Windows machine in this
+environment, so nothing below has been executed. The artifacts exist in the
+`v0.1.0` release (`ContractorCRM_0.1.0_windows-x64-setup.exe`, 7,216,982 bytes,
+and the standalone `contractorcrm-mcp_0.1.0_windows-x64.exe`). Run this on a
+Windows 11 x64 machine and record the results in this section.
+
+Expect a SmartScreen warning: the Windows installer is unsigned for v0.1.0, so
+"Windows protected your PC" is the correct, documented first-run experience.
+
+1. **Download.** From the published release page, download
+   `ContractorCRM_0.1.0_windows-x64-setup.exe` and `SHA-256SUMS` with a browser
+   (not `gh`) so the download carries the real mark-of-the-web.
+2. **Check the hash.** In PowerShell, from the download folder:
+   `certutil -hashfile ContractorCRM_0.1.0_windows-x64-setup.exe SHA256`
+   The output must equal
+   `4dff58b0052c49d9850f3986bd585933f81e6492cb7d0e3ee0b307db077ab59c`
+   (the `SHA-256SUMS` line for that file). Record the command and its output.
+3. **Run the installer.** Double-click it. SmartScreen should say "Windows
+   protected your PC" → click **More info** → **Run anyway**. Note whether a UAC
+   prompt appears and whether the install is per-user or machine-wide.
+   Record the exact wording of anything Windows shows.
+4. **Note the install location** (typically
+   `%LOCALAPPDATA%\Programs\ContractorCRM\` for a per-user NSIS install) and
+   confirm `contractorcrm-mcp.exe` sits beside `contractorcrm.exe` there.
+5. **Confirm the data directory** is created on first run at
+   `%APPDATA%\com.contractorkeith.contractorcrm\` and holds
+   `contractorcrm.sqlite3`, and that the app opens to the empty states.
+6. **Core workflow** — repeat items 1–9 of the macOS table above: create a
+   contact, a company, and an opportunity; move the opportunity through a stage
+   and confirm the stage-history row; log an activity; create a task with a due
+   date and complete it with "Log to timeline"; press Ctrl+K and confirm global
+   search finds the contact, the opportunity, and the activity, and that Enter
+   opens the highlighted record.
+7. **Agent helper path.** Settings → Backup & Data should print the absolute
+   `contractorcrm-mcp.exe` path inside the install folder with the `--database`
+   argument pointing at `%APPDATA%\com.contractorkeith.contractorcrm\
+   contractorcrm.sqlite3`. Copy that read-only command line into a terminal and
+   confirm it starts (Ctrl+C to stop).
+8. **Quit and relaunch.** Close the app fully, reopen it, and confirm every
+   record from step 6 is still there.
+9. **Uninstall.** Settings → Apps → Installed apps → ContractorCRM → Uninstall.
+   Confirm the install folder is gone and the Start-menu entry is removed.
+10. **Data-dir note.** Confirm that `%APPDATA%\com.contractorkeith.
+    contractorcrm\` still exists after the uninstall — same documented behavior
+    as macOS: your data is yours and is not deleted with the app. Delete it by
+    hand only if you mean to erase the database.
 
 ## Public-download verification
 
