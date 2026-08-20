@@ -895,3 +895,46 @@ fn exports_neutralize_spreadsheet_formulas() {
     assert!(exported.contains("'@home"));
     assert!(!exported.contains(",=HYPERLINK"));
 }
+
+#[test]
+fn an_oversized_import_file_is_refused_before_it_is_buffered() {
+    // The import is the one place a file nobody in this app wrote decides how
+    // much memory the process spends, so the size is checked before the parse.
+    let (temp, _storage) = fixture();
+    let path = temp.path().join("huge.csv");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(64 * 1024 * 1024 + 1).unwrap();
+    drop(file);
+
+    let error = preview_contact_import(path.to_str().unwrap(), None).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("limited to"), "{error}");
+}
+
+#[test]
+fn an_import_file_with_too_many_rows_is_refused() {
+    // A small file can still carry millions of rows; the row cap bounds that
+    // without any of them reaching the database.
+    let (temp, mut storage) = fixture();
+    let mut body = String::from("External ID,Display Name\n");
+    for index in 0..200_001 {
+        body.push_str(&format!("crm-{index},Contact {index}\n"));
+    }
+    let path = write_csv(&temp, "many-rows.csv", &body);
+
+    let error = preview_contact_import(path.to_str().unwrap(), None).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("rows"), "{error}");
+
+    let error = import_contacts(
+        &mut storage,
+        ImportContactsRequest {
+            actor: Actor::User,
+            path: path.to_str().unwrap().to_owned(),
+            mapping: ContactImportMapping::default(),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(list_contacts(&storage, false).unwrap().is_empty());
+}

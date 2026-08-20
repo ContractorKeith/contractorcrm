@@ -21,7 +21,9 @@ use contractorcrm_lib::attachments::{
 };
 use contractorcrm_lib::domain::{Actor, Contact, StageKind};
 use contractorcrm_lib::error::ApplicationError;
-use contractorcrm_lib::mcp::{Mode, Server, MAX_LIST_LIMIT, MAX_TIMELINE_BODY_CHARS};
+use contractorcrm_lib::mcp::{
+    Mode, Server, MAX_LIST_LIMIT, MAX_MESSAGE_BYTES, MAX_TIMELINE_BODY_CHARS,
+};
 use contractorcrm_lib::storage::Storage;
 use serde_json::{json, Value};
 
@@ -1706,4 +1708,105 @@ fn the_binary_refuses_a_missing_database() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no ContractorCRM database"), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// Hostile client probes (docs/THREAT_MODEL.md "MCP helper")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_oversized_stdio_message_is_refused_and_the_next_one_still_works() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    // One line the client never terminates until it is far past the cap, then
+    // an ordinary request behind it.
+    let mut input = Vec::new();
+    input.extend(std::iter::repeat_n(b'x', MAX_MESSAGE_BYTES + 1024));
+    input.extend_from_slice(b"\n");
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":7,"method":"ping","params":{}}"#);
+    input.extend_from_slice(b"\n");
+
+    let mut output = Vec::new();
+    contractorcrm_lib::mcp::serve(&server, std::io::Cursor::new(input), &mut output)
+        .expect("serve drains the oversized line");
+
+    let responses = String::from_utf8(output).expect("utf-8 responses");
+    let mut lines = responses.lines();
+    let refusal: Value = serde_json::from_str(lines.next().expect("a refusal")).expect("json");
+    assert_eq!(refusal["error"]["code"], json!(-32600));
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .contains("larger than"),
+        "{refusal}"
+    );
+    let pong: Value = serde_json::from_str(lines.next().expect("a second response")).expect("json");
+    assert_eq!(pong["id"], json!(7), "the reader resynchronized: {pong}");
+}
+
+#[test]
+fn hostile_tool_arguments_come_back_as_errors_not_panics() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let contact = make_contact(&mut storage, "Dana Ruiz");
+    let server = server(&temp, storage, Mode::ReadWrite);
+
+    // Traversal and absolute paths are record ids here, not paths: nothing
+    // resolves, so they are plain not-found answers.
+    assert_eq!(
+        kind(
+            &server,
+            "attachment_path",
+            json!({"attachmentId": "../../../etc/passwd"}),
+        ),
+        "not_found"
+    );
+    assert_eq!(
+        kind(&server, "get_contact", json!({"contactId": "C:evil"})),
+        "not_found"
+    );
+    // Oversized and out-of-range bounds are refused rather than clamped
+    // silently or used to allocate.
+    assert_eq!(
+        kind(
+            &server,
+            "list_contacts",
+            json!({"limit": MAX_LIST_LIMIT + 1}),
+        ),
+        "invalid_input"
+    );
+    assert_eq!(
+        kind(
+            &server,
+            "get_timeline",
+            json!({"parentType": "contact", "parentId": contact.id, "limit": 100_000}),
+        ),
+        "invalid_input"
+    );
+    // A SQL-shaped search string is treated as text: the FTS query is rebuilt
+    // from alphanumeric words only.
+    let results = ok(
+        &server,
+        "search_records",
+        json!({"query": "'; DROP TABLE contacts; --"}),
+    );
+    assert!(results.as_array().expect("results").is_empty(), "{results}");
+    let still_there = ok(&server, "list_contacts", json!({}));
+    assert_eq!(still_there.as_array().expect("contacts").len(), 1);
+    // Wrong types and unknown fields never reach the application layer.
+    assert_eq!(
+        kind(&server, "get_contact", json!({"contactId": 42})),
+        "invalid_input"
+    );
+    assert_eq!(
+        kind(
+            &server,
+            "list_contacts",
+            json!({"includeArchived": "yes please"}),
+        ),
+        "invalid_input"
+    );
 }

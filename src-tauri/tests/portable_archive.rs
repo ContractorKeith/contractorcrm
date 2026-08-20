@@ -1610,3 +1610,41 @@ fn an_attachment_row_with_an_invisible_file_name_is_refused() {
     assert_eq!(error.kind(), "validation_failed");
     assert_eq!(dump(&target), before);
 }
+
+#[test]
+fn an_attachment_row_with_a_drive_relative_id_is_refused() {
+    // "C:evil" is a path component with a Windows drive prefix and no root:
+    // pushing it onto the attachments root would replace the root outright and
+    // stage the file against the current directory of drive C. The id is
+    // validated as a path segment, so the archive is refused everywhere.
+    let (temp, path, _source) = exported();
+    let hostile_id = "C:evil";
+    let tampered = repack(temp.path(), &path, "drive-relative.zip", |entries| {
+        let mut rows = table_rows(entries, "attachments");
+        let original_id = rows[0]["id"].as_str().unwrap().to_owned();
+        let file_name = rows[0]["fileName"].as_str().unwrap().to_owned();
+        rows[0]["id"] = json!(hostile_id);
+        rows[0]["relativePath"] = json!(format!("{hostile_id}/{file_name}"));
+        set_table(entries, "attachments", &rows);
+        let bytes = entries
+            .remove(&format!("assets/{original_id}/{file_name}"))
+            .unwrap();
+        entries.insert(format!("assets/{hostile_id}/{file_name}"), bytes);
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let before = dump(&target);
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"invalid_value"),
+        "{preview:?}"
+    );
+    let error = import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        tampered.to_str().unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before);
+}

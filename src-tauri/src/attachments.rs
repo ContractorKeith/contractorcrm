@@ -515,15 +515,19 @@ pub(crate) fn file_path_under(
 }
 
 /// One managed path segment: never empty, never a dot form, no separators,
-/// control characters, or invisible format characters. Shared by the store,
-/// the archive verifier, and the cleanup path so no stored value can steer the
-/// filesystem or disguise what a file is called.
+/// drive letters, control characters, or invisible format characters. Shared by
+/// the store, the archive verifier, and the cleanup path so no stored value can
+/// steer the filesystem or disguise what a file is called.
+///
+/// The colon matters on Windows: `Path::push("C:evil")` has a prefix but no
+/// root, so it replaces the whole path it was pushed onto and addresses the
+/// current directory of drive C instead of the managed root.
 pub(crate) fn valid_path_component(component: &str) -> bool {
     !component.is_empty()
         && component != "."
         && component != ".."
         && !component.chars().any(|character| {
-            matches!(character, '/' | '\\')
+            matches!(character, '/' | '\\' | ':')
                 || character.is_control()
                 || is_format_character(character)
         })

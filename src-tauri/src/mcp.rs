@@ -59,6 +59,11 @@ pub const MAX_TIMELINE_ENTRIES: usize = 200;
 pub const MAX_TIMELINE_BODY_CHARS: usize = 500;
 pub const MAX_LIST_LIMIT: usize = 500;
 
+/// Largest single JSON-RPC message read from stdin. Real calls are a few
+/// kilobytes; the cap keeps a client that never sends a newline from growing
+/// this process's memory without limit.
+pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Client name recorded in the audit log before `initialize` names one.
 const UNKNOWN_CLIENT: &str = "unknown MCP client";
 
@@ -873,11 +878,23 @@ fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, Stri
 /// Serve JSON-RPC messages until the client closes stdin (graceful shutdown).
 pub fn serve<R: BufRead, W: Write>(
     server: &Server,
-    input: R,
+    mut input: R,
     mut output: W,
 ) -> std::io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
+    loop {
+        let Some(line) = read_bounded_line(&mut input)? else {
+            return Ok(()); // client closed stdin
+        };
+        let line = match line {
+            Ok(line) => line,
+            Err(oversize) => {
+                // The message was discarded, so nothing can be parsed from it —
+                // answer the transport error and keep serving the next line.
+                writeln!(output, "{}", error_response(Value::Null, -32600, &oversize))?;
+                output.flush()?;
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -894,7 +911,35 @@ pub fn serve<R: BufRead, W: Write>(
             output.flush()?;
         }
     }
-    Ok(())
+}
+
+/// Read one newline-terminated message, refusing anything past the cap.
+/// `Ok(None)` is end of input; `Ok(Some(Err(_)))` is an oversized message that
+/// was drained and must be reported rather than buffered.
+fn read_bounded_line<R: BufRead>(input: &mut R) -> std::io::Result<Option<Result<String, String>>> {
+    let mut buffer = Vec::new();
+    let mut limited = std::io::Read::take(&mut *input, MAX_MESSAGE_BYTES as u64 + 1);
+    let read = limited.read_until(b'\n', &mut buffer)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buffer.len() > MAX_MESSAGE_BYTES {
+        // Drop the rest of the oversized line so the next read starts on a
+        // message boundary instead of on the tail of this one.
+        let mut discard = Vec::new();
+        loop {
+            discard.clear();
+            let mut limited = std::io::Read::take(&mut *input, MAX_MESSAGE_BYTES as u64);
+            let read = limited.read_until(b'\n', &mut discard)?;
+            if read == 0 || discard.last() == Some(&b'\n') {
+                break;
+            }
+        }
+        return Ok(Some(Err(format!(
+            "message is larger than the {MAX_MESSAGE_BYTES} byte limit"
+        ))));
+    }
+    Ok(Some(Ok(String::from_utf8_lossy(&buffer).into_owned())))
 }
 
 /// The onboarding line the desktop shows and this helper answers to.

@@ -455,3 +455,31 @@ fn the_parent_trigger_refuses_rows_without_a_live_parent() {
         "{error}"
     );
 }
+
+#[test]
+fn a_drive_relative_stored_path_never_leaves_the_managed_root() {
+    // On Windows a path component like "C:evil" carries a drive prefix without
+    // a root, so pushing it onto the managed root replaces the whole path and
+    // addresses the current directory of drive C. Every consumer of a stored
+    // path refuses it instead, on every platform, so an archive written on one
+    // machine cannot plant an escape that only fires on another.
+    let (temp, mut storage, store) = setup();
+    let contact_id = contact(&mut storage, "Dana Ruiz");
+    let source = source_file(temp.path(), "scope.txt", b"managed bytes");
+    let attachment = add(&mut storage, &store, "contact", &contact_id, &source).unwrap();
+
+    for poisoned in ["C:evil/scope.txt", "C:/scope.txt", "sub/C:evil.txt"] {
+        storage
+            .connection()
+            .execute(
+                "UPDATE attachments SET relative_path = ?1 WHERE id = ?2",
+                rusqlite::params![poisoned, attachment.id],
+            )
+            .unwrap();
+        let error = attachment_path(&storage, &store, &attachment.id).unwrap_err();
+        assert_eq!(error.kind(), "invalid_stored_data", "{poisoned}");
+    }
+
+    // The same rule bounds the file name the user's own file can produce.
+    assert_eq!(sanitized_file_name("C:evil.txt").unwrap(), "Cevil.txt");
+}

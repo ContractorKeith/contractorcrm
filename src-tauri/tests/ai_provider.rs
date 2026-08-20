@@ -471,3 +471,30 @@ fn the_connection_test_reports_the_endpoint_and_the_models_it_offers() {
     assert_eq!(check.available_models, ["llama3.1", "mistral"]);
     assert!(check.endpoint_host.starts_with("127.0.0.1:"));
 }
+
+/// A hostile or broken endpoint can answer with as much JSON as it likes. The
+/// transport stops reading at its 10 MB body limit, so the answer becomes a
+/// plain `provider_unavailable` instead of unbounded memory in this process.
+#[test]
+fn a_response_past_the_transport_body_limit_is_provider_unavailable() {
+    let body: &'static str = Box::leak(
+        format!(
+            "{{\"model\":\"llama3.1\",\"choices\":[{{\"message\":{{\"content\":\"{}\"}}}}]}}",
+            "x".repeat(11 * 1024 * 1024)
+        )
+        .into_boxed_str(),
+    );
+    let provider = OpenAiCompatibleProvider::new("Local model", serve_once(body), "llama3.1", None);
+
+    let error = provider
+        .complete(&ProviderRequest {
+            timeout_seconds: Some(20),
+            ..ProviderRequest::new("summarize_history", "system", "user")
+        })
+        .expect_err("an oversized body cannot be decoded");
+    assert_eq!(error.kind(), "provider_unavailable");
+    assert!(
+        !error.to_string().contains('x'),
+        "the failure must not echo the body: {error}"
+    );
+}

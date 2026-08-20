@@ -93,6 +93,12 @@ Crash semantics, the forward-only migration model, the automatic `.bak` files,
 and what to do with a damaged database are documented in
 [docs/RECOVERY.md](RECOVERY.md).
 
+The v1 attack surfaces — attachments, CSV and archive imports, local model
+endpoints, the MCP helper, and provider context — are modelled in
+[docs/THREAT_MODEL.md](THREAT_MODEL.md): assets, trust boundaries, attacker
+capabilities, the mitigations that answer them with `file:line` citations, and
+the residual risks that remain. Changes to those seams should update it.
+
 ## AI rules
 
 Identical to ContractorProject:

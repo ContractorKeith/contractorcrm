@@ -5828,6 +5828,13 @@ const IMPORT_SAMPLE_ROWS: usize = 50;
 const IMPORT_DEFAULT_KIND: &str = "client";
 /// Leading characters spreadsheets treat as the start of a formula.
 const FORMULA_PREFIXES: [char; 5] = ['=', '+', '-', '@', '\t'];
+/// Largest contact CSV an import will buffer. A real contact book is a few
+/// megabytes; this leaves room for a very large one without letting a file
+/// chosen by someone else decide how much memory the app spends.
+const MAX_IMPORT_CSV_BYTES: u64 = 64 * 1024 * 1024;
+/// Most data rows one import may carry, so a small file full of tiny rows
+/// cannot buffer millions of records either.
+const MAX_IMPORT_CSV_ROWS: usize = 200_000;
 
 /// Import targets in mapping order with the header aliases the auto-guess
 /// accepts. Aliases are normalized (lowercase, alphanumeric only) and the
@@ -6390,14 +6397,26 @@ fn csv_parse_error(path: &str, error: csv::Error) -> ApplicationError {
 
 /// Read a CSV file into its headers plus every data record with its line
 /// number. Ragged rows are tolerated; missing cells read as empty. The whole
-/// file is buffered — contractor-scale contact lists make streaming needless.
+/// file is buffered — contractor-scale contact lists make streaming needless —
+/// so both the byte count and the row count are bounded: an import is the one
+/// place a file the user did not write chooses how much memory this process
+/// spends.
 fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
     let path = required_text("path", path.to_owned(), 4096)?;
     let file = std::fs::File::open(&path).map_err(|error| ApplicationError::InvalidInput {
         field: "path".into(),
         message: format!("cannot open \"{path}\": {error}"),
     })?;
-    let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(file);
+    if let Ok(metadata) = file.metadata() {
+        if metadata.len() > MAX_IMPORT_CSV_BYTES {
+            return Err(csv_too_large(&path, metadata.len()));
+        }
+    }
+    // A file that grows between the metadata check and the read (or one whose
+    // size could not be read at all) still stops at the cap.
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_reader(std::io::Read::take(file, MAX_IMPORT_CSV_BYTES + 1));
     let mut headers = reader
         .headers()
         .map_err(|error| csv_parse_error(&path, error))?
@@ -6422,8 +6441,33 @@ fn read_csv_records(path: &str) -> Result<CsvFile, ApplicationError> {
         }
         let line = record.position().map(csv::Position::line).unwrap_or(0);
         records.push((line, record));
+        if records.len() > MAX_IMPORT_CSV_ROWS {
+            return Err(ApplicationError::ValidationFailed {
+                code: "file_too_large",
+                field: "path".into(),
+                message: format!(
+                    "\"{path}\" has more than {MAX_IMPORT_CSV_ROWS} rows; split it and import \
+                     the parts"
+                ),
+            });
+        }
+    }
+    if reader.position().byte() > MAX_IMPORT_CSV_BYTES {
+        return Err(csv_too_large(&path, reader.position().byte()));
     }
     Ok((headers, records))
+}
+
+/// One refusal shape for a CSV the import will not buffer.
+fn csv_too_large(path: &str, bytes: u64) -> ApplicationError {
+    ApplicationError::ValidationFailed {
+        code: "file_too_large",
+        field: "path".into(),
+        message: format!(
+            "\"{path}\" is {bytes} bytes; contact imports are limited to \
+             {MAX_IMPORT_CSV_BYTES} bytes"
+        ),
+    }
 }
 
 /// Headers must be present and unique once trailing empty columns are dropped:
