@@ -1,5 +1,19 @@
 # Signing and notarization
 
+## v0.1.0 decisions
+
+- **macOS: signed and notarized.** All six Apple secrets are set on the
+  repository, so the release workflow produces a signed, notarized, stapled
+  `.dmg`. Users get no Gatekeeper warning. Verify with the `codesign` / `spctl`
+  commands at the bottom of this file before publishing the draft release.
+- **Windows: unsigned for this release.** No certificate is purchased yet, so
+  the NSIS installer ships unsigned and SmartScreen warns on first run. The
+  release notes and the download page carry the "verify the SHA-256, then
+  More info → Run anyway" instructions. Revisit for 0.2: an OV certificate
+  needs hardware-token or cloud-HSM key custody and still has to build
+  SmartScreen reputation, so decide OV vs EV before buying (see
+  "Windows: certificate options" below).
+
 The release workflow (`.github/workflows/release.yml`) builds and publishes a
 draft release **with or without** signing certificates. Nothing here is a
 prerequisite for cutting a release — add the secrets when you are ready, re-run

@@ -174,11 +174,38 @@ that came from someone else.
   database connection underneath is still opened read-write. No known way to
   write through it; it is being tightened as defense in depth.
 
-<!-- SIGNING-CAVEAT: orchestrator to fill in after the Slice 7 signing checkpoint
-     (issue #53). Cover code signing / notarization status per platform and the
-     exact macOS Gatekeeper and Windows SmartScreen prompts a user should expect
-     on first launch, or state that both packages are signed and no warning
-     appears. Do not ship this file with this comment still in it. -->
+## Code signing
+
+**macOS** — the `.dmg` is signed with a Developer ID certificate and notarized
+by Apple. Double-click, drag ContractorCRM to Applications, and open it. No
+Gatekeeper warning is expected. Apple Silicon only in this release; there is no
+Intel build.
+
+**Windows** — the installer is **not** code-signed in v0.1.0. Microsoft
+Defender SmartScreen will stop the first run with:
+
+> **Windows protected your PC**
+> Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+
+Verify the download first, then continue:
+
+1. Check the SHA-256 of the file you downloaded against the `SHA-256SUMS` file
+   on the release page:
+   `certutil -hashfile ContractorCRM_0.1.0_windows-x64-setup.exe SHA256`
+2. If it matches, run the installer, click **More info** on the SmartScreen
+   dialog, then **Run anyway**. If it does not match, delete the file and
+   download it again.
+
+The hash is the check that matters; the SmartScreen prompt only means the
+publisher is unknown to Microsoft. A Windows certificate is a yearly cost with
+its own hardware-token custody rules, and reputation still has to build after
+it is issued — that work is queued for a later release rather than holding this
+one. Details in `docs/release/SIGNING.md`.
+
+## License
+
+ContractorCRM is free software under the GNU Affero General Public License
+v3.0 (AGPL-3.0-only). See `LICENSE`.
 
 ## Installing
 
