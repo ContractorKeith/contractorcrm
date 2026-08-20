@@ -12,8 +12,13 @@ pub const DATABASE_FILE_NAME: &str = "contractorcrm.sqlite3";
 /// One forward-only schema migration; SQL runs inside a single transaction.
 /// Public only so tests can drive `Storage::open_with_migrations`; the real
 /// list is `MIGRATIONS` and stays private.
+#[doc(hidden)]
 pub struct Migration {
+    // Test-only seam (failure injection): not part of the supported surface,
+    // so both fields are hidden from the published docs.
+    #[doc(hidden)]
     pub version: i64,
+    #[doc(hidden)]
     pub sql: &'static str,
 }
 
@@ -563,13 +568,16 @@ impl Storage {
 
     /// Open (creating if needed) and apply an explicit migration list. Only
     /// `open` (with the real `MIGRATIONS`) and the migration-failure tests use
-    /// this; everything else goes through `open`.
+    /// this; everything else goes through `open`. Hidden from the docs because
+    /// it exists for that failure-injection test, not for callers.
+    #[doc(hidden)]
     pub fn open_with_migrations(
         database_path: impl AsRef<Path>,
         migrations: &[Migration],
     ) -> Result<Self, StorageError> {
         let database_path = database_path.as_ref().to_path_buf();
         let database_existed = database_path.exists();
+        refuse_empty_database(&database_path)?;
         if let Some(parent) = database_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -602,6 +610,7 @@ impl Storage {
     /// mode and foreign keys are per-connection settings, not schema changes).
     pub fn open_existing(database_path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let database_path = database_path.as_ref().to_path_buf();
+        refuse_empty_database(&database_path)?;
         let connection = Connection::open(&database_path)?;
         connection
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
@@ -871,6 +880,26 @@ fn unreadable_database(database_path: &Path, error: rusqlite::Error) -> StorageE
          archive — see docs/RECOVERY.md",
         database_path.display()
     ))
+}
+
+/// A zero-length file is a perfectly valid *empty* SQLite database, so SQLite
+/// would open it and this build would happily migrate a brand-new schema into
+/// it — silently presenting an empty CRM after a truncating crash or a bad
+/// sync. Only an already-existing file is refused; creating a fresh database
+/// still works, because the app writes its schema immediately after.
+fn refuse_empty_database(database_path: &Path) -> Result<(), StorageError> {
+    let Ok(metadata) = std::fs::metadata(database_path) else {
+        return Ok(());
+    };
+    if !metadata.is_file() || metadata.len() > 0 {
+        return Ok(());
+    }
+    Err(StorageError::InvalidStoredData(format!(
+        "the database file at {} is empty (zero bytes), so its contents are gone. \
+         Restore the newest backup (a .bak file next to it) or import a portable \
+         archive — see docs/RECOVERY.md",
+        database_path.display()
+    )))
 }
 
 /// Latest schema version this build knows how to open.

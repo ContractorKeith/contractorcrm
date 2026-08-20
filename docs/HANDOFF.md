@@ -75,12 +75,19 @@ to the envelope is therefore always a deliberate edit of both.
 ## Field ownership after hand-off
 
 The envelope is a snapshot, not a live link. Once ContractorProject creates the
-job, the two modules own different things and neither writes into the other:
+job, the two modules own different things and neither writes into the other.
+
+What the v1 importer actually consumes is narrow: it reads
+`opportunity.name` and nothing else, and creates a job with that name and its
+own `--timezone`. Every other envelope field travels for the receiving side's
+own records (it keeps the envelope file) and for future consumers; none of it
+lands in the job.
 
 | Field | Owner after the job exists | Notes |
 | --- | --- | --- |
-| Opportunity name, value, stage, source, notes | ContractorCRM | The sales record stays the CRM's. Renaming it here does not rename the job. |
-| Contact and company records | ContractorCRM | The job carries a copy of what the envelope said at export time. |
+| Opportunity name | ContractorCRM | The only field the v1 importer reads. It seeds the job name at import time and is never synced again — renaming the opportunity does not rename the job. |
+| Opportunity value, stage, source, notes | ContractorCRM | Carried in the envelope but not consumed by the v1 importer; nothing about them exists in the job. |
+| Contact and company records | ContractorCRM | Carried in the envelope but not consumed by the v1 importer. The job has no contact or company of its own; the envelope file is the receiving side's only copy. |
 | `quoteRef`, `jobRef` on the opportunity | ContractorCRM | Bookmarks: tool, external id, label, linked timestamp. |
 | Job name, status, schedule, crew, costs | ContractorProject | From the moment the job is created, everything about running the work is the job's. |
 | Time zone, calendars, working days | ContractorProject | The envelope never carries them; the importer takes its own `--timezone`. |

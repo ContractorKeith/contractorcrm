@@ -530,3 +530,51 @@ fn a_damaged_database_file_opens_with_actionable_guidance() {
         Storage::verify_backup_file(&database_path).expect_err("damaged file is not a backup");
     assert!(matches!(as_backup, StorageError::RestoreInvalid(_)));
 }
+
+/// A truncating crash or a bad sync leaves a zero-byte file, which SQLite reads
+/// as a valid *empty* database — without a guard the app would migrate a fresh
+/// schema into it and present an empty CRM as if nothing happened.
+#[test]
+fn a_zero_byte_database_file_is_refused_instead_of_silently_recreated() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    drop(Storage::open(&database_path).expect("create database"));
+    std::fs::write(&database_path, b"").expect("truncate to zero bytes");
+
+    for opened in [
+        Storage::open(&database_path),
+        Storage::open_existing(&database_path),
+        Storage::open_in_app_data(temp.path()),
+    ] {
+        let failure = expect_open_failure(opened, "an empty file must not open");
+        let message = failure.to_string();
+        assert!(
+            matches!(failure, StorageError::InvalidStoredData(_)),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("empty (zero bytes)") && message.contains("docs/RECOVERY.md"),
+            "message should point at recovery: {message}"
+        );
+        assert_eq!(
+            ApplicationError::from(failure).kind(),
+            "invalid_stored_data"
+        );
+    }
+
+    // The file was left exactly as found — nothing was migrated into it.
+    assert_eq!(
+        std::fs::metadata(&database_path).expect("metadata").len(),
+        0
+    );
+
+    // A genuinely new database still creates fine.
+    let fresh = temp.path().join("fresh");
+    drop(Storage::open_in_app_data(&fresh).expect("create a fresh database"));
+    assert!(
+        std::fs::metadata(fresh.join("contractorcrm.sqlite3"))
+            .expect("metadata")
+            .len()
+            > 0
+    );
+}

@@ -923,16 +923,25 @@ fn read_bounded_line<R: BufRead>(input: &mut R) -> std::io::Result<Option<Result
     if read == 0 {
         return Ok(None);
     }
-    if buffer.len() > MAX_MESSAGE_BYTES {
+    // The cap is on the message itself, so the delimiter does not count against
+    // it: a payload of exactly MAX_MESSAGE_BYTES followed by a newline is a
+    // legal message, and MAX_MESSAGE_BYTES + 1 is not.
+    let terminated = buffer.last() == Some(&b'\n');
+    let payload_len = buffer.len() - usize::from(terminated);
+    if payload_len > MAX_MESSAGE_BYTES {
         // Drop the rest of the oversized line so the next read starts on a
-        // message boundary instead of on the tail of this one.
-        let mut discard = Vec::new();
-        loop {
-            discard.clear();
-            let mut limited = std::io::Read::take(&mut *input, MAX_MESSAGE_BYTES as u64);
-            let read = limited.read_until(b'\n', &mut discard)?;
-            if read == 0 || discard.last() == Some(&b'\n') {
-                break;
+        // message boundary instead of on the tail of this one. When the line
+        // was already terminated there is no tail — draining here would eat
+        // the next, well-formed message.
+        if !terminated {
+            let mut discard = Vec::new();
+            loop {
+                discard.clear();
+                let mut limited = std::io::Read::take(&mut *input, MAX_MESSAGE_BYTES as u64);
+                let read = limited.read_until(b'\n', &mut discard)?;
+                if read == 0 || discard.last() == Some(&b'\n') {
+                    break;
+                }
             }
         }
         return Ok(Some(Err(format!(

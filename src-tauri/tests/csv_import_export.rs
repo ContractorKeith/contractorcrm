@@ -509,6 +509,35 @@ fn opportunity_export_writes_major_units_stage_and_metadata_columns() {
     assert!(row.contains(",320,"));
 }
 
+/// APFS and NTFS are case-insensitive, so an uppercase spelling of the live
+/// database still names the live database — and a CSV export onto it would
+/// destroy the CRM.
+#[test]
+fn export_refuses_a_differently_cased_spelling_of_the_live_database() {
+    let (temp, mut storage) = fixture();
+    let database = temp.path().join("contractorcrm.sqlite3");
+    let before = std::fs::read(&database).unwrap();
+
+    for destination in [
+        temp.path().join("CONTRACTORCRM.SQLITE3"),
+        temp.path().join("ContractorCRM.Sqlite3-WAL"),
+        temp.path()
+            .join("CONTRACTORCRM.SQLITE3.20260819T101010000Z.bak"),
+    ] {
+        for overwrite in [false, true] {
+            let error = export_contacts_csv(&mut storage, destination.to_str().unwrap(), overwrite)
+                .unwrap_err();
+            assert_eq!(error.kind(), "validation_failed", "{destination:?}");
+            assert!(
+                error.to_string().contains("live database"),
+                "{destination:?}: {error}"
+            );
+        }
+    }
+
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+}
+
 #[test]
 fn export_creates_missing_directories_and_refuses_to_clobber_without_overwrite() {
     let (temp, mut storage) = fixture();

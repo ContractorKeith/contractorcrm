@@ -108,6 +108,14 @@ export function RecordTable<T extends { id: string }>({
     event.preventDefault();
   };
 
+  const windowed = virtualizer.getVirtualItems();
+  // With windowing the selected row can scroll out of the DOM. When that
+  // happens nothing inside the table is tabbable, so the first mounted row
+  // takes the tab stop (and the scroll pane itself is always focusable below).
+  const selectedIsMounted =
+    !virtualized || windowed.length === 0 || windowed.some((item) => item.index === selected);
+  const fallbackTabIndex = selectedIsMounted ? null : (windowed[0]?.index ?? null);
+
   // One body row — identical markup on both paths, so the roving tabindex,
   // selection highlight, and click/keyboard handlers never diverge.
   const renderRow = (row: T, index: number) => (
@@ -119,7 +127,7 @@ export function RecordTable<T extends { id: string }>({
       }}
       // Header row is 1, so body rows start at 2.
       aria-rowindex={index + 2}
-      tabIndex={index === selected ? 0 : -1}
+      tabIndex={index === selected || index === fallbackTabIndex ? 0 : -1}
       data-selected={index === selected || undefined}
       onFocus={() => setSelected(index)}
       onClick={() => onOpen(row)}
@@ -133,8 +141,7 @@ export function RecordTable<T extends { id: string }>({
     </tr>
   );
 
-  const windowed = virtualizer.getVirtualItems();
-  const paddingTop = windowed.length > 0 ? windowed[0]!.start : 0;
+  const paddingTop =windowed.length > 0 ? windowed[0]!.start : 0;
   const paddingBottom =
     windowed.length > 0 ? virtualizer.getTotalSize() - windowed[windowed.length - 1]!.end : 0;
 
@@ -216,7 +223,21 @@ export function RecordTable<T extends { id: string }>({
   // Long lists scroll inside their own pane so the windowing has a viewport to
   // measure; short lists stay in the page flow, unchanged.
   return virtualized ? (
-    <div className="record-table-scroll" ref={scrollRef}>
+    // The pane is a focus stop of its own so the list is always reachable by
+    // Tab even when the selected row has scrolled out of the window; arrows
+    // landing here drive the same selection model as the rows do.
+    <div
+      className="record-table-scroll"
+      ref={scrollRef}
+      tabIndex={0}
+      role="group"
+      aria-label={`${label} scroll region`}
+      onKeyDown={(event) => {
+        // Key presses that a row already handled bubble up here; ignore them.
+        if (event.target !== event.currentTarget) return;
+        handleKeyDown(event, selected);
+      }}
+    >
       {table}
     </div>
   ) : (

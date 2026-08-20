@@ -228,6 +228,9 @@ sizes you are in untested territory, not blocked.
 | --- | --- | --- |
 | Attachment file size | 256 MiB per file | `attachments::MAX_ATTACHMENT_BYTES` — refused on add |
 | Portable archive total | ~1 GiB uncompressed | `archive::MAX_ARCHIVE_BYTES` — checked on export *and* import |
+| CSV import file size | 64 MiB | `application::MAX_IMPORT_CSV_BYTES` — refused before the file is buffered |
+| CSV import rows | 200,000 data rows | `application::MAX_IMPORT_CSV_ROWS` — refused on preview and import |
+| Agent message size | 8 MiB per JSON-RPC line | `mcp::MAX_MESSAGE_BYTES` — the oversized line is drained and refused |
 | Search results | 50 per query (25 default) | `search_records` clamps the caller's limit |
 | Agent list results | 500 rows per call | `mcp::MAX_LIST_LIMIT` |
 | Agent timeline results | 200 entries per call | `mcp::MAX_TIMELINE_ENTRIES` |

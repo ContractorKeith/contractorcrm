@@ -110,7 +110,11 @@ Symptoms:
 - The app fails to start, or reports `stored data is invalid: the database file
   at <path> could not be read and looks damaged …`.
 - SQLite reports `file is not a database` or `database disk image is malformed`.
-- The database file's size dropped to zero or is wildly smaller than it was.
+- The database file's size dropped to zero or is wildly smaller than it was. A
+  zero-byte file is reported as `stored data is invalid: the database file at
+  <path> is empty (zero bytes) …` — SQLite would read it as a valid *empty*
+  database, so the app refuses it rather than migrating a fresh schema in and
+  showing you an empty CRM.
 
 A damaged file is detected at open — SQLite opens lazily, so the first pragma is
 where it surfaces — and returned as `ApplicationError::InvalidStoredData`

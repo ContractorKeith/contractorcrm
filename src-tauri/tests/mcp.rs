@@ -1747,6 +1747,81 @@ fn an_oversized_stdio_message_is_refused_and_the_next_one_still_works() {
     assert_eq!(pong["id"], json!(7), "the reader resynchronized: {pong}");
 }
 
+// A ping request padded so the whole line (without its newline) is exactly
+// `total` bytes long.
+fn padded_ping(id: i64, total: usize) -> Vec<u8> {
+    let head = format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"ping","params":{{"pad":""#);
+    let tail = r#""}}"#;
+    let pad = total - head.len() - tail.len();
+    format!("{head}{}{tail}", "x".repeat(pad)).into_bytes()
+}
+
+#[test]
+fn a_message_of_exactly_the_cap_is_answered_and_does_not_eat_the_next_one() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    // The newline lands on the byte right after the cap: the delimiter is not
+    // part of the message, so this is legal and must not trigger the drain
+    // that would swallow the request behind it.
+    let mut input = padded_ping(7, MAX_MESSAGE_BYTES);
+    input.extend_from_slice(b"\n");
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":8,"method":"ping","params":{}}"#);
+    input.extend_from_slice(b"\n");
+
+    let mut output = Vec::new();
+    contractorcrm_lib::mcp::serve(&server, std::io::Cursor::new(input), &mut output)
+        .expect("serve reads both messages");
+
+    let responses = String::from_utf8(output).expect("utf-8 responses");
+    let mut lines = responses.lines();
+    let first: Value = serde_json::from_str(lines.next().expect("a first response")).expect("json");
+    assert_eq!(
+        first["id"],
+        json!(7),
+        "the cap-sized message was answered: {first}"
+    );
+    assert!(first["error"].is_null(), "{first}");
+    let second: Value =
+        serde_json::from_str(lines.next().expect("a second response")).expect("json");
+    assert_eq!(
+        second["id"],
+        json!(8),
+        "the next message survived: {second}"
+    );
+}
+
+#[test]
+fn one_byte_past_the_cap_is_refused_and_the_next_message_still_works() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    let mut input = padded_ping(7, MAX_MESSAGE_BYTES + 1);
+    input.extend_from_slice(b"\n");
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":8,"method":"ping","params":{}}"#);
+    input.extend_from_slice(b"\n");
+
+    let mut output = Vec::new();
+    contractorcrm_lib::mcp::serve(&server, std::io::Cursor::new(input), &mut output)
+        .expect("serve drains the oversized line");
+
+    let responses = String::from_utf8(output).expect("utf-8 responses");
+    let mut lines = responses.lines();
+    let refusal: Value = serde_json::from_str(lines.next().expect("a refusal")).expect("json");
+    assert_eq!(refusal["error"]["code"], json!(-32600));
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .contains(&format!("{MAX_MESSAGE_BYTES} byte limit")),
+        "{refusal}"
+    );
+    let pong: Value = serde_json::from_str(lines.next().expect("a second response")).expect("json");
+    assert_eq!(pong["id"], json!(8), "the reader resynchronized: {pong}");
+}
+
 #[test]
 fn hostile_tool_arguments_come_back_as_errors_not_panics() {
     let temp = tempfile::tempdir().expect("temp dir");

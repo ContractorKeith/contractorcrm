@@ -1522,6 +1522,12 @@ pub fn list_contacts(
     include_archived: bool,
 ) -> Result<Vec<ContactListItem>, ApplicationError> {
     let connection = storage.connection();
+    // One filter, used for both the contacts and their channels.
+    let contact_filter = if include_archived {
+        ""
+    } else {
+        "WHERE c.archived_at IS NULL"
+    };
     let mut statement = connection.prepare(&format!(
         "SELECT {CONTACT_COLUMNS},
                 (SELECT MAX(a.occurred_at) FROM activities a
@@ -1531,12 +1537,7 @@ pub fn list_contacts(
                 (SELECT MIN(t.due_at) FROM tasks t
                  WHERE t.status = 'open' AND t.parent_type = 'contact'
                    AND t.parent_id = c.id AND t.due_at IS NOT NULL)
-         FROM contacts c {} ORDER BY display_name, id",
-        if include_archived {
-            ""
-        } else {
-            "WHERE archived_at IS NULL"
-        }
+         FROM contacts c {contact_filter} ORDER BY display_name, id",
     ))?;
     let rows = statement
         .query_map([], |row| {
@@ -1546,7 +1547,7 @@ pub fn list_contacts(
             Ok((base, last_contacted_at, next_open_task_due_at))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut channels = load_channels_by_contact(connection)?;
+    let mut channels = load_channels_by_contact(connection, contact_filter)?;
     rows.into_iter()
         .map(|(row, last_contacted_at, next_open_task_due_at)| {
             let mut contact = finish_contact(row)?;
@@ -5333,16 +5334,21 @@ fn load_channels(
     rows.into_iter().map(finish_channel).collect()
 }
 
-/// Every contact's channels in one pass, grouped by contact id. The list views
-/// need all of them at once; asking per contact was 10,000 queries and a third
-/// of the time it took to list a 10,000-contact book (issue #42).
+/// The channels of the listed contacts in one pass, grouped by contact id. The
+/// list views need all of them at once; asking per contact was 10,000 queries
+/// and a third of the time it took to list a 10,000-contact book (issue #42).
+/// `contact_filter` is the same WHERE clause the caller listed with, so an
+/// archived-heavy book does not drag every archived channel through memory.
 fn load_channels_by_contact(
     connection: &rusqlite::Connection,
+    contact_filter: &str,
 ) -> Result<HashMap<String, Vec<ContactChannel>>, ApplicationError> {
-    let mut statement = connection.prepare(
-        "SELECT id, contact_id, kind, label, value, preferred, sort_key
-         FROM contact_channels ORDER BY contact_id, sort_key, id",
-    )?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT ch.id, ch.contact_id, ch.kind, ch.label, ch.value, ch.preferred, ch.sort_key
+         FROM contact_channels ch
+         JOIN contacts c ON c.id = ch.contact_id {contact_filter}
+         ORDER BY ch.contact_id, ch.sort_key, ch.id",
+    ))?;
     let rows = statement
         .query_map([], channel_from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -7143,10 +7149,16 @@ fn is_database_file(database_path: &std::path::Path, destination: &std::path::Pa
     ) else {
         return false;
     };
-    destination_name == database_name
-        || destination_name == format!("{database_name}-wal")
-        || destination_name == format!("{database_name}-shm")
-        || destination_name.starts_with(&format!("{database_name}."))
+    // macOS (APFS) and Windows (NTFS) are case-insensitive by default, so
+    // "CONTRACTORCRM.SQLITE3" names the same live file as "contractorcrm.sqlite3"
+    // and has to be refused just the same.
+    let prefix = format!("{database_name}.");
+    destination_name.eq_ignore_ascii_case(database_name)
+        || destination_name.eq_ignore_ascii_case(&format!("{database_name}-wal"))
+        || destination_name.eq_ignore_ascii_case(&format!("{database_name}-shm"))
+        || destination_name
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
 }
 
 /// Record the export in the command log, mirroring backup/hand-off exports.

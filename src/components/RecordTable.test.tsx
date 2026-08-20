@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecordTable, VIRTUALIZE_ABOVE, type ColumnDef } from "./RecordTable";
@@ -36,6 +36,13 @@ function giveTheScrollPaneHeight(height = 560) {
   ) {
     return this.classList.contains("record-table-scroll") ? 900 : 0;
   });
+}
+
+// jsdom never really scrolls, so set the offset the windowing reads and fire
+// the event it listens for.
+function scrollThePaneTo(pane: HTMLElement, top: number) {
+  Object.defineProperty(pane, "scrollTop", { value: top, writable: true, configurable: true });
+  fireEvent.scroll(pane);
 }
 
 afterEach(() => {
@@ -128,6 +135,51 @@ describe("RecordTable", () => {
 
     await user.keyboard("{Enter}");
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "r0" }));
+  });
+
+  it("stays keyboard-reachable when the selected row scrolls out of the window", async () => {
+    giveTheScrollPaneHeight();
+    const user = userEvent.setup();
+    const { container } = render(
+      <RecordTable
+        label="Contact list"
+        columns={columns}
+        rows={makeRows(10_000)}
+        onOpen={() => {}}
+      />,
+    );
+
+    const table = screen.getByRole("table", { name: "Contact list" });
+    const pane = container.querySelector<HTMLDivElement>(".record-table-scroll")!;
+    // Scroll far past the selected first row so it unmounts.
+    scrollThePaneTo(pane, 20_000);
+    await waitFor(() => {
+      expect(within(table).queryByText("Contact 0")).toBeNull();
+    });
+
+    // Nothing inside the table is selected any more, but the pane itself and
+    // the first mounted row both remain in the tab order.
+    expect(pane).toHaveAttribute("tabindex", "0");
+    const firstMounted = within(table)
+      .getAllByRole("row")
+      .find((row) => row.getAttribute("tabindex") === "0");
+    expect(firstMounted).toBeDefined();
+
+    await user.tab();
+    expect(pane).toHaveFocus();
+    await user.tab();
+    expect(firstMounted).toHaveFocus();
+    const firstIndex = Number(firstMounted!.getAttribute("aria-rowindex")) - 2;
+
+    // Arrow keys still change the selection from the row...
+    await user.keyboard("{ArrowDown}");
+    expect(within(table).getByText(`Contact ${firstIndex + 1}`).closest("tr")).toHaveFocus();
+
+    // ...and from the scroll pane itself.
+    await user.tab({ shift: true });
+    expect(pane).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(within(table).getByText(`Contact ${firstIndex + 2}`).closest("tr")).toHaveFocus();
   });
 
   it("still reports sort state on a windowed list", async () => {

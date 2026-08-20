@@ -152,6 +152,12 @@ fn backup_refuses_the_live_database_and_its_sidecars_as_the_destination() {
             .join("crm.sqlite3.pre-restore-20260819T101010000Z.bak"),
         // Same file reached the long way round.
         temp.path().join("sub/../crm.sqlite3"),
+        // APFS and NTFS are case-insensitive, so these all name the live file.
+        temp.path().join("CRM.SQLITE3"),
+        temp.path().join("Crm.Sqlite3-WAL"),
+        temp.path().join("CRM.sqlite3-Shm"),
+        temp.path()
+            .join("CRM.SQLITE3.pre-restore-20260819T101010000Z.bak"),
     ] {
         for overwrite in [false, true] {
             let error = application::backup_database(
