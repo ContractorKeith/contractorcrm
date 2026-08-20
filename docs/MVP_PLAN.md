@@ -1,6 +1,6 @@
 # MVP delivery plan
 
-Status: active — Slice 5 (local AI and agent interface) complete
+Status: active — Slice 6 (suite hand-off and hardening) complete
 Updated: 2026-08-19
 
 The work is sequenced as tracer slices, mirroring ContractorProject's plan. Each slice leaves a usable path through the real desktop app and keeps records, persistence, UI, and agent interfaces aligned. Because the sibling module already proved the stack, ContractorCRM skips the platform spikes and reuses its CI, packaging, and release patterns.
@@ -77,12 +77,12 @@ Exit: the app remains fully useful with AI disabled; with AI enabled, no model o
 
 ## 6. Suite hand-off and hardening
 
-- [ ] Exercise the won-opportunity → ContractorProject job hand-off end to end against the sibling's local API; record the job reference back.
-- [ ] Freeze v1 hand-off envelope schemas and document field ownership.
-- [ ] Crash recovery, migration rollback, and corrupted-database guidance.
-- [ ] Keyboard navigation, focus behavior, contrast, and screen-reader labels across list, detail, board, and timeline.
-- [ ] Test large databases (10k+ contacts) and define supported record/attachment limits.
-- [ ] Threat modeling for attachments, imports, local model endpoints, MCP, and provider context.
+- [x] Exercise the won-opportunity → ContractorProject job hand-off end to end against the sibling's local API; record the job reference back (scripts/handoff_e2e.sh; the sibling gained a minimal handoff-import binary).
+- [x] Freeze v1 hand-off envelope schemas and document field ownership (schemas/v1/handoff-envelope.json + contract test; docs/HANDOFF.md).
+- [x] Crash recovery, migration rollback, and corrupted-database guidance (SIGKILL and failing-migration tests; docs/RECOVERY.md).
+- [x] Keyboard navigation, focus behavior, contrast, and screen-reader labels across list, detail, board, and timeline.
+- [x] Test large databases (10k+ contacts) and define supported record/attachment limits (seed-dev-db; migration 011 + virtualization; limits in DATA_MODEL.md).
+- [x] Threat modeling for attachments, imports, local model endpoints, MCP, and provider context (docs/THREAT_MODEL.md; follow-ups filed as #46–#49).
 
 Exit: the CRM and ContractorProject demonstrably connect on a real machine without shared infrastructure, and users can safely back up, transfer, and recover their data.
 

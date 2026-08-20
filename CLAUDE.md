@@ -47,7 +47,25 @@ call would send before it goes out — on both the MCP and desktop surfaces).
 docs/SLICE5_COVERAGE.md maps every tool, limit, error kind, and version-
 conflict path to its documentation and tests. The slice passed an
 independent full-diff review; all findings were fixed before acceptance.
-Next up is Slice 6 (suite hand-off and hardening).
+Slice 6 (suite hand-off and hardening) is complete, closing issues #29 and
+#38–#44: the won-opportunity → ContractorProject hand-off is exercised end
+to end on a real machine (scripts/handoff_e2e.sh drives export → the
+sibling's handoff-import binary → link_job; the versioned envelope file is
+the only interface); the v1 envelope schema is frozen
+(schemas/v1/handoff-envelope.json + a negatively-tested contract test) with
+field ownership documented in docs/HANDOFF.md; crash recovery is proven
+(SIGKILL-during-write and failing-migration tests, zero-byte and damaged
+files refused with guidance, docs/RECOVERY.md); the accessibility pass
+covers keyboard, focus, labels, and contrast (one measured token fix)
+across all surfaces; a 10k-contact database is usable (migration 011 +
+one-query channel batching took list_contacts from 51s to ~0.4s; RecordTable
+virtualizes above 150 rows with the keyboard model preserved; limits in
+docs/DATA_MODEL.md); and docs/THREAT_MODEL.md models attachments, imports,
+model endpoints, MCP, and provider context, with three fixes landed
+(Windows drive-relative path escape, CSV import bounds, MCP message bounds)
+and follow-ups filed as #46–#49. The slice passed an independent full-diff
+review across both repos and on-demand native verification on macOS and
+Windows. Next up is Slice 7 (release).
 
 ## Planning baseline
 
