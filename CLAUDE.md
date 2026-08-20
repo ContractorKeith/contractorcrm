@@ -71,8 +71,16 @@ docs/release/ACCEPTANCE.md, which fixed three packaged-only breaks — the bundl
 shipped the MCP helper as the app executable, opening an attachment was refused
 by the opener capability, and the agent command line named a binary that is not
 on `PATH`. The MCP helper ships inside the app bundle next to the app
-executable. Signing, notarization, installed acceptance on clean accounts, and
-public-download verification are still open.
+executable. v0.1.0 was published 2026-08-20 (AGPL-3.0): a tag-triggered
+release workflow builds both platforms with skippable signing, the macOS app
+AND dmg wrapper are signed + notarized (Gatekeeper-verified), Windows ships
+unsigned by explicit decision with the SmartScreen caveat documented, and the
+release carries SHA-256SUMS + THIRD_PARTY_NOTICES. Installed acceptance
+passed on macOS from the real artifact; the independent public-download
+verification passed unauthenticated end to end; both are recorded in
+docs/release/ACCEPTANCE.md. The repo is public. Still open: Keith's Windows
+installed-acceptance run (checklist in ACCEPTANCE.md) and the post-v0.1.0
+backlog (#27, #46–#49, #56–#57, #59–#64).
 
 ## Planning baseline
 

@@ -1,7 +1,7 @@
 # MVP delivery plan
 
-Status: active — Slice 7 (release) in progress; packaged readiness sweep done on macOS
-Updated: 2026-08-19
+Status: v0.1.0 released 2026-08-20 — all seven slices complete; Windows installed acceptance pending on a Windows machine
+Updated: 2026-08-20
 
 The work is sequenced as tracer slices, mirroring ContractorProject's plan. Each slice leaves a usable path through the real desktop app and keeps records, persistence, UI, and agent interfaces aligned. Because the sibling module already proved the stack, ContractorCRM skips the platform spikes and reuses its CI, packaging, and release patterns.
 
@@ -89,12 +89,12 @@ Exit: the CRM and ContractorProject demonstrably connect on a real machine witho
 ## 7. Release
 
 - [x] Verify the release boundary in a real packaged macOS build, fix the packaged-vs-dev breaks, and record the sweep (docs/release/ACCEPTANCE.md).
-- [ ] Freeze version and release notes at one exact commit.
-- [ ] Pass full macOS and Windows build/test/package matrices.
-- [ ] Sign and notarize the macOS package; sign the Windows installer.
-- [ ] Run installed-app acceptance on clean user accounts on both platforms.
-- [ ] Publish artifacts with checksums and license notices.
-- [ ] Independently download, verify, install, launch, and run the core contact-and-pipeline workflow from public artifacts.
+- [x] Freeze version and release notes at one exact commit (v0.1.0 @ e3ff242; docs/release/RELEASE_NOTES_v0.1.0.md).
+- [x] Pass full macOS and Windows build/test/package matrices (release run 32374271623, all jobs green).
+- [x] Sign and notarize the macOS package (app and dmg wrapper, Gatekeeper-verified); Windows ships unsigned by explicit decision, with the SmartScreen caveat and checksum verification documented in the notes and install page.
+- [x] Run installed-app acceptance on clean user accounts — macOS complete (fresh data dir on the primary account, plus the published artifact re-verified end to end); Windows checklist prepared in docs/release/ACCEPTANCE.md and pending Keith's run on a Windows machine.
+- [x] Publish artifacts with checksums and license notices (github.com/ContractorKeith/contractorcrm/releases/tag/v0.1.0, published 2026-08-20).
+- [x] Independently download, verify, install, launch, and run the core contact-and-pipeline workflow from public artifacts (unauthenticated pass recorded in docs/release/ACCEPTANCE.md).
 
 Exit: source checks, commit, package, signing, installed acceptance, publication, and public-download verification are independently recorded as passing.
 

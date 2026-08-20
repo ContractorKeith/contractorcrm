@@ -4,7 +4,10 @@ Local-first, AI-native CRM for contractors — contacts, opportunities, and hist
 live on your machine and connect cleanly to jobs and quotes. A module in the
 OpenContractorOS suite alongside [ContractorProject](https://github.com/ContractorKeith/contractorproject).
 
-**Status:** v0.1 planning — see [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md).
+**Status:** v0.1.0 released — [download it](https://github.com/ContractorKeith/contractorcrm/releases/tag/v0.1.0)
+(signed + notarized macOS dmg; Windows installer, unsigned this release).
+Install guide: [opencontractoros.com/docs/crm/install](https://opencontractoros.com/docs/crm/install).
+Scope: [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md).
 
 ## License
 
