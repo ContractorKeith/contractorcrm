@@ -263,10 +263,11 @@ jobs:
         if: matrix.os == 'windows-2025'
         run: npm run tauri build -- --target ${{ matrix.rust_target }} --bundles nsis
 
-      # The MCP helper is a second binary in the same crate and is not part of
-      # the Tauri bundle today, so it ships as its own artifact. If Slice 7A
-      # decides the helper belongs inside the installer, drop this step and the
-      # collection lines below that reference it.
+      # Slice 7A verified the helper ships inside the macOS bundle
+      # (Contents/MacOS/contractorcrm-mcp); whether the NSIS installer carries
+      # it is unverified until the first Windows CI build. The standalone
+      # per-platform artifacts stay as belt and suspenders either way — they
+      # cost one cargo build and give agent users a direct download.
       - name: Build the MCP helper
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.rust_target }} --bin contractorcrm-mcp
 
