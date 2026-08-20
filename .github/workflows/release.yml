@@ -136,7 +136,11 @@ jobs:
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
-      - run: npm run tauri build -- --no-bundle
+      # Linux is not a shipped platform and the ubuntu runner ran out of disk
+      # stacking a release-profile build on top of the test build (first dry
+      # run). The mac and Windows jobs prove the native build.
+      - if: matrix.os != 'ubuntu-latest'
+        run: npm run tauri build -- --no-bundle
 
   # License attribution. Platform-independent (both collectors read manifests,
   # not build output), so it runs once on Linux.
