@@ -1,8 +1,8 @@
 # Release acceptance
 
-Status: Slice 7A packaged readiness sweep and Slice 7D installed acceptance
-complete on macOS; Windows installed acceptance and the public-download pass are
-still open
+Status: Slice 7A packaged readiness sweep, Slice 7D installed acceptance, and the
+public-download verification are complete on macOS; Windows installed acceptance
+is still open
 Updated: 2026-08-20
 
 This file is the running record of what has been verified in real, packaged
@@ -126,6 +126,15 @@ Date: 2026-08-20
 This pass installed the real `v0.1.0` draft-release artifact — not a local
 build — into `/Applications`, ran the core workflow against a brand-new app data
 directory, quit and relaunched to check persistence, and then uninstalled.
+
+> **Superseded for artifact identity.** This record predates the #58 notarize-
+> and-staple rebuild, so the bits it exercised are not the bits that shipped.
+> The [Public-download verification](#public-download-verification) section below
+> repeats the install, core workflow, and relaunch-persistence checks against the
+> *published* `ContractorCRM_0.1.0_macos-arm64.dmg` downloaded anonymously from
+> the public release, and is the authoritative record for the shipped artifact.
+> This section is still the authoritative record for `/Applications` install and
+> uninstall behavior, which the public-download pass deliberately did not touch.
 
 ### Environment
 
@@ -381,7 +390,352 @@ Expect a SmartScreen warning: the Windows installer is unsigned for v0.1.0, so
 
 ## Public-download verification
 
-_Not started._ To be filled by the pass that downloads the published release
-artifacts from GitHub on a machine that never built the app, checks the
-checksums and signatures, and confirms the app opens without Gatekeeper
-warnings.
+Issue: [#54](https://github.com/ContractorKeith/contractorcrm/issues/54)
+Branch: `docs/issue-54-public-verification`
+Date: 2026-08-20
+Host: macOS 15 (Darwin 25.5.0), Apple silicon
+
+**Verdict: PASS.** A client with no repository access downloaded the published
+`v0.1.0` macOS artifact over anonymous HTTPS, verified its checksum, confirmed
+notarization and stapling under a browser-style quarantine flag, installed it,
+ran the core workflow against a brand-new database, and confirmed the records
+survived a quit and relaunch. This is the authoritative record for the artifact
+that actually shipped.
+
+_History: the first attempt at this pass, earlier the same day, failed at step 1
+because the repository was still private and every release URL returned 404
+anonymously. The repository was made public and the run below is the complete
+re-run from step 1._
+
+### How this pass was run
+
+The point is to be an honest stand-in for a stranger who finds the project and
+clicks Download, so it used only anonymous `curl` against
+`https://github.com/ContractorKeith/contractorcrm/releases/download/v0.1.0/...`.
+No `gh`, no credentials, no reading of the repository checkout for any
+verification fact. The shell had no `GITHUB_*` or `GH_TOKEN` variables set.
+Everything landed in a scratch directory; `/Applications` was never touched.
+
+```
+$ date -u '+%Y-%m-%dT%H:%M:%SZ'
+2026-08-20T14:25:03Z
+$ curl --version | head -1
+curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.68.1
+$ env | grep -iE '^(GITHUB|GH_TOKEN)'
+no GITHUB/GH_TOKEN env vars set
+```
+
+### Step 1 — anonymous download: PASS
+
+```
+$ for a in ContractorCRM_0.1.0_macos-arm64.dmg SHA-256SUMS THIRD_PARTY_NOTICES.md; do
+    curl -sIL ".../releases/download/v0.1.0/$a" | grep -iE '^HTTP|^content-length'; done
+=== ContractorCRM_0.1.0_macos-arm64.dmg ===
+HTTP/2 302
+HTTP/2 200
+content-length: 8835434
+=== SHA-256SUMS ===
+HTTP/2 302
+HTTP/2 200
+content-length: 507
+=== THIRD_PARTY_NOTICES.md ===
+HTTP/2 302
+HTTP/2 200
+content-length: 43542
+```
+
+Downloads completed at the advertised sizes:
+
+```
+dmg    HTTP:200 bytes:8835434
+sums   HTTP:200 bytes:507
+notice HTTP:200 bytes:43542
+```
+
+### Step 2 — checksum verification: PASS
+
+`SHA-256SUMS` covers all five release artifacts; this pass downloaded the three
+macOS-relevant ones, so the bare `-c` run reports the two Windows entries and
+the standalone mac MCP binary as unread. Both files that were downloaded match.
+
+```
+$ shasum -a 256 -c SHA-256SUMS
+ContractorCRM_0.1.0_macos-arm64.dmg: OK
+shasum: ContractorCRM_0.1.0_windows-x64-setup.exe: No such file or directory
+ContractorCRM_0.1.0_windows-x64-setup.exe: FAILED open or read
+THIRD_PARTY_NOTICES.md: OK
+shasum: contractorcrm-mcp_0.1.0_macos-arm64: No such file or directory
+contractorcrm-mcp_0.1.0_macos-arm64: FAILED open or read
+shasum: contractorcrm-mcp_0.1.0_windows-x64.exe: No such file or directory
+contractorcrm-mcp_0.1.0_windows-x64.exe: FAILED open or read
+shasum: WARNING: 3 listed files could not be read
+exit: 1
+
+$ shasum -a 256 --ignore-missing -c SHA-256SUMS
+ContractorCRM_0.1.0_macos-arm64.dmg: OK
+THIRD_PARTY_NOTICES.md: OK
+exit: 0
+```
+
+Published dmg digest, confirmed locally:
+`39ad0f27eb155a1d0438bd3b7498f2fd8391d699acc8785e1791ddae4cc623b9`.
+
+### Step 3 — quarantine and Gatekeeper on the dmg: PASS
+
+A browser-style quarantine flag was written by hand so the dmg is evaluated the
+way a Safari download would be:
+
+```
+$ xattr -w com.apple.quarantine "0083;$(printf %x $(date +%s));Safari;$(uuidgen)" ContractorCRM_0.1.0_macos-arm64.dmg
+$ xattr -p com.apple.quarantine ContractorCRM_0.1.0_macos-arm64.dmg
+0083;6a870ec5;Safari;CD80B93F-24B5-44FA-830B-A2FCB60A7093
+
+$ xcrun stapler validate ContractorCRM_0.1.0_macos-arm64.dmg
+The validate action worked!
+exit: 0
+
+$ spctl -a -t open --context context:primary-signature -vv ContractorCRM_0.1.0_macos-arm64.dmg
+ContractorCRM_0.1.0_macos-arm64.dmg: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+exit: 0
+```
+
+`codesign -dv --verbose=4` on the dmg confirms the ticket is stapled, not merely
+resolvable online — which is what makes a first launch work offline:
+
+```
+Identifier=ContractorCRM_0.1.0_aarch64
+Format=disk image
+Authority=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=Aug 20, 2026 at 9:39:45 AM
+Notarization Ticket=stapled
+TeamIdentifier=7J7BA9AK78
+```
+
+### Step 4 — mount, install, and launch: PASS
+
+The dmg presents the AGPL software licence agreement on mount. That is a licence
+sheet, not a security warning, and it was accepted:
+
+```
+$ yes | hdiutil attach ContractorCRM_0.1.0_macos-arm64.dmg
+/dev/disk4          GUID_partition_scheme
+/dev/disk4s1        Apple_HFS                      /Volumes/ContractorCRM
+```
+
+The volume contains the app plus the conventional `/Applications` symlink. The
+bundle was copied to a **scratch** Applications directory — the machine's real
+`/Applications` was deliberately left alone — and re-quarantined so Gatekeeper
+would evaluate the copy as freshly downloaded:
+
+```
+$ ditto /Volumes/ContractorCRM/ContractorCRM.app <scratch>/Applications/ContractorCRM.app
+$ xattr -w com.apple.quarantine "0083;...;Safari;..." <scratch>/Applications/ContractorCRM.app
+
+$ codesign --verify --deep --strict --verbose=2 <scratch>/Applications/ContractorCRM.app
+--prepared:.../Contents/MacOS/contractorcrm-mcp
+--validated:.../Contents/MacOS/contractorcrm-mcp
+...ContractorCRM.app: valid on disk
+...ContractorCRM.app: satisfies its Designated Requirement
+exit: 0
+
+$ spctl -a -t exec -vv <scratch>/Applications/ContractorCRM.app
+...ContractorCRM.app: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Keith Bloemendaal (7J7BA9AK78)
+exit: 0
+
+$ xcrun stapler validate <scratch>/Applications/ContractorCRM.app
+The validate action worked!
+exit: 0
+```
+
+Note that `--deep --strict` explicitly validated the nested
+`contractorcrm-mcp` helper binary inside the bundle, so the shipped agent helper
+is covered by the same signature and ticket as the app.
+
+Before launching, the real app-data directory was moved aside so the app would
+start on a genuinely clean slate (see the restore proof below). The app then
+launched with no security prompt and no crash:
+
+```
+$ open <scratch>/Applications/ContractorCRM.app
+open exit: 0
+$ pgrep -fl 'ContractorCRM.app/Contents/MacOS'
+83497 /private/var/folders/.../AppTranslocation/A857F647-.../d/ContractorCRM.app/Contents/MacOS/contractorcrm
+$ osascript -e '...count of windows'
+ContractorCRM, 1
+```
+
+macOS ran it through **App Translocation** (the randomized read-only mount path
+above) because the bundle was quarantined and launched from a directory that is
+not `/Applications`. That is expected Gatekeeper behavior for this deliberately
+unusual install location, and it did not impede anything; a user who drags the
+app to `/Applications` as the dmg invites does not get translocated. The
+`/Applications` install path is covered by the macOS section earlier in this file.
+
+First run created a fresh database from nothing, and the UI reported the empty
+state:
+
+```
+$ ls -la ~/Library/Application\ Support/com.contractorkeith.contractorcrm
+contractorcrm.sqlite3        4096
+contractorcrm.sqlite3-shm   32768
+contractorcrm.sqlite3-wal  515032
+```
+
+```
+AXStaticText |Core ready · v0.1.0|
+AXHeading    |No contacts yet|2
+AXStaticText |Add your first lead, client, sub, or vendor. Everything stays in this app's local database on this machine.|
+```
+
+### Step 5 — core workflow: PASS
+
+Driven through the accessibility tree (`AXPress` / focus-then-keystroke, since
+React ignores programmatic `set value`).
+
+**Contact.** `New contact` → typed a first and last name → `Add phone or email`
+→ typed a value → `Create contact`. The record page rendered:
+
+```
+AXHeading |Marisol Rivera|2
+AXStaticText |407-555-0142|
+```
+
+**Opportunity.** `PIPELINE` → `New opportunity` → name and value → `Create
+opportunity` was refused until a party was attached, with the requirement
+surfaced accessibly on the field itself:
+
+```
+AXPopUpButton |Contact an opportunity needs a contact or a company (or both)|No contact
+AXStaticText  |an opportunity needs a contact or a company (or both)|
+```
+
+After selecting the contact, creation succeeded at the default stage:
+
+```
+AXHeading |Rivera backyard fence|2
+AXStaticText |Stage: | AXStaticText |Lead|
+```
+
+**Stage moves.** `Move to stage` → `Move`, twice. Every transition was recorded
+in `STAGE HISTORY` with the previous stage, the new stage, the actor, and an ISO
+timestamp:
+
+```
+Lead → Won            user · 2026-08-20T15:12:59.225Z
+Won  → Proposal Sent  user · 2026-08-20T15:15:48.336Z
+—    → Lead           user · 2026-08-20T15:04:41.059Z
+```
+
+Honest note on those two moves: the harness selects `<select>` options by typing,
+and macOS type-ahead landed on `Won` and then `Proposal Sent` rather than the
+`Qualified` that was aimed for. That is a limitation of the automation, not app
+behavior — each move was applied exactly as chosen and logged correctly. The
+thing under test, that a stage change persists and appends an auditable history
+row, passed.
+
+**Global search.** `⌘K` opens a labelled dialog over the page:
+
+```
+AXGroup    |Search ContractorCRM|
+AXComboBox |Search records|
+AXStaticText |Search contacts, companies, opportunities, and activities|
+```
+
+Typing `Rivera` — a token shared by the contact and the opportunity — returned
+both records; typing `backyard` narrowed to the opportunity alone:
+
+```
+Rivera   → AXStaticText |2 results|
+Marisol  → AXStaticText |1 result|
+backyard → AXStaticText |1 result|
+```
+
+Arrow-down then Return on the `Marisol` result navigated straight to the contact
+page (`AXHeading |Marisol Rivera|`, phone `407-555-0142`), confirming results are
+actionable and not just counted. One accessibility gap worth filing: the result
+rows themselves expose no accessible name (`AXStaticText` with an empty value),
+so a screen-reader user gets a result count and can activate a row, but cannot
+hear which record the row is. The count and the resulting navigation are what
+this pass could assert.
+
+### Step 6 — quit, relaunch, persistence: PASS
+
+```
+$ osascript -e 'tell application "ContractorCRM" to quit'
+$ pgrep -fl 'ContractorCRM.app/Contents/MacOS'
+QUIT OK - no process
+```
+
+Relaunched from the same scratch copy. Both records were still there, with the
+stage and the value intact — meaning the WAL was checkpointed and the data
+really landed on disk:
+
+```
+AXStaticText |Marisol Rivera|
+AXStaticText |Rivera backyard fence|
+AXStaticText |Proposal Sent|
+AXStaticText |$8,400.00|
+```
+
+Then quit again.
+
+### Step 7 — cleanup and data restore: PASS
+
+The scratch install and the throwaway database were deleted, the dmg detached,
+and the real app-data directory moved back:
+
+```
+$ rm -rf ~/Library/Application\ Support/com.contractorkeith.contractorcrm
+$ rm -rf <scratch>/Applications
+$ hdiutil detach /Volumes/ContractorCRM
+"disk4" ejected.
+$ mv <scratch>/appdata-aside/com.contractorkeith.contractorcrm ~/Library/Application\ Support/
+```
+
+**Restore proof.** A SHA-256 manifest of all 11 files was taken before the
+directory was moved aside and again after it was moved back:
+
+```
+$ diff appdata-manifest-before.txt appdata-manifest-after.txt
+MANIFESTS IDENTICAL
+
+$ shasum -a 256 appdata-manifest-before.txt appdata-manifest-after.txt
+e733a49696078eb30ff890e01db25c562b3acc56d9dd44ea1318760e8c5b49d9  appdata-manifest-before.txt
+e733a49696078eb30ff890e01db25c562b3acc56d9dd44ea1318760e8c5b49d9  appdata-manifest-after.txt
+```
+
+The live database and every migration/pre-import backup hashed identically, for
+example `contractorcrm.sqlite3` at
+`efda452886874fe0bf75eb59738f2947e16740f66abd8ad1d77b0f3e5208b4e2`. A recursive
+`ls -lAR` diff was also clean, so sizes, permissions, and mtimes are unchanged —
+the app never opened the real database at any point in this pass. Final state:
+
+```
+TREE IDENTICAL
+LS IDENTICAL (perms/sizes/mtimes)
+aside dir: empty
+/Volumes: no CCRM volume
+no ContractorCRM processes
+```
+
+### Honest caveats
+
+- The pass was interrupted twice by infrastructure errors while the app was
+  running and the real data was aside. State was re-verified with `ps`,
+  `hdiutil`, and `ls` on resume each time, no step was silently skipped, and the
+  restore above is the proof that nothing was left dangling.
+- Stage targets were chosen by the automation's type-ahead rather than picked
+  deliberately (see step 5). The transitions themselves are sound.
+- Search-result rows have no accessible name — worth a follow-up issue.
+- Only the macOS artifact was exercised. The Windows installer's checksum is
+  published in the same `SHA-256SUMS` but was not downloaded or run here; see
+  the Windows section above.
+- The install was to a scratch directory, so this pass exercised the
+  translocated launch path rather than the `/Applications` path, and it did not
+  re-test uninstall.
