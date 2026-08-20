@@ -11,3 +11,5 @@ vite.config.d.ts
 src-tauri/target/
 src-tauri/gen/
 .kodade/
+# Generated per release by scripts/generate-notices.sh; never hand-edited.
+THIRD_PARTY_NOTICES.md
