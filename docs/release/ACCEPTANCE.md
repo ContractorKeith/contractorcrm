@@ -332,7 +332,7 @@ this pass.
 
 **Status: PENDING — escalated to Keith.** There is no Windows machine in this
 environment, so nothing below has been executed. The artifacts exist in the
-`v0.1.0` release (`ContractorCRM_0.1.0_windows-x64-setup.exe`, 7,216,982 bytes,
+`v0.1.0` release (`ContractorCRM_0.1.0_windows-x64-setup.exe`, 7,218,049 bytes,
 and the standalone `contractorcrm-mcp_0.1.0_windows-x64.exe`). Run this on a
 Windows 11 x64 machine and record the results in this section.
 
@@ -344,9 +344,11 @@ Expect a SmartScreen warning: the Windows installer is unsigned for v0.1.0, so
    (not `gh`) so the download carries the real mark-of-the-web.
 2. **Check the hash.** In PowerShell, from the download folder:
    `certutil -hashfile ContractorCRM_0.1.0_windows-x64-setup.exe SHA256`
-   The output must equal
-   `4dff58b0052c49d9850f3986bd585933f81e6492cb7d0e3ee0b307db077ab59c`
-   (the `SHA-256SUMS` line for that file). Record the command and its output.
+   The output must equal the `ContractorCRM_0.1.0_windows-x64-setup.exe` line in
+   the downloaded `SHA-256SUMS` — that file is the authority. For convenience,
+   the published `v0.1.0` value is
+   `5e9298f7251b15f04bca6254fde12bce5b54e96254e5050eb79ce9ee75e832db`.
+   Record the command and its output.
 3. **Run the installer.** Double-click it. SmartScreen should say "Windows
    protected your PC" → click **More info** → **Run anyway**. Note whether a UAC
    prompt appears and whether the install is per-user or machine-wide.

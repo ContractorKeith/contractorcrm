@@ -31,7 +31,7 @@ was skipped and keeps going. Read the run summary to confirm what you got.
    gh secret set APPLE_CERTIFICATE < apple-cert.b64
    ```
 
-2. Re-run the release for the tag:
+2. Re-run the release for the tag **while it is still a draft**:
 
    ```bash
    gh workflow run release.yml -f dry_run=false
@@ -40,6 +40,13 @@ was skipped and keeps going. Read the run summary to confirm what you got.
    (Or push the tag again: `git push origin :v0.1.0 && git push origin v0.1.0`.)
    The draft release is updated in place — artifacts are re-uploaded with
    `--clobber`, so signed files replace unsigned ones under the same names.
+
+   **Once a release is published, it is frozen.** The workflow refuses to touch
+   a non-draft release and fails with `… is already published`. People have
+   downloaded those files and checked them against `SHA-256SUMS`; replacing an
+   asset under the same name would break that check and silently change what
+   the tag means. A changed artifact always needs a new patch version and a new
+   tag — never a rewrite.
 
 ## Secrets
 

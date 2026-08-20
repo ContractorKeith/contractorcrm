@@ -177,9 +177,10 @@ that came from someone else.
 ## Code signing
 
 **macOS** — the `.dmg` is signed with a Developer ID certificate and notarized
-by Apple. Double-click, drag ContractorCRM to Applications, and open it. No
-Gatekeeper warning is expected. Apple Silicon only in this release; there is no
-Intel build.
+by Apple. Double-click the `.dmg`, click **Agree** on the license sheet macOS
+shows first — that is the AGPL text, not a warning — then drag ContractorCRM to
+Applications and open it. No Gatekeeper warning is expected. Apple Silicon only
+in this release; there is no Intel build.
 
 **Windows** — the installer is **not** code-signed in v0.1.0. Microsoft
 Defender SmartScreen will stop the first run with:

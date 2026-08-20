@@ -470,6 +470,12 @@ jobs:
           fi
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
+            # Never rewrite a published release: `gh release edit --draft` would
+            # un-publish it and --clobber would replace assets users verified.
+            if [ "$(gh release view "${TAG}" --json isDraft -q .isDraft)" != "true" ]; then
+              echo "::error::${TAG} is already published -- a changed artifact needs a new patch version, never a rewrite"
+              exit 1
+            fi
             gh release edit "${TAG}" --draft --title "ContractorCRM ${TAG}" "${notes_args[@]}"
             gh release upload "${TAG}" release/* --clobber
           else

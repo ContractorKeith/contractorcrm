@@ -17,12 +17,15 @@ The MCP adapter calls the same Rust application interface as the desktop UI. It 
 
 ## Agent onboarding
 
-The helper ships as a second binary, `contractorcrm-mcp`, inside the packaged
-application next to the app executable — `ContractorCRM.app/Contents/MacOS/`
-on macOS, beside `contractorcrm.exe` on Windows (`src-tauri/src/mcp.rs` is the
-server; the binary only parses the command line). It is not on the user's
-`PATH`, so Settings prints its absolute path, resolved at runtime by the
-`get_agent_helper_path` command.
+The helper is a second binary, `contractorcrm-mcp` (`src-tauri/src/mcp.rs` is
+the server; the binary only parses the command line). On macOS it ships inside
+the packaged application next to the app executable, in
+`ContractorCRM.app/Contents/MacOS/`. On Windows it is expected beside
+`contractorcrm.exe` in the install folder, but that has not been verified on a
+real Windows install yet; the release also publishes a standalone
+`contractorcrm-mcp_<version>_windows-x64.exe` that works the same way. Either
+way the helper is not on the user's `PATH`, so Settings prints the absolute
+path, resolved at runtime by the `get_agent_helper_path` command.
 
 It speaks JSON-RPC 2.0 over stdio — one message per line, MCP
 revision `2025-06-18` (older `2025-03-26` and `2024-11-05` clients are accepted
