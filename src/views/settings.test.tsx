@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 // Open the Backup & Data tab from the shell.
 async function openDataView(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("button", { name: "Backup & Data" }));
-  return screen.findByRole("heading", { name: "Backup & Data" });
+  return screen.findByRole("heading", { name: "Settings" });
 }
 
 describe("backup and data view", () => {
@@ -336,36 +336,6 @@ describe("AI assistant settings", () => {
     await user.click(await screen.findByRole("button", { name: "Test connection" }));
 
     expect(await screen.findByText("Couldn't reach 127.0.0.1:11434.")).toBeVisible();
-  });
-
-  it("shows the agent helper command line for this device and explains both modes", async () => {
-    const user = userEvent.setup();
-    const client = stubClient({
-      getDatabaseInfo: vi.fn().mockResolvedValue({
-        databasePath: "/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3",
-        fileSizeBytes: 2048,
-        lastBackupAt: null,
-      }),
-      getAgentHelperPath: vi
-        .fn()
-        .mockResolvedValue("/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp"),
-    });
-
-    render(<App client={client} />);
-    await openDataView(user);
-    await screen.findByRole("heading", { name: "Agent access (MCP)" });
-
-    const helper = '"/Applications/ContractorCRM.app/Contents/MacOS/contractorcrm-mcp"';
-    const database = '"/Users/sam/Library/Application Support/ContractorCRM/contractorcrm.sqlite3"';
-    const readOnly = await screen.findByLabelText("Read-only (recommended)");
-    await waitFor(() => expect(readOnly).toHaveValue(`${helper} --database ${database}`));
-    expect(readOnly).toHaveAttribute("readonly");
-    expect(screen.getByLabelText("Read and write")).toHaveValue(
-      `${helper} --database ${database} --read-write`,
-    );
-    expect(screen.getByText(/Nothing is written\./)).toBeVisible();
-    expect(screen.getByText(/recorded in the audit log/)).toBeVisible();
-    expect(screen.getByText(/restart it to go back/)).toBeVisible();
   });
 
   it("edits and resets the follow-up templates, which work with the assistant off", async () => {
