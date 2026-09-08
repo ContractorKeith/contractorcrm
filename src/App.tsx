@@ -11,6 +11,7 @@ import { ContactDetailView, ContactFormView, ContactsView } from "./views/contac
 import { OpportunityDetailView, OpportunityFormView, PipelineView } from "./views/pipeline";
 import { SettingsView } from "./views/settings";
 import { TasksView } from "./views/tasks";
+import { TodayView } from "./views/today";
 
 interface AppProps {
   client?: CoreClient;
@@ -18,6 +19,7 @@ interface AppProps {
 
 // Plain view state instead of a router — one shell window, a handful of views.
 type View =
+  | { name: "today" }
   | { name: "contacts" }
   | { name: "companies" }
   | { name: "pipeline" }
@@ -36,7 +38,7 @@ type View =
 export function App({ client = tauriCoreClient }: AppProps) {
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
   const [health, setHealth] = useState<HealthReport | null>(null);
-  const [view, setView] = useState<View>({ name: "contacts" });
+  const [view, setView] = useState<View>({ name: "today" });
   const mainRef = useRef<HTMLElement>(null);
   const firstViewRef = useRef(true);
 
@@ -82,7 +84,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
       ? "companies"
       : view.name === "pipeline" || view.name.startsWith("opportunity")
         ? "pipeline"
-        : view.name === "tasks" || view.name === "attention" || view.name === "settings"
+        : view.name === "today" || view.name === "tasks" || view.name === "attention" || view.name === "settings"
           ? view.name
           : "contacts";
 
@@ -154,6 +156,13 @@ export function App({ client = tauriCoreClient }: AppProps) {
         <nav className="view-tabs" aria-label="Records">
           <button
             type="button"
+            aria-pressed={section === "today"}
+            onClick={() => setView({ name: "today" })}
+          >
+            Today
+          </button>
+          <button
+            type="button"
             aria-pressed={section === "contacts"}
             onClick={() => setView({ name: "contacts" })}
           >
@@ -192,12 +201,27 @@ export function App({ client = tauriCoreClient }: AppProps) {
             aria-pressed={section === "settings"}
             onClick={() => setView({ name: "settings" })}
           >
-            Backup &amp; Data
+            Settings
           </button>
         </nav>
 
         {view.name === "settings" ? (
           <SettingsView client={client} />
+        ) : null}
+
+        {view.name === "today" ? (
+          <TodayView
+            client={client}
+            onOpenRecord={(recordType, id) =>
+              setView(
+                recordType === "contact"
+                  ? { name: "contactDetail", id }
+                  : recordType === "company"
+                    ? { name: "companyDetail", id }
+                    : { name: "opportunityDetail", id },
+              )
+            }
+          />
         ) : null}
 
         {view.name === "contacts" ? (

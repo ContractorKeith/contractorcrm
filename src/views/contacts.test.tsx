@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render as testingRender, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,14 @@ import { formatLocalDateTime } from "./date-format";
 
 // Native file dialogs only exist inside Tauri, so stand them in for tests.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
+
+// Contacts is no longer the landing view; keep these list/detail tests on the
+// workflow they exercise instead of relying on shell startup state.
+function render(ui: ReactElement) {
+  const result = testingRender(ui);
+  fireEvent.click(screen.getByRole("button", { name: "Contacts" }));
+  return result;
+}
 
 describe("contact list and detail", () => {
   beforeEach(() => {

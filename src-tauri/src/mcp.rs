@@ -438,6 +438,11 @@ impl Server {
                     args.reference_time,
                 )?)
             }
+            "get_work_queue" => {
+                let args: AttentionArgs = parse(arguments)?;
+                let storage = self.storage();
+                value(application::get_work_queue(&storage, args.reference_time)?)
+            }
             "list_saved_views" => {
                 let args: EntityTypeArgs = parse(arguments)?;
                 let storage = self.storage();
@@ -1734,6 +1739,15 @@ fn tools() -> Vec<ToolDef> {
             write: false,
             input_schema: schema(
                 json!({"referenceTime": text("UTC ISO-8601 instant to evaluate against.")}),
+                &[],
+            ),
+        },
+        ToolDef {
+            name: "get_work_queue",
+            description: "A bounded next-work queue: overdue or due-today open tasks, then neglected proposals and leads. Overdue task flags are folded into their task rows.",
+            write: false,
+            input_schema: schema(
+                json!({"referenceTime": text("RFC3339 instant with an offset; that offset defines the local day. Defaults to now in UTC.")}),
                 &[],
             ),
         },

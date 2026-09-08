@@ -35,7 +35,7 @@ const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
 
 /// Every tool the adapter advertises in read-write mode, in table order.
 /// docs/SLICE5_COVERAGE.md maps each of these to its docs and its test.
-const ALL_TOOLS: [&str; 44] = [
+const ALL_TOOLS: [&str; 45] = [
     "search_records",
     "list_contacts",
     "get_contact",
@@ -49,6 +49,7 @@ const ALL_TOOLS: [&str; 44] = [
     "get_record_brief",
     "list_tasks",
     "get_attention_flags",
+    "get_work_queue",
     "list_saved_views",
     "list_tags",
     "list_custom_field_defs",
@@ -971,6 +972,12 @@ fn the_read_tools_answer_for_every_record_and_metadata_surface() {
     // Deterministic flags, saved views, tags, custom fields, and the stored
     // follow-up wordings all answer over the same read connection.
     assert!(ok(&server, "get_attention_flags", json!({})).is_array());
+    assert!(ok(
+        &server,
+        "get_work_queue",
+        json!({"referenceTime": "2026-09-08T08:00:00-04:00"})
+    )["items"]
+        .is_array());
     assert!(ok(
         &server,
         "list_saved_views",

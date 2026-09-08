@@ -11,6 +11,7 @@ import type {
   HistorySummary,
   Proposal,
   AttentionFlag,
+  WorkQueue,
   Company,
   Contact,
   HandoffRef,
@@ -87,6 +88,12 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   deleteTask: vi.fn(),
   listTasks: vi.fn().mockResolvedValue([]),
   getAttentionFlags: vi.fn().mockResolvedValue([]),
+  getWorkQueue: vi.fn().mockResolvedValue({
+    referenceTime: "2026-09-08T12:00:00-04:00",
+    localDate: "2026-09-08",
+    items: [],
+    truncated: false,
+  } satisfies WorkQueue),
   getAttentionThresholds: vi.fn().mockResolvedValue({
     staleLeadDays: 21,
     proposalNoResponseDays: 7,

@@ -18,6 +18,7 @@ use crate::domain::{
 };
 use crate::error::ApplicationError;
 use crate::storage::{new_id, now_utc, Storage};
+use crate::work_queue::{self, WorkQueue, WorkQueueRecord};
 
 // ---------------------------------------------------------------------------
 // Wire-shaped requests (camelCase)
@@ -3514,6 +3515,91 @@ pub fn get_attention_flags(
         storage,
         reference_time,
     )?))
+}
+
+/// Return one bounded, deterministic next-work projection. The caller may
+/// supply an RFC3339 offset to define its local calendar day; unlike attention
+/// evaluation, the offset itself matters for the due-today boundary.
+pub fn get_work_queue(
+    storage: &Storage,
+    reference_time: Option<String>,
+) -> Result<WorkQueue, ApplicationError> {
+    let reference = match optional_text(reference_time) {
+        Some(value) => {
+            DateTime::parse_from_rfc3339(&value).map_err(|_| ApplicationError::InvalidInput {
+                field: "referenceTime".into(),
+                message: "must be an RFC3339 timestamp with an offset".into(),
+            })?
+        }
+        None => Utc::now().fixed_offset(),
+    };
+    let inputs = attention_inputs(storage, Some(reference.to_rfc3339()))?;
+    let flags = attention::evaluate(&inputs);
+    let tasks = list_tasks(
+        storage,
+        ListTasksRequest {
+            status: Some("open".into()),
+            overdue_only: false,
+            parent_type: None,
+            parent_id: None,
+        },
+    )?;
+    let mut queue = work_queue::assemble(tasks, flags, reference)
+        .map_err(ApplicationError::InvalidStoredData)?;
+    // Resolve labels only after the deterministic filter/sort/cap. A CRM with
+    // thousands of future tasks must not fan out into record reads at launch.
+    for item in &mut queue.items {
+        if let work_queue::WorkQueueItem::Task {
+            task,
+            linked_record,
+            ..
+        } = item
+        {
+            *linked_record =
+                work_queue_record(storage, task.parent_type, task.parent_id.as_deref())?;
+        }
+    }
+    Ok(queue)
+}
+
+fn work_queue_record(
+    storage: &Storage,
+    parent_type: Option<ParentType>,
+    parent_id: Option<&str>,
+) -> Result<Option<WorkQueueRecord>, ApplicationError> {
+    let Some(parent_type) = parent_type else {
+        return Ok(None);
+    };
+    let Some(parent_id) = parent_id else {
+        return Ok(None);
+    };
+    let record = match parent_type {
+        ParentType::Contact => {
+            let contact = get_contact(storage, parent_id)?;
+            WorkQueueRecord {
+                record_type: ParentType::Contact,
+                record_id: contact.id,
+                display_name: contact.display_name,
+            }
+        }
+        ParentType::Company => {
+            let company = get_company(storage, parent_id)?;
+            WorkQueueRecord {
+                record_type: ParentType::Company,
+                record_id: company.id,
+                display_name: company.name,
+            }
+        }
+        ParentType::Opportunity => {
+            let opportunity = get_opportunity(storage, parent_id)?.opportunity;
+            WorkQueueRecord {
+                record_type: ParentType::Opportunity,
+                record_id: opportunity.id,
+                display_name: opportunity.name,
+            }
+        }
+    };
+    Ok(Some(record))
 }
 
 /// Read one app_settings value, if present.
