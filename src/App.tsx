@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { tauriCoreClient, type CoreClient } from "./api/client";
 import type { HealthReport, NavigationEntityType, SearchResult } from "./api/types";
 import { BrandMark } from "./components/BrandMark";
+import { QuickLeadDialog } from "./components/QuickLeadDialog";
 import { GlobalSearch } from "./components/GlobalSearch";
 import { loadThemePreference, watchTheme, type ThemePreference } from "./theme";
 import { AttentionView } from "./views/attention";
@@ -11,6 +12,7 @@ import { ContactDetailView, ContactFormView, ContactsView } from "./views/contac
 import { OpportunityDetailView, OpportunityFormView, PipelineView } from "./views/pipeline";
 import { SettingsView } from "./views/settings";
 import { TasksView } from "./views/tasks";
+import { TodayView } from "./views/today";
 
 interface AppProps {
   client?: CoreClient;
@@ -18,6 +20,7 @@ interface AppProps {
 
 // Plain view state instead of a router — one shell window, a handful of views.
 type View =
+  | { name: "today" }
   | { name: "contacts" }
   | { name: "companies" }
   | { name: "pipeline" }
@@ -36,7 +39,8 @@ type View =
 export function App({ client = tauriCoreClient }: AppProps) {
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
   const [health, setHealth] = useState<HealthReport | null>(null);
-  const [view, setView] = useState<View>({ name: "contacts" });
+  const [view, setView] = useState<View>({ name: "today" });
+  const [capturingLead, setCapturingLead] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const firstViewRef = useRef(true);
 
@@ -82,7 +86,7 @@ export function App({ client = tauriCoreClient }: AppProps) {
       ? "companies"
       : view.name === "pipeline" || view.name.startsWith("opportunity")
         ? "pipeline"
-        : view.name === "tasks" || view.name === "attention" || view.name === "settings"
+        : view.name === "today" || view.name === "tasks" || view.name === "attention" || view.name === "settings"
           ? view.name
           : "contacts";
 
@@ -129,6 +133,9 @@ export function App({ client = tauriCoreClient }: AppProps) {
           </span>
         </a>
         <div className="header-controls">
+          <button type="button" className="button button--primary" onClick={() => setCapturingLead(true)}>
+            New lead
+          </button>
           <GlobalSearch client={client} onOpenResult={openSearchResult} />
           <label className="theme-control">
             <span>Theme</span>
@@ -145,13 +152,28 @@ export function App({ client = tauriCoreClient }: AppProps) {
           {/* role=status gives the aria-label a home; a bare <div> would drop it. */}
           <div className="storage-state" role="status" aria-label="Local storage status">
             <span className="storage-state__dot" aria-hidden="true" />
-            {health ? `Core ready · v${health.version}` : "Local SQLite · on this device"}
+            {health ? "On this device" : "Opening local data…"}
           </div>
         </div>
       </header>
 
+      {capturingLead ? (
+        <QuickLeadDialog client={client} onClose={() => setCapturingLead(false)}
+          onSaved={(lead) => {
+            setCapturingLead(false);
+            setView({ name: "opportunityDetail", id: lead.opportunity.id });
+          }} />
+      ) : null}
+
       <main id="main" ref={mainRef} tabIndex={-1} className="workspace">
         <nav className="view-tabs" aria-label="Records">
+          <button
+            type="button"
+            aria-pressed={section === "today"}
+            onClick={() => setView({ name: "today" })}
+          >
+            Today
+          </button>
           <button
             type="button"
             aria-pressed={section === "contacts"}
@@ -192,12 +214,27 @@ export function App({ client = tauriCoreClient }: AppProps) {
             aria-pressed={section === "settings"}
             onClick={() => setView({ name: "settings" })}
           >
-            Backup &amp; Data
+            Settings
           </button>
         </nav>
 
         {view.name === "settings" ? (
           <SettingsView client={client} />
+        ) : null}
+
+        {view.name === "today" ? (
+          <TodayView
+            client={client}
+            onOpenRecord={(recordType, id) =>
+              setView(
+                recordType === "contact"
+                  ? { name: "contactDetail", id }
+                  : recordType === "company"
+                    ? { name: "companyDetail", id }
+                    : { name: "opportunityDetail", id },
+              )
+            }
+          />
         ) : null}
 
         {view.name === "contacts" ? (

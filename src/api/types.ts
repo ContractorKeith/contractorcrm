@@ -264,6 +264,24 @@ export interface ContactPatch {
 export type CreateCompanyRequest = { actor?: Actor } & CompanyPatch;
 export type CreateContactRequest = { actor?: Actor } & ContactPatch;
 
+export interface CaptureLeadRequest {
+  actor?: Actor;
+  name: string;
+  jobRequest: string;
+  phone?: string | null;
+  email?: string | null;
+  note?: string | null;
+  contactId?: string | null;
+  nextStepTitle?: string | null;
+  nextStepDueAt?: string | null;
+}
+
+export interface CapturedLead {
+  contact: Contact;
+  opportunity: Opportunity;
+  task: Task | null;
+}
+
 export interface UpdateCompanyRequest {
   actor?: Actor;
   companyId: string;
@@ -408,6 +426,28 @@ export type ContactListItem = Contact & {
 export type OpportunityDetail = Opportunity & {
   stageHistory: StageHistoryEntry[];
 };
+
+export type RecordBriefRecord =
+  | { type: "contact"; record: Contact }
+  | { type: "company"; record: Company }
+  | { type: "opportunity"; record: OpportunityDetail };
+
+// A bounded, read-only packet for an agent preparing one follow-up.
+export interface RecordBrief {
+  parentType: ParentType;
+  parentId: string;
+  record: RecordBriefRecord;
+  linked: { contact: Contact | null; company: Company | null };
+  activities: Activity[];
+  activitiesTruncated: boolean;
+  activityTextTruncated: boolean;
+  openTasks: Task[];
+  tasksTruncated: boolean;
+  taskTextTruncated: boolean;
+  recordTextTruncated: boolean;
+  recordDetailsTruncated: boolean;
+  attentionFlags: AttentionFlag[];
+}
 
 // Editable opportunity fields; updates replace the full editable set (v1).
 // Stage changes go through move_opportunity_stage, never through updates.
@@ -604,6 +644,49 @@ export interface AttentionFlag {
   recordId: string;
   recordDisplayName: string;
   explanation: string;
+}
+
+// The small, deterministic next-work projection. `localDate` is calculated
+// using the offset in referenceTime, never an inferred browser time zone.
+export type WorkQueueTaskReason = "overdue" | "due_today";
+
+export interface WorkQueueTask {
+  id: string;
+  title: string;
+  parentType: ParentType | null;
+  parentId: string | null;
+  dueAt: string;
+  priority: TaskPriority;
+  version: number;
+}
+
+export interface WorkQueueRecord {
+  recordType: ParentType;
+  recordId: string;
+  displayName: string;
+}
+
+export type WorkQueueItem =
+  | {
+      kind: "task";
+      task: WorkQueueTask;
+      reason: WorkQueueTaskReason;
+      linkedRecord: WorkQueueRecord | null;
+    }
+  | {
+      kind: "attention";
+      rule: Exclude<AttentionRule, "overdue_task">;
+      recordType: Exclude<AttentionRecordType, "task">;
+      recordId: string;
+      recordDisplayName: string;
+      explanation: string;
+    };
+
+export interface WorkQueue {
+  referenceTime: string;
+  localDate: string;
+  items: WorkQueueItem[];
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -29,11 +29,11 @@ use serde_json::{json, Value};
 
 use crate::ai::{CompletionProvider, ContextPreview, CredentialStore, KeyringCredentialStore};
 use crate::application::{
-    self, ActivityPatch, CompanyPatch, ContactPatch, CreateCompanyRequest, CreateContactRequest,
-    CreateOpportunityRequest, CreateTaskRequest, HandoffRefInput, LinkJobRequest, LinkQuoteRequest,
-    ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityPatch,
-    SavedViewEntityType, TaskPatch, UpdateCompanyRequest, UpdateContactRequest,
-    UpdateOpportunityRequest,
+    self, ActivityPatch, CaptureLeadRequest, CompanyPatch, ContactPatch, CreateCompanyRequest,
+    CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, HandoffRefInput,
+    LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
+    MoveOpportunityStageRequest, OpportunityPatch, SavedViewEntityType, TaskPatch,
+    UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest, UpdateTaskRequest,
 };
 use crate::attachments::{self, AttachmentParentType, AttachmentStore};
 use crate::domain::Actor;
@@ -42,6 +42,7 @@ use crate::proposals::{
     self, ApplyProposalRequest, ProposalEntityType, ProposalStore, RecordVersion,
     UndoProposalRequest,
 };
+use crate::record_brief;
 use crate::storage::{latest_migration_version, Storage};
 use crate::{explain, followups, LOCAL_API_VERSION};
 
@@ -151,7 +152,9 @@ impl Server {
             ));
         }
 
-        let storage = if stored == known {
+        let storage = if stored == known && !mode.allows_writes() {
+            Storage::open_read_only(database_path)
+        } else if stored == known {
             // Nothing to apply either way; open without the migration pass.
             Storage::open_existing(database_path)
         } else if mode.allows_writes() {
@@ -402,6 +405,17 @@ impl Server {
                 drop(storage);
                 Ok(bounded_timeline(entries, args.limit, args.full_bodies)?)
             }
+            "get_record_brief" => {
+                let args: RecordBriefArgs = parse(arguments)?;
+                let storage = self.storage();
+                value(record_brief::get_record_brief(
+                    &storage,
+                    &args.parent_type,
+                    &args.parent_id,
+                    args.activity_limit,
+                    args.task_limit,
+                )?)
+            }
             "list_tasks" => {
                 let args: TaskListArgs = parse(arguments)?;
                 let storage = self.storage();
@@ -423,6 +437,11 @@ impl Server {
                     &storage,
                     args.reference_time,
                 )?)
+            }
+            "get_work_queue" => {
+                let args: AttentionArgs = parse(arguments)?;
+                let storage = self.storage();
+                value(application::get_work_queue(&storage, args.reference_time)?)
             }
             "list_saved_views" => {
                 let args: EntityTypeArgs = parse(arguments)?;
@@ -621,6 +640,24 @@ impl Server {
                     },
                 )?)
             }
+            "capture_lead" => {
+                let args: CaptureLeadArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::capture_lead(
+                    &mut storage,
+                    CaptureLeadRequest {
+                        actor: Actor::Agent,
+                        name: args.name,
+                        job_request: args.job_request,
+                        phone: args.phone,
+                        email: args.email,
+                        note: args.note,
+                        contact_id: args.contact_id,
+                        next_step_title: args.next_step_title,
+                        next_step_due_at: args.next_step_due_at,
+                    },
+                )?)
+            }
             "update_contact" => {
                 let args: UpdateContactArgs = parse(arguments)?;
                 let mut storage = self.storage_mut();
@@ -731,6 +768,43 @@ impl Server {
                         task_id: args.task_id,
                         expected_version: args.expected_version,
                         log_activity: args.log_activity,
+                    },
+                )?)
+            }
+            "update_task" => {
+                let args: UpdateTaskArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::update_task(
+                    &mut storage,
+                    UpdateTaskRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
+                        patch: args.patch,
+                    },
+                )?)
+            }
+            "reopen_task" => {
+                let args: TaskActionArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::reopen_task(
+                    &mut storage,
+                    crate::application::TaskActionRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
+                    },
+                )?)
+            }
+            "drop_task" => {
+                let args: TaskActionArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::drop_task(
+                    &mut storage,
+                    crate::application::TaskActionRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
                     },
                 )?)
             }
@@ -854,8 +928,11 @@ impl Server {
 /// database. Treating that as version 0 would have this helper create a whole
 /// schema inside somebody else's SQLite file, so it is a hard error.
 fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, String> {
-    let connection = rusqlite::Connection::open(database_path)
-        .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
+    let connection = rusqlite::Connection::open_with_flags(
+        database_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
     let version: Option<i64> = connection
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
@@ -971,6 +1048,7 @@ fn instructions(mode: Mode) -> String {
 fn audit_target(tool: &str, result: &Value) -> (&'static str, String) {
     let entity_type = match tool {
         "create_contact" | "update_contact" => "contact",
+        "capture_lead" => "opportunity",
         "create_company" | "update_company" => "company",
         "create_opportunity"
         | "update_opportunity"
@@ -978,12 +1056,17 @@ fn audit_target(tool: &str, result: &Value) -> (&'static str, String) {
         | "link_quote"
         | "link_job" => "opportunity",
         "log_activity" => "activity",
-        "create_task" | "complete_task" => "task",
+        "create_task" | "update_task" | "complete_task" | "reopen_task" | "drop_task" => "task",
         _ => "proposal",
     };
     let id = result
         .get("id")
         .or_else(|| result.get("entityId"))
+        .or_else(|| {
+            result
+                .get("opportunity")
+                .and_then(|opportunity| opportunity.get("id"))
+        })
         .and_then(Value::as_str)
         .unwrap_or(tool)
         .to_owned();
@@ -1179,6 +1262,17 @@ struct TimelineArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordBriefArgs {
+    parent_type: String,
+    parent_id: String,
+    #[serde(default)]
+    activity_limit: Option<usize>,
+    #[serde(default)]
+    task_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TaskListArgs {
     #[serde(default)]
     status: Option<String>,
@@ -1339,6 +1433,25 @@ struct CreateContactArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaptureLeadArgs {
+    name: String,
+    job_request: String,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    contact_id: Option<String>,
+    #[serde(default)]
+    next_step_title: Option<String>,
+    #[serde(default)]
+    next_step_due_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateContactArgs {
     contact_id: String,
     expected_version: i64,
@@ -1406,6 +1519,21 @@ struct CompleteTaskArgs {
     expected_version: i64,
     #[serde(default)]
     log_activity: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateTaskArgs {
+    task_id: String,
+    expected_version: i64,
+    patch: TaskPatch,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskActionArgs {
+    task_id: String,
+    expected_version: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1577,6 +1705,20 @@ fn tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "get_record_brief",
+            description: "One bounded follow-up packet: the target, directly linked records, recent activity, open tasks, and deterministic attention flags. Never includes attachments or calls a provider.",
+            write: false,
+            input_schema: schema(
+                json!({
+                    "parentType": choice(PARENT_TYPES, "Which record."),
+                    "parentId": text("Record id."),
+                    "activityLimit": json!({"type": "integer", "minimum": 1, "maximum": 25, "description": "Recent activities (default 10)."}),
+                    "taskLimit": json!({"type": "integer", "minimum": 1, "maximum": 25, "description": "Open tasks (default 10)."}),
+                }),
+                &["parentType", "parentId"],
+            ),
+        },
+        ToolDef {
             name: "list_tasks",
             description: "Follow-up tasks, optionally filtered by status, parent, or overdue.",
             write: false,
@@ -1597,6 +1739,15 @@ fn tools() -> Vec<ToolDef> {
             write: false,
             input_schema: schema(
                 json!({"referenceTime": text("UTC ISO-8601 instant to evaluate against.")}),
+                &[],
+            ),
+        },
+        ToolDef {
+            name: "get_work_queue",
+            description: "A bounded next-work queue: overdue or due-today open tasks, then neglected proposals and leads. Overdue task flags are folded into their task rows.",
+            write: false,
+            input_schema: schema(
+                json!({"referenceTime": text("RFC3339 instant with an offset; that offset defines the local day. Defaults to now in UTC.")}),
                 &[],
             ),
         },
@@ -1800,6 +1951,21 @@ fn tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "capture_lead",
+            description: "Capture an incoming job inquiry: creates or links a lead contact, a first-stage opportunity, and an optional next-step task in one transaction.",
+            write: true,
+            input_schema: schema(json!({
+                "name": text("Lead name."),
+                "jobRequest": text("What work they want."),
+                "phone": text("Optional phone number."),
+                "email": text("Optional email address."),
+                "note": text("Optional intake note."),
+                "contactId": text("Optional active contact to link without changing."),
+                "nextStepTitle": text("Optional follow-up task title."),
+                "nextStepDueAt": text("Optional UTC ISO-8601 task due time; requires nextStepTitle."),
+            }), &["name", "jobRequest"]),
+        },
+        ToolDef {
             name: "update_contact",
             description: "Update a contact; version-checked.",
             write: true,
@@ -1908,6 +2074,24 @@ fn tools() -> Vec<ToolDef> {
                 }),
                 &["taskId", "expectedVersion"],
             ),
+        },
+        ToolDef {
+            name: "update_task",
+            description: "Replace a task's editable fields, including its due date; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"}), "patch": record("Full editable task fields.")}), &["taskId", "expectedVersion", "patch"]),
+        },
+        ToolDef {
+            name: "reopen_task",
+            description: "Reopen a done or dropped task; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"})}), &["taskId", "expectedVersion"]),
+        },
+        ToolDef {
+            name: "drop_task",
+            description: "Drop an open task that no longer needs doing; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"})}), &["taskId", "expectedVersion"]),
         },
         ToolDef {
             name: "link_quote",

@@ -4,6 +4,7 @@ import type {
   Activity,
   ArchiveRequest,
   AttentionFlag,
+  WorkQueue,
   AttentionThresholds,
   Company,
   CompleteTaskRequest,
@@ -11,6 +12,8 @@ import type {
   ContactListItem,
   CreateCompanyRequest,
   CreateContactRequest,
+  CaptureLeadRequest,
+  CapturedLead,
   CreateOpportunityRequest,
   CreateSavedViewRequest,
   CreateTaskRequest,
@@ -31,6 +34,7 @@ import type {
   MoveOpportunityStageRequest,
   Opportunity,
   OpportunityDetail,
+  RecordBrief,
   OpportunityListItem,
   ParentType,
   SetAttentionThresholdsRequest,
@@ -120,6 +124,7 @@ export interface CoreClient {
   listCompanies(includeArchived: boolean): Promise<Company[]>;
   getCompany(companyId: string): Promise<Company>;
   createContact(request: CreateContactRequest): Promise<Contact>;
+  captureLead(request: CaptureLeadRequest): Promise<CapturedLead>;
   updateContact(request: UpdateContactRequest): Promise<Contact>;
   archiveContact(request: ArchiveRequest): Promise<Contact>;
   unarchiveContact(request: ArchiveRequest): Promise<Contact>;
@@ -148,6 +153,7 @@ export interface CoreClient {
   updateActivity(request: UpdateActivityRequest): Promise<Activity>;
   deleteActivity(request: DeleteActivityRequest): Promise<void>;
   getTimeline(parentType: ParentType, parentId: string, includeRelated: boolean): Promise<Activity[]>;
+  getRecordBrief(parentType: ParentType, parentId: string, activityLimit?: number, taskLimit?: number): Promise<RecordBrief>;
   createTask(request: CreateTaskRequest): Promise<Task>;
   updateTask(request: UpdateTaskRequest): Promise<Task>;
   completeTask(request: CompleteTaskRequest): Promise<Task>;
@@ -156,6 +162,7 @@ export interface CoreClient {
   deleteTask(request: TaskActionRequest): Promise<void>;
   listTasks(request: ListTasksRequest): Promise<Task[]>;
   getAttentionFlags(referenceTime?: string): Promise<AttentionFlag[]>;
+  getWorkQueue(referenceTime?: string): Promise<WorkQueue>;
   getAttentionThresholds(): Promise<AttentionThresholds>;
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
   // Where this device keeps its data — the agent helper needs the same path.
@@ -237,6 +244,7 @@ export const tauriCoreClient: CoreClient = {
   listCompanies: (includeArchived) => invoke("list_companies", { includeArchived }),
   getCompany: (companyId) => invoke("get_company", { companyId }),
   createContact: (request) => invoke("create_contact", { request }),
+  captureLead: (request) => invoke("capture_lead", { request }),
   updateContact: (request) => invoke("update_contact", { request }),
   archiveContact: (request) => invoke("archive_contact", { request }),
   unarchiveContact: (request) => invoke("unarchive_contact", { request }),
@@ -263,6 +271,8 @@ export const tauriCoreClient: CoreClient = {
   deleteActivity: (request) => invoke("delete_activity", { request }),
   getTimeline: (parentType, parentId, includeRelated) =>
     invoke("get_timeline", { parentType, parentId, includeRelated }),
+  getRecordBrief: (parentType, parentId, activityLimit, taskLimit) =>
+    invoke("get_record_brief", { parentType, parentId, activityLimit, taskLimit }),
   createTask: (request) => invoke("create_task", { request }),
   updateTask: (request) => invoke("update_task", { request }),
   completeTask: (request) => invoke("complete_task", { request }),
@@ -271,6 +281,7 @@ export const tauriCoreClient: CoreClient = {
   deleteTask: (request) => invoke("delete_task", { request }),
   listTasks: (request) => invoke("list_tasks", { request }),
   getAttentionFlags: (referenceTime) => invoke("get_attention_flags", { referenceTime }),
+  getWorkQueue: (referenceTime) => invoke("get_work_queue", { referenceTime }),
   getAttentionThresholds: () => invoke("get_attention_thresholds"),
   setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),
   previewContactImport: (path, mapping) => invoke("preview_contact_import", { path, mapping }),

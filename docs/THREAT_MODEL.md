@@ -351,7 +351,7 @@ write in read-only mode or to point the helper at somebody else's database.
 | --- | --- |
 | stdio transport only; no network listener anywhere in the helper | `src-tauri/src/mcp.rs:879-918`, `src-tauri/src/bin/contractorcrm-mcp.rs` |
 | Read-only is the default; write tools are absent from `tools/list` *and* refused by name with a stable `read_only` error rather than a silent no-op | `src-tauri/src/mcp.rs:279-324` |
-| A database written by a newer build is refused instead of blindly migrated; read-only mode never migrates at all | `src-tauri/src/mcp.rs:137-179` |
+| A database written by a newer build is refused instead of blindly migrated; read-only mode opens SQLite with `SQLITE_OPEN_READ_ONLY` and never migrates | `src-tauri/src/mcp.rs:137-179`, `src-tauri/src/storage.rs:627-634` |
 | A file without a readable `schema_migrations` table is refused, so the helper cannot create a CRM schema inside someone else's SQLite file | `src-tauri/src/mcp.rs:856-871` |
 | Writes are always attributed to `Actor::Agent`, plus a second audit row naming the client from `initialize` | `src-tauri/src/mcp.rs:828-848`, tool arms at `:586-757` |
 | The client-supplied name is trimmed and capped at 80 characters before it reaches the log | `src-tauri/src/mcp.rs:242-253` |
@@ -369,8 +369,9 @@ write in read-only mode or to point the helper at somebody else's database.
   JSON-RPC `-32600`, and the reader resynchronizes on the next line:
   `src-tauri/src/mcp.rs:65`, `879-947`. Probe:
   `tests/mcp.rs::an_oversized_stdio_message_is_refused_and_the_next_one_still_works`.
-- **Filed (low, defense in depth) — #48.** Read-only mode is enforced in the
-  tool layer only; the SQLite connection is opened read-write.
+- **Fixed (low, defense in depth) — #48.** Read-only mode now opens SQLite
+  with `SQLITE_OPEN_READ_ONLY` as well as omitting and refusing write tools;
+  `src-tauri/src/mcp.rs:153-156`, `src-tauri/src/storage.rs:627-634`.
 - No other defect found. Hostile arguments — traversal strings as ids, drive
   letters, out-of-range limits, SQL fragments in `query`, wrong JSON types —
   all come back as typed errors. Probe:
@@ -402,7 +403,7 @@ write in read-only mode or to point the helper at somebody else's database.
 | 3 | MCP stdio read had no message-size bound | MCP | Medium | Fixed, `mcp.rs:65`, `879-947` |
 | 4 | Archive verification buffers the whole archive and clones asset bytes; no entry-count cap | Archive | Medium | Filed [#46](https://github.com/ContractorKeith/contractorcrm/issues/46) |
 | 5 | Attachments open through the OS shell with any extension a hostile archive chooses | Attachments | High | Filed [#47](https://github.com/ContractorKeith/contractorcrm/issues/47) |
-| 6 | MCP read-only mode does not open SQLite read-only | MCP | Low | Filed [#48](https://github.com/ContractorKeith/contractorcrm/issues/48) |
+| 6 | MCP read-only mode did not open SQLite read-only | MCP | Low | Fixed, `mcp.rs:153-156`, `storage.rs:627-634` |
 | 7 | Archive import skips application-level field validation | Archive | Medium | Filed [#49](https://github.com/ContractorKeith/contractorcrm/issues/49) |
 | 8 | Prompt injection can produce a plausible wrong draft or summary | Provider context | Medium | Accepted; bounded, disclosed, validated, undoable |
 

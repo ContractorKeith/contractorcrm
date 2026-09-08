@@ -1,8 +1,8 @@
 # Architecture and stack
 
-Status: implemented through Slice 5 — AI provider adapters and the MCP stdio
-helper ship; packaging is the remaining planning baseline
-Updated: 2026-08-19
+Status: v0.1.0 released; source now includes Today, atomic lead capture, and
+personal-agent workflow improvements.
+Updated: 2026-09-08
 
 ## Recommendation
 
@@ -55,6 +55,10 @@ MCP helper ─── tool adapter ───┘             │
   attention flags
 - `followups` (`src/followups.rs`): history summaries, follow-up templates, and
   drafted follow-up tasks
+- `work_queue` (`src/work_queue.rs`): deterministic due/overdue and attention
+  projection with explicit local-day offset, shared by desktop and MCP
+- `record_brief` (`src/record_brief.rs`): bounded contact context, history, tasks,
+  and attention facts for a user-owned agent
 - `mcp` (`src/mcp.rs`): the stdio agent adapter and its tool table; the
   `contractorcrm-mcp` binary only parses the command line
 
@@ -66,7 +70,7 @@ The needs-attention rules ("no contact in 21 days", "proposal sent, no response"
 - Contact/company detail with the activity timeline
 - Pipeline view (list plus board — final form per the open DESIGN.md question)
 - Opportunity detail with linked quote/job references
-- Tasks and needs-attention views
+- Today work queue (default), plus Tasks and needs-attention views
 - Assistant affordances where the work happens rather than one panel: a
   proposal dialog with the typed diff, its context preview, and undo; a
   follow-up draft on contacts and opportunities; explanations on the

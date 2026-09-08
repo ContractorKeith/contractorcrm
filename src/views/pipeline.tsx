@@ -24,6 +24,7 @@ import {
 } from "../api/types";
 import { FollowupDraftPanel } from "../components/FollowupDraft";
 import { AssistantPrompt } from "../components/ProposalDialog";
+import { RecordPicker } from "../components/RecordPicker";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordAttachments } from "../components/RecordAttachments";
 import { RecordMetadata } from "../components/RecordMetadata";
@@ -1117,34 +1118,16 @@ export function OpportunityFormView({
           <Field label="Name" error={error.fields.name}>
             <input value={draft.name} onChange={(event) => set("name", event.target.value)} />
           </Field>
-          <Field label="Contact" error={error.fields.contactId}>
-            <select
-              value={draft.contactId}
-              onChange={(event) => set("contactId", event.target.value)}
-            >
-              <option value="">No contact</option>
-              {contacts.map((contact) => (
-                <option key={contact.id} value={contact.id}>
-                  {contact.displayName}
-                  {contact.archivedAt ? " (archived)" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Company" error={error.fields.companyId}>
-            <select
-              value={draft.companyId}
-              onChange={(event) => set("companyId", event.target.value)}
-            >
-              <option value="">No company</option>
-              {companies.map((company) => (
-                <option key={company.id} value={company.id}>
-                  {company.name}
-                  {company.archivedAt ? " (archived)" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <RecordPicker label="Contact" error={error.fields.contactId} value={draft.contactId}
+              onChange={(value) => set("contactId", value)}
+              options={contacts.map((contact) => ({ value: contact.id,
+                label: contact.displayName + (contact.archivedAt ? " (archived)" : ""),
+                archived: Boolean(contact.archivedAt) }))} />
+          <RecordPicker label="Company" error={error.fields.companyId} value={draft.companyId}
+              onChange={(value) => set("companyId", value)}
+              options={companies.map((company) => ({ value: company.id,
+                label: company.name + (company.archivedAt ? " (archived)" : ""),
+                archived: Boolean(company.archivedAt) }))} />
           {!opportunityId ? (
             <Field label="Stage" error={error.fields.stageId}>
               <select value={draft.stageId} onChange={(event) => set("stageId", event.target.value)}>

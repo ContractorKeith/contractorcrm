@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import type { CoreClient } from "./api/client";
 import { ContextDisclosure } from "./components/ContextDisclosure";
 import {
   makeActivity,
@@ -13,6 +14,11 @@ import {
   makeTask,
   stubClient,
 } from "./test/stub-client";
+
+function renderContacts(client: CoreClient) {
+  render(<App client={client} />);
+  fireEvent.click(screen.getByRole("button", { name: "Contacts" }));
+}
 
 // Cross-surface accessibility guarantees: names, focus movement, and live
 // regions that are easy to regress in ordinary feature work.
@@ -26,7 +32,7 @@ describe("accessibility", () => {
   });
 
   it("captions record tables with the row count and the keyboard model", async () => {
-    render(<App client={stubClient({ listContacts: vi.fn().mockResolvedValue([makeContact()]) })} />);
+    renderContacts(stubClient({ listContacts: vi.fn().mockResolvedValue([makeContact()]) }));
 
     const table = await screen.findByRole("table", { name: "Contact list" });
     expect(within(table).getByText(/1 row\./)).toBeInTheDocument();
@@ -34,18 +40,14 @@ describe("accessibility", () => {
   });
 
   it("gives the favorite column readable text instead of a bare star", async () => {
-    render(
-      <App
-        client={stubClient({
+    renderContacts(stubClient({
           listContacts: vi
             .fn()
             .mockResolvedValue([
               makeContact({ id: "c1", displayName: "Dana Ruiz", favorite: true }),
               makeContact({ id: "c2", displayName: "Avery Cole", favorite: false }),
             ]),
-        })}
-      />,
-    );
+        }));
 
     const table = await screen.findByRole("table", { name: "Contact list" });
     const dana = within(table).getByText("Dana Ruiz").closest("tr")!;
@@ -56,7 +58,7 @@ describe("accessibility", () => {
 
   it("moves focus to the workspace when the view changes so it is never lost", async () => {
     const user = userEvent.setup();
-    render(<App client={stubClient({ listContacts: vi.fn().mockResolvedValue([makeContact()]) })} />);
+    renderContacts(stubClient({ listContacts: vi.fn().mockResolvedValue([makeContact()]) }));
 
     await screen.findByRole("table", { name: "Contact list" });
     await user.click(screen.getByRole("button", { name: "Companies" }));
@@ -74,7 +76,7 @@ describe("accessibility", () => {
         .mockResolvedValue([makeActivity({ id: "a1", kind: "call", summary: "Left a voicemail" })]),
     });
 
-    render(<App client={client} />);
+    renderContacts(client);
     await user.click(await screen.findByText("Dana Ruiz"));
 
     const list = await screen.findByRole("list", { name: "Activity entries" });
@@ -94,7 +96,7 @@ describe("accessibility", () => {
         .mockResolvedValue([makeActivity({ id: "a1", kind: "call", summary: "Left a voicemail" })]),
     });
 
-    render(<App client={client} />);
+    renderContacts(client);
     await user.click(await screen.findByText("Dana Ruiz"));
 
     const list = await screen.findByRole("list", { name: "Activity entries" });

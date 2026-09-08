@@ -621,6 +621,25 @@ impl Storage {
         })
     }
 
+    /// Open an existing database with SQLite's read-only flag. This is for
+    /// callers that promised the user no writes at all, including incidental
+    /// journal or pragma writes.
+    pub fn open_read_only(database_path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let database_path = database_path.as_ref().to_path_buf();
+        refuse_empty_database(&database_path)?;
+        let connection =
+            Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        // Foreign keys are a connection-local read setting. Do not set WAL
+        // here: journal_mode can write and violates the read-only contract.
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|error| unreadable_database(&database_path, error))?;
+        Ok(Self {
+            database_path,
+            connection,
+        })
+    }
+
     /// Fully migrated throwaway database that never touches the filesystem —
     /// the archive import dry run applies an untrusted archive here first, so
     /// constraint failures surface before the live database is touched.

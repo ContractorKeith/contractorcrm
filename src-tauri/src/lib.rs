@@ -9,8 +9,10 @@ pub mod explain;
 pub mod followups;
 pub mod mcp;
 pub mod proposals;
+pub mod record_brief;
 pub mod seed;
 pub mod storage;
+pub mod work_queue;
 
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +21,10 @@ use ai::{
     SetAiSettingsRequest,
 };
 use application::{
-    ArchiveRequest, CompleteTaskRequest, ContactImportMapping, ContactImportPreview,
-    ContactImportSummary, ContactListItem, CreateCompanyRequest, CreateContactRequest,
-    CreateCustomFieldDefRequest, CreateOpportunityRequest, CreateSavedViewRequest,
-    CreateTagRequest, CreateTaskRequest, CsvExportReport, CustomFieldDef,
+    ArchiveRequest, CaptureLeadRequest, CapturedLead, CompleteTaskRequest, ContactImportMapping,
+    ContactImportPreview, ContactImportSummary, ContactListItem, CreateCompanyRequest,
+    CreateContactRequest, CreateCustomFieldDefRequest, CreateOpportunityRequest,
+    CreateSavedViewRequest, CreateTagRequest, CreateTaskRequest, CsvExportReport, CustomFieldDef,
     CustomFieldDefArchiveRequest, DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest,
     EnvelopeExportReport, ImportContactsRequest, LinkJobRequest, LinkQuoteRequest,
     ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
@@ -46,9 +48,11 @@ use proposals::{
     ApplyProposalRequest, Proposal, ProposalApplied, ProposalEntityType, ProposalStore,
     ProposalUndone, UndoProposalRequest,
 };
+use record_brief::RecordBrief;
 use serde::{Deserialize, Serialize};
 use storage::Storage;
 use tauri::{Manager, State};
+use work_queue::WorkQueue;
 
 /// Major version of the application command contract shared by the desktop
 /// UI and future local-agent adapters.
@@ -92,6 +96,7 @@ macro_rules! with_local_api_v1_commands {
             list_companies,
             get_company,
             create_contact,
+            capture_lead,
             update_contact,
             archive_contact,
             unarchive_contact,
@@ -111,6 +116,7 @@ macro_rules! with_local_api_v1_commands {
             update_activity,
             delete_activity,
             get_timeline,
+            get_record_brief,
             create_task,
             update_task,
             complete_task,
@@ -124,6 +130,7 @@ macro_rules! with_local_api_v1_commands {
             unlink_job,
             export_handoff_envelope,
             get_attention_flags,
+            get_work_queue,
             get_attention_thresholds,
             set_attention_thresholds,
             backup_database,
@@ -450,6 +457,15 @@ fn create_contact(
 }
 
 #[tauri::command]
+fn capture_lead(
+    storage: State<'_, SharedStorage>,
+    request: CaptureLeadRequest,
+) -> Result<CapturedLead, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::capture_lead(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
 fn update_contact(
     storage: State<'_, SharedStorage>,
     request: UpdateContactRequest,
@@ -621,6 +637,25 @@ fn get_timeline(
         .map_err(Into::into)
 }
 
+#[tauri::command]
+fn get_record_brief(
+    storage: State<'_, SharedStorage>,
+    parent_type: String,
+    parent_id: String,
+    activity_limit: Option<usize>,
+    task_limit: Option<usize>,
+) -> Result<RecordBrief, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    record_brief::get_record_brief(
+        &storage,
+        &parent_type,
+        &parent_id,
+        activity_limit,
+        task_limit,
+    )
+    .map_err(Into::into)
+}
+
 // Task commands — follow-ups with due dates, reminders, and priorities.
 
 #[tauri::command]
@@ -750,6 +785,17 @@ fn get_attention_flags(
 ) -> Result<Vec<AttentionFlag>, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::get_attention_flags(&storage, reference_time).map_err(Into::into)
+}
+
+/// Deterministic next-work projection. An explicit RFC3339 timestamp with an
+/// offset lets the caller define what "today" means.
+#[tauri::command]
+fn get_work_queue(
+    storage: State<'_, SharedStorage>,
+    reference_time: Option<String>,
+) -> Result<WorkQueue, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_work_queue(&storage, reference_time).map_err(Into::into)
 }
 
 #[tauri::command]

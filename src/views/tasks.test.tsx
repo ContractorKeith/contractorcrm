@@ -74,7 +74,8 @@ describe("tasks view", () => {
     expect(screen.getByRole("button", { name: "Set reminder" })).toBeVisible();
 
     await user.type(screen.getByLabelText("Title"), "Call inspector");
-    await user.selectOptions(await screen.findByLabelText("Linked to"), "contact:contact-1");
+    await user.click(await screen.findByRole("combobox", { name: "Linked to" }));
+    await user.click(screen.getByRole("option", { name: /Contact —/ }));
     await user.selectOptions(screen.getByLabelText("Priority"), "high");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 

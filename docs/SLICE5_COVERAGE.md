@@ -9,11 +9,11 @@ function name in that file. Rust unit tests live in the `mod tests` block at the
 bottom of the named source file.
 
 The tool table itself is pinned: `mcp.rs::the_advertised_tool_surface_is_exactly_the_documented_one`
-compares `tools/list` against the 39 names below and against the published
+compares `tools/list` against the 45 names below and against the published
 command list in `schemas/v1/local-api.json`, so a tool cannot be added or
 renamed without this file being revisited.
 
-## MCP tools (39)
+## MCP tools (45)
 
 All tests in this table live in `src-tauri/tests/mcp.rs` unless another file is
 named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
@@ -32,8 +32,10 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | `list_stages` | "Initial tools → Read" | `an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them` |
 | `list_lost_reasons` | "Initial tools → Read" | `an_agent_can_discover_stage_and_lost_reason_ids_and_move_work_with_them` |
 | `get_timeline` | "Initial tools → Read", "Agent onboarding" (bounds) | `a_timeline_is_capped_and_its_bodies_truncated` |
+| `get_record_brief` | "Initial tools → Read" | `record_brief_is_bounded_and_keeps_unrelated_records_out` |
 | `list_tasks` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface`, `list_tools_take_a_limit_and_refuse_an_unusable_one` |
 | `get_attention_flags` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface`, `explain_attention_flag_answers_the_flag_get_attention_flags_returned` |
+| `get_work_queue` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface`, `tests/work_queue.rs::queue_uses_the_supplied_offset_and_keeps_an_overdue_task_once` |
 | `list_saved_views` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
 | `list_tags` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
 | `list_custom_field_defs` | "Initial tools → Read" | `the_read_tools_answer_for_every_record_and_metadata_surface` |
@@ -60,6 +62,7 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | `apply_proposal` | "Initial tools → Write" | `a_draft_can_be_proposed_applied_and_undone_over_mcp`, `an_unknown_draft_surfaces_proposal_expired`, `propose_followup_drafts_from_a_template_and_applies_as_a_task` |
 | `undo_proposal` | "Initial tools → Write" | `a_draft_can_be_proposed_applied_and_undone_over_mcp`; `tests/proposals.rs::undoing_an_update_restores_the_stored_before_image` |
 | `create_contact` | "Initial tools → Write" | `writes_are_logged_against_the_agent_actor_and_the_client_name`, `record_rules_and_the_lost_reason_rule_carry_their_own_error_kinds` |
+| `capture_lead` | "Initial tools → Write" | `capture_lead_is_an_atomic_read_write_tool`, `tests/capture_lead.rs::capture_lead_rolls_back_a_created_contact_opportunity_and_audit_rows_when_the_task_insert_fails` |
 | `update_contact` | "Initial tools → Write" | `a_stale_expected_version_surfaces_the_version_conflict_payload` |
 | `create_company` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path` |
 | `update_company` | "Initial tools → Write" | `every_write_tool_round_trips_through_the_ordinary_application_path`, `every_version_checked_write_reports_the_conflict_over_mcp` |
@@ -84,7 +87,7 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | Every write logs the agent actor and the client name | "Agent onboarding", "Context and privacy" | `writes_are_logged_against_the_agent_actor_and_the_client_name` |
 | Stdio transport, graceful shutdown, read-only default binary | "Agent onboarding" | `the_shipped_binary_serves_a_handshake_and_a_read_over_stdio` |
 | Missing, foreign, or newer-schema database refused | "Agent onboarding" | `the_binary_refuses_a_missing_database`, `a_foreign_sqlite_file_is_refused_rather_than_given_a_contractorcrm_schema` |
-| Read-only never migrates; `--read-write` may | "Agent onboarding" | `a_read_only_helper_refuses_an_older_database_instead_of_migrating_it`, `a_read_write_helper_may_still_migrate_an_older_database` |
+| Read-only opens SQLite read-only and never migrates; `--read-write` may | "Agent onboarding" | `a_read_only_helper_refuses_an_older_database_instead_of_migrating_it`, `a_read_write_helper_may_still_migrate_an_older_database`, `tests/storage.rs::read_only_storage_can_read_a_wal_database_but_sqlite_refuses_writes` |
 | The keychain is untouched while the assistant is off | ARCHITECTURE.md "AI rules" | `tests/ai_provider.rs::reading_settings_while_disabled_never_reads_the_credential_store`, `tests/ai_provider.rs::a_disabled_assistant_reaches_no_provider_and_no_credential_store` |
 | An applied draft is undoable even if its audit row fails | LOCAL_API.md "Initial tools → Write" | `tests/proposals.rs::a_failed_audit_row_still_leaves_the_apply_undoable` |
 | An API key never reaches a log line | ARCHITECTURE.md "AI rules" | `src/ai.rs::debugging_a_call_never_prints_the_api_key` (unit) |
@@ -97,6 +100,9 @@ named. Docs references are to `docs/LOCAL_API.md` unless another file is named.
 | Timeline entries per call | 200 (`MAX_TIMELINE_ENTRIES`) | LOCAL_API.md "Agent onboarding" | `mcp.rs::a_timeline_is_capped_and_its_bodies_truncated` |
 | Timeline body characters | 500 (`MAX_TIMELINE_BODY_CHARS`) | LOCAL_API.md "Agent onboarding" | `mcp.rs::a_timeline_is_capped_and_its_bodies_truncated`, `src/mcp.rs::a_long_activity_body_is_truncated_with_a_marker` (unit) |
 | List tool `limit` | 1–500 (`MAX_LIST_LIMIT`) | LOCAL_API.md "Agent onboarding" | `mcp.rs::list_tools_take_a_limit_and_refuse_an_unusable_one` |
+| Work queue rows | 50 (`MAX_WORK_QUEUE_ITEMS`) | LOCAL_API.md "Initial tools → Read" | `tests/work_queue.rs::queue_is_capped_after_task_and_attention_ordering` |
+| Record brief activities / tasks | default 10, max 25 each | LOCAL_API.md "Initial tools → Read" | `mcp.rs::record_brief_is_bounded_and_keeps_unrelated_records_out` |
+| Record brief text / details | 500 characters; stage history and channels 25 | LOCAL_API.md "Initial tools → Read" | `mcp.rs::record_brief_is_bounded_and_keeps_unrelated_records_out` |
 | Proposal description / update request | 2000 chars | LOCAL_API.md "Initial tools → Propose" | `src/proposals.rs::a_blank_or_over_long_description_is_refused_before_the_model_is_asked` (unit) |
 | Proposal warnings per draft | 12 (`MAX_WARNINGS`) | LOCAL_API.md "Initial tools → Propose" | `src/proposals.rs::a_chatty_answer_never_returns_more_than_the_warning_cap` (unit) |
 | Proposal context value characters | 200 (`MAX_PROJECTION_VALUE_CHARS`) | LOCAL_API.md "Initial tools → Propose" | `src/proposals.rs::the_context_projection_is_bounded_and_leaves_out_empty_fields` (unit) |
