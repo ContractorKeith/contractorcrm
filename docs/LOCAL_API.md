@@ -44,6 +44,8 @@ Wire it into an agent client with the command line Settings → Backup & Data �
   anyway returns the `read_only` error kind naming the command. The mode is
   whatever the helper was launched with, so it is reversible: drop
   `--read-write` and restart the client.
+- In read-only mode the helper opens SQLite with read-only flags. It never
+  creates or migrates the database.
 - A missing database, a file with no readable `schema_migrations` table (it is
   not a ContractorCRM database), or one written by a newer build than the
   helper knows, is refused on stderr with a nonzero exit rather than migrated.
@@ -93,7 +95,8 @@ rather than paged with a cursor (see "Context and privacy").
 - `get_timeline(parentType, parentId, includeRelated?, limit?, fullBodies?)`
 - `get_record_brief(parentType, parentId, activityLimit?, taskLimit?)` — one bounded follow-up packet. `parentType` is `contact`, `company`, or `opportunity`; both limits are integers from 1–25 (default 10). It returns the canonical record, directly linked contact/company records, recent activity (including the target's directly related opportunities), the target's open tasks, and deterministic flags for that record or returned task. Text caps at 500 characters; stage history and contact channels cap at 25. `activitiesTruncated`, `tasksTruncated`, `activityTextTruncated`, `taskTextTruncated`, `recordTextTruncated`, and `recordDetailsTruncated` report every omission or shortening. It excludes attachment bytes, unrelated records, credentials, and provider calls.
 - `list_tasks(status?, overdueOnly?, parentType?, parentId?, limit?)`
-- `get_attention_flags(referenceTime?)` — deterministic stale-lead / overdue / no-response flags, evaluated against `referenceTime` (UTC ISO-8601) or now
+- `get_attention_flags(referenceTime?)` — deterministic stale-lead / overdue / no-response flags, evaluated against `referenceTime` (RFC3339 instant) or now
+- `get_work_queue(referenceTime?)` — the next 50 actionable rows: overdue and local-day due-today open tasks, then proposal-no-response and stale-lead flags. `referenceTime` is an RFC3339 timestamp with an offset; its offset defines `localDate` and defaults to UTC when omitted. Results carry `truncated`; overdue-task flags are folded into their task row. Task rows contain only id, title, parent link, due time, priority, and version; no provider is called.
 - `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
 - `list_tags(includeArchived?)`, `list_custom_field_defs(entityType, includeArchived?)`, and `get_record_metadata(entityType, recordId)`
 - `match_saved_view(entityType, definition)` — desktop command; not an MCP tool in v1
@@ -214,6 +217,8 @@ behavior — each running process holds its own drafts, so a draft cannot be
 proposed in one client and applied from another.
 
 ### Write
+
+- `capture_lead(request)` — atomically creates an active lead contact (or reuses the specified active `contactId` unchanged), its linked opportunity, and an optional linked next-step task. `name` and `jobRequest` are required; phone, email, note, `nextStepTitle`, and `nextStepDueAt` are optional. Any validation or write failure rolls back every record and audit row. Returns `CapturedLead { contact, opportunity, task }`; this is a read-write-only MCP tool.
 
 - `apply_proposal(request)` — `{actor?, proposalId, expectedVersions?}`. Takes
   the draft (single use), re-checks every asserted version plus the version the

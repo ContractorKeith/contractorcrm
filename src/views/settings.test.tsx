@@ -11,9 +11,9 @@ import { makeContact, makeFollowupTemplates, stubClient } from "../test/stub-cli
 // Native file dialogs only exist inside Tauri, so stand them in for tests.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
-// Open the Backup & Data tab from the shell.
+// Open the Settings tab from the shell.
 async function openDataView(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: "Backup & Data" }));
+  await user.click(await screen.findByRole("button", { name: "Settings" }));
   return screen.findByRole("heading", { name: "Settings" });
 }
 
@@ -104,6 +104,7 @@ describe("backup and data view", () => {
     });
 
     render(<App client={client} />);
+    await user.click(screen.getByRole("button", { name: "Contacts" }));
     expect(await screen.findByText("Old Data")).toBeVisible();
     await openDataView(user);
     await user.click(screen.getByRole("button", { name: "Import archive…" }));

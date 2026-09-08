@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { makeContact, stubClient } from "./test/stub-client";
+import { makeContact, makeOpportunity, makeOpportunityDetail, stubClient } from "./test/stub-client";
 
 describe("crm shell", () => {
   beforeEach(() => {
@@ -16,7 +16,31 @@ describe("crm shell", () => {
 
     expect(screen.getByRole("link", { name: "ContractorCRM home" })).toBeVisible();
     expect(await screen.findByRole("heading", { name: "No follow-ups need work today." })).toBeVisible();
-    expect(await screen.findByText("Core ready · v0.1.0")).toBeVisible();
+    expect(await screen.findByText("On this device")).toBeVisible();
+  });
+
+  it("captures an inquiry from Today and opens its saved opportunity", async () => {
+    const user = userEvent.setup();
+    const contact = makeContact({ displayName: "Avery Cole" });
+    const opportunity = makeOpportunity({ name: "Kitchen repair", contactId: contact.id });
+    const client = stubClient({
+      captureLead: vi.fn().mockResolvedValue({ contact, opportunity, task: null }),
+      getOpportunity: vi.fn().mockResolvedValue(makeOpportunityDetail({ ...opportunity })),
+      getContact: vi.fn().mockResolvedValue(contact),
+    });
+    render(<App client={client} />);
+    await user.click(screen.getByRole("button", { name: "New lead" }));
+    expect(screen.getByRole("dialog", { name: "New lead" })).toBeVisible();
+    expect(screen.getByLabelText("Lead name")).toHaveFocus();
+    await user.type(screen.getByLabelText("Lead name"), "Avery Cole");
+    await user.type(screen.getByLabelText("Job or request"), "Kitchen repair");
+    await user.click(screen.getByRole("button", { name: "Save lead" }));
+    expect(client.captureLead).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Avery Cole", jobRequest: "Kitchen repair",
+    }));
+    expect(await screen.findByRole("heading", { name: "Kitchen repair" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "New lead" })).toBeNull();
+    expect(screen.getByRole("main")).toHaveFocus();
   });
 
   it("lets the user override the system theme and persists the choice", async () => {

@@ -82,6 +82,19 @@ docs/release/ACCEPTANCE.md. The repo is public. Still open: Keith's Windows
 installed-acceptance run (checklist in ACCEPTANCE.md) and the post-v0.1.0
 backlog (#27, #46–#49, #56–#57, #59–#64).
 
+## Current workflow improvements
+
+Post-v0.1 source improvements make Today the starting view, combining due tasks
+and neglected leads with direct completion. New lead captures a contact,
+opportunity, and optional follow-up atomically; record-link fields filter by
+name. Settings provides copyable personal-agent MCP configuration. The helper
+now has 45 tools, including bounded work queues and record briefs plus task
+reschedule/reopen/drop controls, and opens SQLite read-only by default. These
+changes preserve the existing offline core, schema version, and API major version.
+See `docs/LOCAL_API.md` and `docs/SLICE5_COVERAGE.md` for contracts and coverage.
+The published v0.1.0 installers remain the previous release until a new release
+is packaged and verified.
+
 ## Planning baseline
 
 - `docs/PRODUCT_BRIEF.md` is the product scope. Start here.

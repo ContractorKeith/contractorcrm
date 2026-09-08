@@ -108,11 +108,11 @@
   --layout-page-gutter: clamp(18px, 3vw, 42px);
   --layout-content-max: 1120px;
   --layout-inline-total: 36px;
-  --layout-workspace-padding: clamp(42px, 7vw, 86px) 0 72px;
+  --layout-workspace-padding: var(--space-8) 0 var(--space-8);
   --layout-hero-max: 700px;
   --layout-copy-max: 56ch;
   --layout-empty-copy-max: 46ch;
-  --layout-section-gap: clamp(52px, 8vw, 92px);
+  --layout-section-gap: var(--space-8);
   --layout-empty-min-height: 250px;
   --control-height-small: 28px;
   --brand-tile-radius: 0;
@@ -535,6 +535,7 @@ h1 {
 
 .view-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-bottom: var(--space-6);
 }
