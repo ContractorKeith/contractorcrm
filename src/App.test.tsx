@@ -15,7 +15,7 @@ describe("crm shell", () => {
     render(<App client={stubClient()} />);
 
     expect(screen.getByRole("link", { name: "ContractorCRM home" })).toBeVisible();
-    expect(await screen.findByRole("heading", { name: "No contacts yet" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "No follow-ups need work today." })).toBeVisible();
     expect(await screen.findByText("Core ready · v0.1.0")).toBeVisible();
   });
 

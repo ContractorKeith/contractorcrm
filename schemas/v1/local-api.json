@@ -64,6 +64,7 @@
     {"name":"unlink_job","mode":"write","input":[{"name":"request","type":"UnlinkHandoffRequest","required":true}],"output":"Opportunity"},
     {"name":"export_handoff_envelope","mode":"write","input":[{"name":"opportunityId","type":"string","required":true},{"name":"destinationPath","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"EnvelopeExportReport"},
     {"name":"get_attention_flags","mode":"read","input":[{"name":"referenceTime","type":"string","required":false}],"output":"AttentionFlag[]"},
+    {"name":"get_work_queue","mode":"read","input":[{"name":"referenceTime","type":"string","required":false}],"output":"WorkQueue"},
     {"name":"get_attention_thresholds","mode":"read","input":[],"output":"Thresholds"},
     {"name":"set_attention_thresholds","mode":"write","input":[{"name":"request","type":"SetAttentionThresholdsRequest","required":true}],"output":"Thresholds"},
     {"name":"backup_database","mode":"write","input":[{"name":"destinationPath","type":"string","required":true},{"name":"overwrite","type":"boolean","required":true}],"output":"DatabaseInfo"},

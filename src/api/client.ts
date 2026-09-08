@@ -4,6 +4,7 @@ import type {
   Activity,
   ArchiveRequest,
   AttentionFlag,
+  WorkQueue,
   AttentionThresholds,
   Company,
   CompleteTaskRequest,
@@ -156,6 +157,7 @@ export interface CoreClient {
   deleteTask(request: TaskActionRequest): Promise<void>;
   listTasks(request: ListTasksRequest): Promise<Task[]>;
   getAttentionFlags(referenceTime?: string): Promise<AttentionFlag[]>;
+  getWorkQueue(referenceTime?: string): Promise<WorkQueue>;
   getAttentionThresholds(): Promise<AttentionThresholds>;
   setAttentionThresholds(request: SetAttentionThresholdsRequest): Promise<AttentionThresholds>;
   // Where this device keeps its data — the agent helper needs the same path.
@@ -271,6 +273,7 @@ export const tauriCoreClient: CoreClient = {
   deleteTask: (request) => invoke("delete_task", { request }),
   listTasks: (request) => invoke("list_tasks", { request }),
   getAttentionFlags: (referenceTime) => invoke("get_attention_flags", { referenceTime }),
+  getWorkQueue: (referenceTime) => invoke("get_work_queue", { referenceTime }),
   getAttentionThresholds: () => invoke("get_attention_thresholds"),
   setAttentionThresholds: (request) => invoke("set_attention_thresholds", { request }),
   previewContactImport: (path, mapping) => invoke("preview_contact_import", { path, mapping }),

@@ -606,6 +606,49 @@ export interface AttentionFlag {
   explanation: string;
 }
 
+// The small, deterministic next-work projection. `localDate` is calculated
+// using the offset in referenceTime, never an inferred browser time zone.
+export type WorkQueueTaskReason = "overdue" | "due_today";
+
+export interface WorkQueueTask {
+  id: string;
+  title: string;
+  parentType: ParentType | null;
+  parentId: string | null;
+  dueAt: string;
+  priority: TaskPriority;
+  version: number;
+}
+
+export interface WorkQueueRecord {
+  recordType: ParentType;
+  recordId: string;
+  displayName: string;
+}
+
+export type WorkQueueItem =
+  | {
+      kind: "task";
+      task: WorkQueueTask;
+      reason: WorkQueueTaskReason;
+      linkedRecord: WorkQueueRecord | null;
+    }
+  | {
+      kind: "attention";
+      rule: Exclude<AttentionRule, "overdue_task">;
+      recordType: Exclude<AttentionRecordType, "task">;
+      recordId: string;
+      recordDisplayName: string;
+      explanation: string;
+    };
+
+export interface WorkQueue {
+  referenceTime: string;
+  localDate: string;
+  items: WorkQueueItem[];
+  truncated: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // CSV import / export
 // ---------------------------------------------------------------------------

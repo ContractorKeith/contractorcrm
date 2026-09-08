@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod proposals;
 pub mod seed;
 pub mod storage;
+pub mod work_queue;
 
 use std::sync::{Arc, Mutex};
 
@@ -49,6 +50,7 @@ use proposals::{
 use serde::{Deserialize, Serialize};
 use storage::Storage;
 use tauri::{Manager, State};
+use work_queue::WorkQueue;
 
 /// Major version of the application command contract shared by the desktop
 /// UI and future local-agent adapters.
@@ -124,6 +126,7 @@ macro_rules! with_local_api_v1_commands {
             unlink_job,
             export_handoff_envelope,
             get_attention_flags,
+            get_work_queue,
             get_attention_thresholds,
             set_attention_thresholds,
             backup_database,
@@ -750,6 +753,17 @@ fn get_attention_flags(
 ) -> Result<Vec<AttentionFlag>, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     application::get_attention_flags(&storage, reference_time).map_err(Into::into)
+}
+
+/// Deterministic next-work projection. An explicit RFC3339 timestamp with an
+/// offset lets the caller define what "today" means.
+#[tauri::command]
+fn get_work_queue(
+    storage: State<'_, SharedStorage>,
+    reference_time: Option<String>,
+) -> Result<WorkQueue, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    application::get_work_queue(&storage, reference_time).map_err(Into::into)
 }
 
 #[tauri::command]
