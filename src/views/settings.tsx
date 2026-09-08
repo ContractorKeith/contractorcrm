@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { CoreClient } from "../api/client";
 import { isCommandError, type AiSettings, type FollowupTemplate } from "../api/types";
+import { AgentAccess } from "../components/AgentAccess";
 import { ArchiveImportDialog, totalRecords } from "../components/ArchiveImportDialog";
 import { Field } from "./form-support";
 
@@ -214,99 +215,6 @@ function AiAssistantSection({ client }: SettingsViewProps) {
   );
 }
 
-/** Agent access: how to wire the MCP helper into an agent client, and what
- *  each mode allows. Read-only display — the mode is chosen at launch. */
-function AgentAccessSection({ client }: SettingsViewProps) {
-  const [databasePath, setDatabasePath] = useState<string | null>(null);
-  const [helperPath, setHelperPath] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // The helper ships next to the app executable, so the command line the user
-  // copies has to name that file — it is not on anyone's PATH.
-  useEffect(() => {
-    let active = true;
-    void client
-      .getAgentHelperPath()
-      .then((resolved) => {
-        if (active) setHelperPath(resolved);
-      })
-      .catch(() => {
-        // Fall back to the bare name; the surrounding copy explains the rest.
-        if (active) setHelperPath(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [client]);
-
-  useEffect(() => {
-    let active = true;
-    void client
-      .getDatabaseInfo()
-      .then((info) => {
-        if (active) setDatabasePath(info.databasePath);
-      })
-      .catch((rejection: unknown) => {
-        if (active)
-          setError(
-            isCommandError(rejection)
-              ? rejection.message
-              : "The database location could not be read.",
-          );
-      });
-    return () => {
-      active = false;
-    };
-  }, [client]);
-
-  const path = databasePath ?? "<your database path>";
-  const helper = helperPath ? `"${helperPath}"` : "contractorcrm-mcp";
-
-  return (
-    <div className="data-section">
-      <h3>Agent access (MCP)</h3>
-      <p>
-        ContractorCRM ships a helper that lets an AI agent read — and, if you allow it, change —
-        your CRM through the same rules the app itself follows. The agent client launches the
-        helper on this machine; nothing is opened to the network.
-      </p>
-
-      <Field label="Read-only (recommended)">
-        <input type="text" readOnly value={`${helper} --database "${path}"`} />
-      </Field>
-      <p>
-        Look up contacts, companies, opportunities, history, tasks, and flags, and draft changes
-        for you to review. Nothing is written.
-      </p>
-
-      <Field label="Read and write">
-        <input
-          type="text"
-          readOnly
-          value={`${helper} --database "${path}" --read-write`}
-        />
-      </Field>
-      <p>
-        Adds the write commands. Every change is version-checked, recorded in the audit log
-        against the agent and its client name, and can be undone right after it is applied.
-      </p>
-
-      <p className="data-section__disclosure">
-        The mode is whatever you launch the helper with, so it is reversible: drop{" "}
-        <code>--read-write</code> from your agent client's configuration and restart it to go back
-        to read-only. Backups, archive import/export, and CSV import/export stay in this app and
-        are not offered to agents.
-      </p>
-
-      {error ? (
-        <p role="alert" className="saved-views__error">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 /** Follow-up templates: the wordings drafting starts from. Usable with the
  *  assistant off, so this section is always available. */
 function FollowupTemplatesSection({ client }: SettingsViewProps) {
@@ -449,9 +357,9 @@ export function SettingsView({ client }: SettingsViewProps) {
   };
 
   return (
-    <section className="crm-section" aria-label="Backup and data">
+    <section className="crm-section" aria-label="Settings">
       <div className="section-rule">
-        <h2>Backup &amp; Data</h2>
+        <h2>Settings</h2>
       </div>
 
       <div className="data-section">
@@ -480,9 +388,9 @@ export function SettingsView({ client }: SettingsViewProps) {
         ) : null}
       </div>
 
-      <AiAssistantSection client={client} />
+      <AgentAccess client={client} />
 
-      <AgentAccessSection client={client} />
+      <AiAssistantSection client={client} />
 
       <FollowupTemplatesSection client={client} />
 
