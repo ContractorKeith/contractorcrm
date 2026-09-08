@@ -42,4 +42,17 @@ describe("today view", () => {
     await user.click(await screen.findByRole("button", { name: "Dana Ruiz" }));
     await waitFor(() => expect(client.getContact).toHaveBeenCalledWith("contact-1"));
   });
+
+  it("shows a visible reload path for conflicts and can retry a failed load", async () => {
+    const user = userEvent.setup();
+    const task = makeTask({ id: "task-1", version: 4, title: "Call Dana" });
+    const getWorkQueue = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("locked"))
+      .mockResolvedValue({ referenceTime: "2026-09-08T08:00:00-04:00", localDate: "2026-09-08", truncated: false, items: [{ kind: "task", task, reason: "due_today", linkedRecord: null }] });
+    render(<App client={stubClient({ getWorkQueue, completeTask: vi.fn().mockRejectedValue({ kind: "version_conflict", message: "stale", resource: "task", recordId: "task-1", expectedVersion: 4, currentVersion: 5 }) })} />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await user.click(await screen.findByRole("button", { name: "Complete" }));
+    expect(await screen.findByRole("button", { name: "Reload latest" })).toBeVisible();
+  });
 });

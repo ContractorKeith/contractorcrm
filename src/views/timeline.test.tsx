@@ -7,6 +7,7 @@ import { makeActivity, makeContact, stubClient } from "../test/stub-client";
 
 // Open the seeded contact's detail view, where the timeline lives.
 async function openContactDetail(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Contacts" }));
   await user.click(await screen.findByText("Dana Ruiz"));
   await screen.findByRole("heading", { name: /Dana Ruiz/ });
 }

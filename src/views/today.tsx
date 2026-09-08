@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoreClient } from "../api/client";
 import type { ParentType, WorkQueue, WorkQueueItem } from "../api/types";
-import { GeneralError, NO_SAVE_ERROR, saveErrorFrom, type SaveError } from "./form-support";
+import { ConflictBanner, GeneralError, NO_SAVE_ERROR, saveErrorFrom, type SaveError } from "./form-support";
 import "./today.css";
 
 interface TodayViewProps {
@@ -24,9 +24,12 @@ function taskReason(item: Extract<WorkQueueItem, { kind: "task" }>) {
   return item.reason === "overdue" ? "Overdue" : "Due today";
 }
 
-function dueLabel(value: string | null) {
-  if (!value) return "No due time";
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+function dueLabel(value: string, includeDate: boolean) {
+  return new Intl.DateTimeFormat(undefined, {
+    ...(includeDate ? { month: "short", day: "numeric" } : {}),
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(
     new Date(value),
   );
 }
@@ -36,10 +39,12 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
   const [error, setError] = useState<SaveError>(NO_SAVE_ERROR);
   const [loadError, setLoadError] = useState(false);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
-  const nextFocusRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const [focusAfterRefresh, setFocusAfterRefresh] = useState(false);
 
   const load = useCallback(() => {
+    setError(NO_SAVE_ERROR);
     client
       .getWorkQueue(localReferenceTime())
       .then((next) => {
@@ -51,6 +56,13 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
 
   useEffect(load, [load]);
 
+  useEffect(() => {
+    if (!focusAfterRefresh || busyTaskId !== null) return;
+    const next = listRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])");
+    (next ?? headingRef.current)?.focus();
+    setFocusAfterRefresh(false);
+  }, [busyTaskId, focusAfterRefresh, queue]);
+
   const complete = async (item: Extract<WorkQueueItem, { kind: "task" }>) => {
     setError(NO_SAVE_ERROR);
     setBusyTaskId(item.task.id);
@@ -60,7 +72,7 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
         setQueue(next);
         setLoadError(false);
       });
-      queueMicrotask(() => (nextFocusRef.current ?? headingRef.current)?.focus());
+      setFocusAfterRefresh(true);
     } catch (rejection) {
       setError(saveErrorFrom(rejection));
     } finally {
@@ -78,7 +90,13 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
         <span className="list-count">{queue?.items.length ?? 0}</span>
       </div>
       <GeneralError message={error.general} />
-      {loadError ? <GeneralError message="Could not load today’s work from the local database." /> : null}
+      {error.conflict ? <ConflictBanner onReload={load} /> : null}
+      {loadError ? (
+        <div className="today__load-error">
+          <GeneralError message="Could not load today’s work from the local database." />
+          <button type="button" className="button" onClick={load}>Try again</button>
+        </div>
+      ) : null}
       {queue?.items.length === 0 ? (
         <div className="empty-state">
           <span className="registration-mark" aria-hidden="true" />
@@ -87,12 +105,12 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
         </div>
       ) : null}
       {queue?.items.length ? (
-        <ul className="today__list" aria-label="Today’s work">
-          {queue.items.map((item, index) =>
+        <ul ref={listRef} className="today__list" aria-label="Today’s work">
+          {queue.items.map((item) =>
             item.kind === "task" ? (
               <li key={`task:${item.task.id}`} className="today__item">
                 <div>
-                  <p className="today__reason">{taskReason(item)} · {dueLabel(item.task.dueAt)}</p>
+                  <p className="today__reason">{taskReason(item)} · {dueLabel(item.task.dueAt, item.reason === "overdue")}</p>
                   <p className="today__title">{item.task.title}</p>
                   {item.linkedRecord ? (
                     <button
@@ -105,7 +123,6 @@ export function TodayView({ client, onOpenRecord }: TodayViewProps) {
                   ) : null}
                 </div>
                 <button
-                  ref={index === 0 ? nextFocusRef : undefined}
                   type="button"
                   className="button button--primary"
                   disabled={busyTaskId !== null}
