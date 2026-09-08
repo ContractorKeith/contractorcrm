@@ -257,7 +257,8 @@ describe("opportunity form", () => {
     await user.click(await screen.findByRole("button", { name: "New opportunity" }));
 
     await user.type(screen.getByLabelText("Name"), "Backyard fence");
-    await user.selectOptions(screen.getByLabelText("Contact"), "contact-1");
+    await user.click(screen.getByRole("combobox", { name: "Contact" }));
+    await user.click(screen.getByRole("option", { name: "Dana Ruiz" }));
     await user.type(screen.getByLabelText("Value ($)"), "$1,234.56");
 
     await user.click(screen.getByRole("button", { name: "Create opportunity" }));
@@ -306,7 +307,7 @@ describe("opportunity form", () => {
     await user.click(await screen.findByRole("button", { name: "New opportunity" }));
 
     await user.type(screen.getByLabelText("Name"), "Backyard fence");
-    const contactField = screen.getByLabelText("Contact").closest("label")!;
+    const contactField = screen.getByLabelText("Contact").closest<HTMLElement>(".field")!;
     await user.click(screen.getByRole("button", { name: "Create opportunity" }));
 
     expect(await within(contactField).findByText("link a contact or a company")).toBeVisible();
