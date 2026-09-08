@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { Field } from "../views/form-support";
 import { RecordPicker, type RecordOption } from "./RecordPicker";
 
 const options: RecordOption[] = [
@@ -15,7 +14,7 @@ const options: RecordOption[] = [
 function Form({ initial = "", onSave = vi.fn() }: { initial?: string; onSave?: (id: string) => void }) {
   const [value, setValue] = useState(initial);
   return <form onSubmit={(event) => { event.preventDefault(); onSave(value); }}>
-    <Field label="Linked to"><RecordPicker label="Linked to" value={value} options={options} onChange={setValue} /></Field>
+    <RecordPicker label="Linked to" value={value} options={options} onChange={setValue} />
     <button type="submit">Save</button>
   </form>;
 }
@@ -54,7 +53,7 @@ describe("record linking", () => {
     expect(onSave).toHaveBeenCalledWith("");
   });
 
-  it("supports pointer selection inside a label without reopening the popup", async () => {
+  it("supports pointer selection without reopening the popup", async () => {
     const user = userEvent.setup();
     render(<Form />);
     const input = screen.getByRole("combobox");

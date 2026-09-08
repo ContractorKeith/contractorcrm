@@ -1118,20 +1118,16 @@ export function OpportunityFormView({
           <Field label="Name" error={error.fields.name}>
             <input value={draft.name} onChange={(event) => set("name", event.target.value)} />
           </Field>
-          <Field label="Contact" error={error.fields.contactId}>
-            <RecordPicker label="Contact" value={draft.contactId}
+          <RecordPicker label="Contact" error={error.fields.contactId} value={draft.contactId}
               onChange={(value) => set("contactId", value)}
               options={contacts.map((contact) => ({ value: contact.id,
                 label: contact.displayName + (contact.archivedAt ? " (archived)" : ""),
                 archived: Boolean(contact.archivedAt) }))} />
-          </Field>
-          <Field label="Company" error={error.fields.companyId}>
-            <RecordPicker label="Company" value={draft.companyId}
+          <RecordPicker label="Company" error={error.fields.companyId} value={draft.companyId}
               onChange={(value) => set("companyId", value)}
               options={companies.map((company) => ({ value: company.id,
                 label: company.name + (company.archivedAt ? " (archived)" : ""),
                 archived: Boolean(company.archivedAt) }))} />
-          </Field>
           {!opportunityId ? (
             <Field label="Stage" error={error.fields.stageId}>
               <select value={draft.stageId} onChange={(event) => set("stageId", event.target.value)}>

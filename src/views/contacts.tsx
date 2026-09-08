@@ -673,13 +673,11 @@ export function ContactFormView({ client, contactId, onSaved, onCancel }: Contac
               ))}
             </select>
           </Field>
-          <Field label="Company" error={error.fields.companyId}>
-            <RecordPicker label="Company" value={draft.companyId}
+          <RecordPicker label="Company" error={error.fields.companyId} value={draft.companyId}
               onChange={(value) => set("companyId", value)}
               options={companies.map((company) => ({ value: company.id,
                 label: company.name + (company.archivedAt ? " (archived)" : ""),
                 archived: Boolean(company.archivedAt) }))} />
-          </Field>
           <Field label="Preferred method" error={error.fields.preferredContactMethod}>
             <input
               value={draft.preferredContactMethod}

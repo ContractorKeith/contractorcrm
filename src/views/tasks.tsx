@@ -291,10 +291,8 @@ export function TasksView({ client }: TasksViewProps) {
                 onChange={(event) => set("title", event.target.value)}
               />
             </Field>
-            <Field label="Linked to" error={error.fields.parentId ?? error.fields.parentType}>
-              <RecordPicker label="Linked to" value={draft.parent} options={parentOptions}
+            <RecordPicker label="Linked to" error={error.fields.parentId ?? error.fields.parentType} value={draft.parent} options={parentOptions}
                 onChange={(value) => set("parent", value)} />
-            </Field>
             <Field label="Due" error={error.fields.dueAt}>
               {draft.dueAt === "" ? (
                 <button

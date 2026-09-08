@@ -307,7 +307,7 @@ describe("opportunity form", () => {
     await user.click(await screen.findByRole("button", { name: "New opportunity" }));
 
     await user.type(screen.getByLabelText("Name"), "Backyard fence");
-    const contactField = screen.getByLabelText("Contact").closest("label")!;
+    const contactField = screen.getByLabelText("Contact").closest<HTMLElement>(".field")!;
     await user.click(screen.getByRole("button", { name: "Create opportunity" }));
 
     expect(await within(contactField).findByText("link a contact or a company")).toBeVisible();
