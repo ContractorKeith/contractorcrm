@@ -11,6 +11,7 @@ import type {
   TaskPatch,
   TaskPriority,
 } from "../api/types";
+import { RecordPicker } from "../components/RecordPicker";
 import { RecordTable, type ColumnDef } from "../components/RecordTable";
 import { Field, GeneralError, NO_SAVE_ERROR, saveErrorFrom, type SaveError } from "./form-support";
 import { isoToLocalInput, localInputToIso } from "./timeline";
@@ -48,6 +49,7 @@ function filterRequest(filter: TaskFilter): ListTasksRequest {
 interface ParentOption {
   value: string; // "contact:contact-1"
   label: string;
+  archived?: boolean;
 }
 
 const parentValue = (parentType: ParentType | null, parentId: string | null) =>
@@ -147,15 +149,18 @@ export function TasksView({ client }: TasksViewProps) {
   const parentOptions: ParentOption[] = [
     ...contacts.map((contact) => ({
       value: `contact:${contact.id}`,
-      label: `Contact — ${contact.displayName}`,
+      label: `Contact — ${contact.displayName}` + (contact.archivedAt ? " (archived)" : ""),
+      archived: Boolean(contact.archivedAt),
     })),
     ...companies.map((company) => ({
       value: `company:${company.id}`,
-      label: `Company — ${company.name}`,
+      label: `Company — ${company.name}` + (company.archivedAt ? " (archived)" : ""),
+      archived: Boolean(company.archivedAt),
     })),
     ...opportunities.map((opportunity) => ({
       value: `opportunity:${opportunity.id}`,
-      label: `Opportunity — ${opportunity.name}`,
+      label: `Opportunity — ${opportunity.name}` + (opportunity.archivedAt ? " (archived)" : ""),
+      archived: Boolean(opportunity.archivedAt),
     })),
   ];
 
@@ -287,14 +292,8 @@ export function TasksView({ client }: TasksViewProps) {
               />
             </Field>
             <Field label="Linked to" error={error.fields.parentId ?? error.fields.parentType}>
-              <select value={draft.parent} onChange={(event) => set("parent", event.target.value)}>
-                <option value="">No linked record</option>
-                {parentOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <RecordPicker label="Linked to" value={draft.parent} options={parentOptions}
+                onChange={(value) => set("parent", value)} />
             </Field>
             <Field label="Due" error={error.fields.dueAt}>
               {draft.dueAt === "" ? (

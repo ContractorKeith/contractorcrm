@@ -19,6 +19,7 @@ import type {
 import { FollowupDraftPanel } from "../components/FollowupDraft";
 import { AssistantPrompt } from "../components/ProposalDialog";
 import { CsvImportDialog } from "../components/CsvImportDialog";
+import { RecordPicker } from "../components/RecordPicker";
 import { RecordTable, type ColumnDef, type SortState } from "../components/RecordTable";
 import { RecordAttachments } from "../components/RecordAttachments";
 import { RecordMetadata } from "../components/RecordMetadata";
@@ -673,18 +674,11 @@ export function ContactFormView({ client, contactId, onSaved, onCancel }: Contac
             </select>
           </Field>
           <Field label="Company" error={error.fields.companyId}>
-            <select
-              value={draft.companyId}
-              onChange={(event) => set("companyId", event.target.value)}
-            >
-              <option value="">No company</option>
-              {companies.map((company) => (
-                <option key={company.id} value={company.id}>
-                  {company.name}
-                  {company.archivedAt ? " (archived)" : ""}
-                </option>
-              ))}
-            </select>
+            <RecordPicker label="Company" value={draft.companyId}
+              onChange={(value) => set("companyId", value)}
+              options={companies.map((company) => ({ value: company.id,
+                label: company.name + (company.archivedAt ? " (archived)" : ""),
+                archived: Boolean(company.archivedAt) }))} />
           </Field>
           <Field label="Preferred method" error={error.fields.preferredContactMethod}>
             <input
