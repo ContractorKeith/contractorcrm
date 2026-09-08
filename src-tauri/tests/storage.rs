@@ -112,6 +112,52 @@ fn fresh_database_gets_all_tables_and_pragmas() {
 }
 
 #[test]
+fn read_only_storage_can_read_a_wal_database_but_sqlite_refuses_writes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let database_path = temp.path().join("contractorcrm.sqlite3");
+    let writable = Storage::open(&database_path).expect("create WAL database");
+    let expected_version = latest_migration_version();
+    writable
+        .connection()
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES ('live_wal', 'yes')",
+            [],
+        )
+        .expect("leave a committed frame in the live WAL");
+
+    let read_only = Storage::open_read_only(&database_path).expect("open read-only");
+    let version: i64 = read_only
+        .connection()
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .expect("read schema version");
+    assert_eq!(version, expected_version);
+    let setting: String = read_only
+        .connection()
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'live_wal'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read through the live WAL");
+    assert_eq!(setting, "yes");
+
+    let error = read_only
+        .connection()
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES ('test', 'no')",
+            [],
+        )
+        .expect_err("SQLite itself must reject a write");
+    assert!(
+        error.to_string().to_lowercase().contains("readonly"),
+        "{error}"
+    );
+    drop(writable);
+}
+
+#[test]
 fn schema_migrations_records_versions_and_rerunning_is_a_no_op() {
     let temp = tempfile::tempdir().expect("create temporary app data");
     let database_path = temp.path().join("contractorcrm.sqlite3");

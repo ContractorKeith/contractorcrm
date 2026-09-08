@@ -151,7 +151,9 @@ impl Server {
             ));
         }
 
-        let storage = if stored == known {
+        let storage = if stored == known && !mode.allows_writes() {
+            Storage::open_read_only(database_path)
+        } else if stored == known {
             // Nothing to apply either way; open without the migration pass.
             Storage::open_existing(database_path)
         } else if mode.allows_writes() {
@@ -854,7 +856,10 @@ impl Server {
 /// database. Treating that as version 0 would have this helper create a whole
 /// schema inside somebody else's SQLite file, so it is a hard error.
 fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, String> {
-    let connection = rusqlite::Connection::open(database_path)
+    let connection = rusqlite::Connection::open_with_flags(
+        database_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
         .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
     let version: Option<i64> = connection
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
