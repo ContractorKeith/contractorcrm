@@ -33,7 +33,7 @@ use crate::application::{
     CreateOpportunityRequest, CreateTaskRequest, HandoffRefInput, LinkJobRequest, LinkQuoteRequest,
     ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityPatch,
     SavedViewEntityType, TaskPatch, UpdateCompanyRequest, UpdateContactRequest,
-    UpdateOpportunityRequest,
+    UpdateOpportunityRequest, UpdateTaskRequest,
 };
 use crate::attachments::{self, AttachmentParentType, AttachmentStore};
 use crate::domain::Actor;
@@ -42,6 +42,7 @@ use crate::proposals::{
     self, ApplyProposalRequest, ProposalEntityType, ProposalStore, RecordVersion,
     UndoProposalRequest,
 };
+use crate::record_brief;
 use crate::storage::{latest_migration_version, Storage};
 use crate::{explain, followups, LOCAL_API_VERSION};
 
@@ -404,6 +405,17 @@ impl Server {
                 drop(storage);
                 Ok(bounded_timeline(entries, args.limit, args.full_bodies)?)
             }
+            "get_record_brief" => {
+                let args: RecordBriefArgs = parse(arguments)?;
+                let storage = self.storage();
+                value(record_brief::get_record_brief(
+                    &storage,
+                    &args.parent_type,
+                    &args.parent_id,
+                    args.activity_limit,
+                    args.task_limit,
+                )?)
+            }
             "list_tasks" => {
                 let args: TaskListArgs = parse(arguments)?;
                 let storage = self.storage();
@@ -736,6 +748,43 @@ impl Server {
                     },
                 )?)
             }
+            "update_task" => {
+                let args: UpdateTaskArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::update_task(
+                    &mut storage,
+                    UpdateTaskRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
+                        patch: args.patch,
+                    },
+                )?)
+            }
+            "reopen_task" => {
+                let args: TaskActionArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::reopen_task(
+                    &mut storage,
+                    crate::application::TaskActionRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
+                    },
+                )?)
+            }
+            "drop_task" => {
+                let args: TaskActionArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::drop_task(
+                    &mut storage,
+                    crate::application::TaskActionRequest {
+                        actor: Actor::Agent,
+                        task_id: args.task_id,
+                        expected_version: args.expected_version,
+                    },
+                )?)
+            }
             "link_quote" => {
                 let args: LinkQuoteArgs = parse(arguments)?;
                 let mut storage = self.storage_mut();
@@ -860,7 +909,7 @@ fn stored_migration_version(database_path: &std::path::Path) -> Result<i64, Stri
         database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
-        .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
+    .map_err(|error| format!("{} could not be read: {error}", database_path.display()))?;
     let version: Option<i64> = connection
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
@@ -983,7 +1032,7 @@ fn audit_target(tool: &str, result: &Value) -> (&'static str, String) {
         | "link_quote"
         | "link_job" => "opportunity",
         "log_activity" => "activity",
-        "create_task" | "complete_task" => "task",
+        "create_task" | "update_task" | "complete_task" | "reopen_task" | "drop_task" => "task",
         _ => "proposal",
     };
     let id = result
@@ -1180,6 +1229,17 @@ struct TimelineArgs {
     /// Bodies come back truncated unless this is set.
     #[serde(default)]
     full_bodies: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordBriefArgs {
+    parent_type: String,
+    parent_id: String,
+    #[serde(default)]
+    activity_limit: Option<usize>,
+    #[serde(default)]
+    task_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1415,6 +1475,21 @@ struct CompleteTaskArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateTaskArgs {
+    task_id: String,
+    expected_version: i64,
+    patch: TaskPatch,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskActionArgs {
+    task_id: String,
+    expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LinkQuoteArgs {
     opportunity_id: String,
     expected_version: i64,
@@ -1577,6 +1652,20 @@ fn tools() -> Vec<ToolDef> {
                     "limit": json!({"type": "integer", "minimum": 1, "maximum": 200,
                         "description": "Entries to return (default and maximum 200)."}),
                     "fullBodies": flag("Return untruncated activity bodies."),
+                }),
+                &["parentType", "parentId"],
+            ),
+        },
+        ToolDef {
+            name: "get_record_brief",
+            description: "One bounded follow-up packet: the target, directly linked records, recent activity, open tasks, and deterministic attention flags. Never includes attachments or calls a provider.",
+            write: false,
+            input_schema: schema(
+                json!({
+                    "parentType": choice(PARENT_TYPES, "Which record."),
+                    "parentId": text("Record id."),
+                    "activityLimit": json!({"type": "integer", "minimum": 1, "maximum": 25, "description": "Recent activities (default 10)."}),
+                    "taskLimit": json!({"type": "integer", "minimum": 1, "maximum": 25, "description": "Open tasks (default 10)."}),
                 }),
                 &["parentType", "parentId"],
             ),
@@ -1913,6 +2002,24 @@ fn tools() -> Vec<ToolDef> {
                 }),
                 &["taskId", "expectedVersion"],
             ),
+        },
+        ToolDef {
+            name: "update_task",
+            description: "Replace a task's editable fields, including its due date; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"}), "patch": record("Full editable task fields.")}), &["taskId", "expectedVersion", "patch"]),
+        },
+        ToolDef {
+            name: "reopen_task",
+            description: "Reopen a done or dropped task; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"})}), &["taskId", "expectedVersion"]),
+        },
+        ToolDef {
+            name: "drop_task",
+            description: "Drop an open task that no longer needs doing; version-checked.",
+            write: true,
+            input_schema: schema(json!({"taskId": text("Task id."), "expectedVersion": json!({"type": "integer"})}), &["taskId", "expectedVersion"]),
         },
         ToolDef {
             name: "link_quote",

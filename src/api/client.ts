@@ -31,6 +31,7 @@ import type {
   MoveOpportunityStageRequest,
   Opportunity,
   OpportunityDetail,
+  RecordBrief,
   OpportunityListItem,
   ParentType,
   SetAttentionThresholdsRequest,
@@ -148,6 +149,7 @@ export interface CoreClient {
   updateActivity(request: UpdateActivityRequest): Promise<Activity>;
   deleteActivity(request: DeleteActivityRequest): Promise<void>;
   getTimeline(parentType: ParentType, parentId: string, includeRelated: boolean): Promise<Activity[]>;
+  getRecordBrief(parentType: ParentType, parentId: string, activityLimit?: number, taskLimit?: number): Promise<RecordBrief>;
   createTask(request: CreateTaskRequest): Promise<Task>;
   updateTask(request: UpdateTaskRequest): Promise<Task>;
   completeTask(request: CompleteTaskRequest): Promise<Task>;
@@ -263,6 +265,8 @@ export const tauriCoreClient: CoreClient = {
   deleteActivity: (request) => invoke("delete_activity", { request }),
   getTimeline: (parentType, parentId, includeRelated) =>
     invoke("get_timeline", { parentType, parentId, includeRelated }),
+  getRecordBrief: (parentType, parentId, activityLimit, taskLimit) =>
+    invoke("get_record_brief", { parentType, parentId, activityLimit, taskLimit }),
   createTask: (request) => invoke("create_task", { request }),
   updateTask: (request) => invoke("update_task", { request }),
   completeTask: (request) => invoke("complete_task", { request }),

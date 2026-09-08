@@ -51,6 +51,7 @@
     {"name":"update_activity","mode":"write","input":[{"name":"request","type":"UpdateActivityRequest","required":true}],"output":"Activity"},
     {"name":"delete_activity","mode":"write","input":[{"name":"request","type":"DeleteActivityRequest","required":true}],"output":"null"},
     {"name":"get_timeline","mode":"read","input":[{"name":"parentType","type":"ParentType","required":true},{"name":"parentId","type":"string","required":true},{"name":"includeRelated","type":"boolean","required":true}],"output":"Activity[]"},
+    {"name":"get_record_brief","mode":"read","input":[{"name":"parentType","type":"ParentType","required":true},{"name":"parentId","type":"string","required":true},{"name":"activityLimit","type":"integer","required":false},{"name":"taskLimit","type":"integer","required":false}],"output":"RecordBrief"},
     {"name":"create_task","mode":"write","input":[{"name":"request","type":"CreateTaskRequest","required":true}],"output":"Task"},
     {"name":"update_task","mode":"write","input":[{"name":"request","type":"UpdateTaskRequest","required":true}],"output":"Task"},
     {"name":"complete_task","mode":"write","input":[{"name":"request","type":"CompleteTaskRequest","required":true}],"output":"Task"},

@@ -77,6 +77,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   updateActivity: vi.fn(),
   deleteActivity: vi.fn(),
   getTimeline: vi.fn().mockResolvedValue([]),
+  getRecordBrief: vi.fn(),
   createTask: vi.fn(),
   updateTask: vi.fn(),
   completeTask: vi.fn(),
