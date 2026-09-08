@@ -111,6 +111,38 @@ pub struct CreateContactRequest {
     pub contact: ContactPatch,
 }
 
+/// The deliberately small intake shape used by the desktop's New lead dialog
+/// and an explicitly-enabled agent tool. It creates related records together.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaptureLeadRequest {
+    #[serde(default)]
+    pub actor: Actor,
+    pub name: String,
+    pub job_request: String,
+    #[serde(default)]
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Reuse an active contact without modifying it. Omit to create a lead.
+    #[serde(default)]
+    pub contact_id: Option<String>,
+    #[serde(default)]
+    pub next_step_title: Option<String>,
+    #[serde(default)]
+    pub next_step_due_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedLead {
+    pub contact: Contact,
+    pub opportunity: Opportunity,
+    pub task: Option<Task>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateContactRequest {
@@ -1334,11 +1366,21 @@ pub fn create_contact(
     request: CreateContactRequest,
 ) -> Result<Contact, ApplicationError> {
     let fields = validate_contact_patch(request.contact)?;
+    let transaction = immediate(storage)?;
+    let contact = insert_contact(&transaction, fields, request.actor, "created contact")?;
+    transaction.commit()?;
+    Ok(contact)
+}
+
+fn insert_contact(
+    transaction: &Transaction<'_>,
+    fields: ValidContactFields,
+    actor: Actor,
+    verb: &str,
+) -> Result<Contact, ApplicationError> {
     let now = now_utc();
     let contact_id = new_id();
-
-    let transaction = immediate(storage)?;
-    require_linked_company(&transaction, fields.company_id.as_deref())?;
+    require_linked_company(transaction, fields.company_id.as_deref())?;
     transaction.execute(
         "INSERT INTO contacts (
             id, company_id, first_name, last_name, display_name, role, kind,
@@ -1367,18 +1409,129 @@ pub fn create_contact(
             now,
         ],
     )?;
-    insert_channels(&transaction, &contact_id, &fields.channels)?;
-    refresh_search_projection(&transaction, "contact", &contact_id)?;
+    insert_channels(transaction, &contact_id, &fields.channels)?;
+    refresh_search_projection(transaction, "contact", &contact_id)?;
     log_command(
-        &transaction,
-        request.actor,
+        transaction,
+        actor,
         "contact",
         &contact_id,
-        &format!("created contact \"{}\"", fields.display_name),
+        &format!("{verb} \"{}\"", fields.display_name),
     )?;
-    let contact = require_contact(&transaction, &contact_id)?;
+    require_contact(transaction, &contact_id)
+}
+
+/// Capture an incoming inquiry as one atomic unit. A selected contact is only
+/// linked; it is never changed by this shortcut.
+pub fn capture_lead(
+    storage: &mut Storage,
+    request: CaptureLeadRequest,
+) -> Result<CapturedLead, ApplicationError> {
+    let name = required_text("name", request.name, 160)?;
+    let job_request = required_text("jobRequest", request.job_request, 200)?;
+    let note = optional_text(request.note);
+    let phone = optional_text(request.phone);
+    let email = optional_text(request.email);
+    let next_step_title = optional_text(request.next_step_title);
+    let next_step_due_at = optional_text(request.next_step_due_at);
+    if next_step_due_at.is_some() && next_step_title.is_none() {
+        return Err(ApplicationError::InvalidInput {
+            field: "nextStepTitle".into(),
+            message: "is required when a next-step date is set".into(),
+        });
+    }
+
+    let task_fields = next_step_title
+        .map(|title| {
+            validate_task_patch(TaskPatch {
+                title,
+                due_at: next_step_due_at,
+                priority: Some("normal".into()),
+                ..TaskPatch::default()
+            })
+        })
+        .transpose()?;
+
+    let transaction = immediate(storage)?;
+    let contact = if let Some(contact_id) = optional_text(request.contact_id) {
+        if phone.is_some() || email.is_some() {
+            return Err(ApplicationError::InvalidInput {
+                field: "contactId".into(),
+                message: "cannot be combined with phone or email; edit the contact separately"
+                    .into(),
+            });
+        }
+        let existing = require_contact(&transaction, &contact_id)?;
+        if existing.archived_at.is_some() {
+            return Err(ApplicationError::InvalidInput {
+                field: "contactId".into(),
+                message: "must name an active contact".into(),
+            });
+        }
+        existing
+    } else {
+        let contact_fields = validate_contact_patch(ContactPatch {
+            display_name: Some(name.clone()),
+            kind: "lead".into(),
+            channels: [
+                phone.map(|value| ChannelInput {
+                    kind: "phone".into(),
+                    label: None,
+                    value,
+                    preferred: true,
+                }),
+                email.map(|value| ChannelInput {
+                    kind: "email".into(),
+                    label: None,
+                    value,
+                    preferred: true,
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            ..ContactPatch::default()
+        })?;
+        insert_contact(
+            &transaction,
+            contact_fields,
+            request.actor,
+            "captured lead contact",
+        )?
+    };
+    let opportunity_fields = validate_opportunity_patch(OpportunityPatch {
+        name: job_request.clone(),
+        contact_id: Some(contact.id.clone()),
+        currency_code: "USD".into(),
+        notes: note.clone(),
+        ..OpportunityPatch::default()
+    })?;
+    let opportunity = insert_opportunity(
+        &transaction,
+        opportunity_fields,
+        request.actor,
+        None,
+        "captured lead opportunity",
+    )?;
+    let task = if let Some(fields) = task_fields {
+        Some(insert_task(
+            &transaction,
+            ValidTaskFields {
+                parent: Some((ParentType::Opportunity, opportunity.id.clone())),
+                ..fields
+            },
+            request.actor,
+            "captured lead next step",
+        )?)
+    } else {
+        None
+    };
     transaction.commit()?;
-    Ok(contact)
+    Ok(CapturedLead {
+        contact,
+        opportunity,
+        task,
+    })
 }
 
 /// Replace a contact's editable fields and its whole channel set atomically;
@@ -1758,15 +1911,32 @@ pub fn create_opportunity(
     request: CreateOpportunityRequest,
 ) -> Result<Opportunity, ApplicationError> {
     let fields = validate_opportunity_patch(request.opportunity)?;
+    let transaction = immediate(storage)?;
+    let opportunity = insert_opportunity(
+        &transaction,
+        fields,
+        request.actor,
+        request.stage_id,
+        "created opportunity",
+    )?;
+    transaction.commit()?;
+    Ok(opportunity)
+}
+
+fn insert_opportunity(
+    transaction: &Transaction<'_>,
+    fields: ValidOpportunityFields,
+    actor: Actor,
+    stage_id: Option<String>,
+    verb: &str,
+) -> Result<Opportunity, ApplicationError> {
     let now = now_utc();
     let opportunity_id = new_id();
-
-    let transaction = immediate(storage)?;
-    require_linked_contact(&transaction, fields.contact_id.as_deref())?;
-    require_linked_company(&transaction, fields.company_id.as_deref())?;
-    let stage = match optional_text(request.stage_id) {
-        Some(stage_id) => require_stage(&transaction, &stage_id)?,
-        None => first_open_stage(&transaction)?,
+    require_linked_contact(transaction, fields.contact_id.as_deref())?;
+    require_linked_company(transaction, fields.company_id.as_deref())?;
+    let stage = match optional_text(stage_id) {
+        Some(stage_id) => require_stage(transaction, &stage_id)?,
+        None => first_open_stage(transaction)?,
     };
     transaction.execute(
         "INSERT INTO opportunities (
@@ -1791,25 +1961,16 @@ pub fn create_opportunity(
             now,
         ],
     )?;
-    insert_stage_history(
-        &transaction,
-        &opportunity_id,
-        None,
-        &stage.id,
-        request.actor,
-        None,
-    )?;
-    refresh_search_projection(&transaction, "opportunity", &opportunity_id)?;
+    insert_stage_history(transaction, &opportunity_id, None, &stage.id, actor, None)?;
+    refresh_search_projection(transaction, "opportunity", &opportunity_id)?;
     log_command(
-        &transaction,
-        request.actor,
+        transaction,
+        actor,
         "opportunity",
         &opportunity_id,
-        &format!("created opportunity \"{}\"", fields.name),
+        &format!("{verb} \"{}\"", fields.name),
     )?;
-    let opportunity = require_opportunity(&transaction, &opportunity_id)?;
-    transaction.commit()?;
-    Ok(opportunity)
+    require_opportunity(transaction, &opportunity_id)
 }
 
 /// Replace an opportunity's editable fields; the stage and lost reason are
@@ -2415,12 +2576,22 @@ pub fn create_task(
     request: CreateTaskRequest,
 ) -> Result<Task, ApplicationError> {
     let fields = validate_task_patch(request.task)?;
+    let transaction = immediate(storage)?;
+    let task = insert_task(&transaction, fields, request.actor, "created task")?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+fn insert_task(
+    transaction: &Transaction<'_>,
+    fields: ValidTaskFields,
+    actor: Actor,
+    verb: &str,
+) -> Result<Task, ApplicationError> {
     let now = now_utc();
     let task_id = new_id();
-
-    let transaction = immediate(storage)?;
     if let Some((parent_type, parent_id)) = &fields.parent {
-        require_activity_parent(&transaction, *parent_type, parent_id)?;
+        require_activity_parent(transaction, *parent_type, parent_id)?;
     }
     transaction.execute(
         "INSERT INTO tasks (
@@ -2443,15 +2614,13 @@ pub fn create_task(
         ],
     )?;
     log_command(
-        &transaction,
-        request.actor,
+        transaction,
+        actor,
         "task",
         &task_id,
-        &format!("created task \"{}\"", fields.title),
+        &format!("{verb} \"{}\"", fields.title),
     )?;
-    let task = require_task(&transaction, &task_id)?;
-    transaction.commit()?;
-    Ok(task)
+    require_task(transaction, &task_id)
 }
 
 /// Replace a task's editable fields (title/body/parent/due/remind/priority);

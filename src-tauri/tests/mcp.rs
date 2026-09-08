@@ -35,7 +35,7 @@ const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
 
 /// Every tool the adapter advertises in read-write mode, in table order.
 /// docs/SLICE5_COVERAGE.md maps each of these to its docs and its test.
-const ALL_TOOLS: [&str; 43] = [
+const ALL_TOOLS: [&str; 44] = [
     "search_records",
     "list_contacts",
     "get_contact",
@@ -65,6 +65,7 @@ const ALL_TOOLS: [&str; 43] = [
     "apply_proposal",
     "undo_proposal",
     "create_contact",
+    "capture_lead",
     "update_contact",
     "create_company",
     "update_company",
@@ -280,6 +281,7 @@ fn read_only_mode_lists_no_write_tools() {
     assert!(names.contains(&"preview_context".to_owned()));
     for write_tool in [
         "create_contact",
+        "capture_lead",
         "update_contact",
         "apply_proposal",
         "undo_proposal",
@@ -296,6 +298,7 @@ fn read_only_mode_lists_no_write_tools() {
     let read_write = server(&temp2, storage2, Mode::ReadWrite);
     let write_names = tool_names(&read_write);
     assert!(write_names.contains(&"create_contact".to_owned()));
+    assert!(write_names.contains(&"capture_lead".to_owned()));
     assert!(write_names.len() > names.len());
 }
 
@@ -437,6 +440,26 @@ fn record_brief_is_bounded_and_keeps_unrelated_records_out() {
         ),
         "invalid_input"
     );
+}
+
+#[test]
+fn capture_lead_is_an_atomic_read_write_tool() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let storage = open_storage(&temp);
+    let server = server(&temp, storage, Mode::ReadWrite);
+    let captured = ok(
+        &server,
+        "capture_lead",
+        json!({
+            "name": "Dana Ruiz", "jobRequest": "Replace side gate",
+            "nextStepTitle": "Call Dana", "nextStepDueAt": "2026-09-10T14:00:00.000Z"
+        }),
+    );
+    assert_eq!(
+        captured["opportunity"]["contactId"],
+        captured["contact"]["id"]
+    );
+    assert_eq!(captured["task"]["parentId"], captured["opportunity"]["id"]);
 }
 
 #[test]

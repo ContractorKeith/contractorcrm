@@ -20,10 +20,10 @@ use ai::{
     SetAiSettingsRequest,
 };
 use application::{
-    ArchiveRequest, CompleteTaskRequest, ContactImportMapping, ContactImportPreview,
-    ContactImportSummary, ContactListItem, CreateCompanyRequest, CreateContactRequest,
-    CreateCustomFieldDefRequest, CreateOpportunityRequest, CreateSavedViewRequest,
-    CreateTagRequest, CreateTaskRequest, CsvExportReport, CustomFieldDef,
+    ArchiveRequest, CaptureLeadRequest, CapturedLead, CompleteTaskRequest, ContactImportMapping,
+    ContactImportPreview, ContactImportSummary, ContactListItem, CreateCompanyRequest,
+    CreateContactRequest, CreateCustomFieldDefRequest, CreateOpportunityRequest,
+    CreateSavedViewRequest, CreateTagRequest, CreateTaskRequest, CsvExportReport, CustomFieldDef,
     CustomFieldDefArchiveRequest, DatabaseInfo, DeleteActivityRequest, DeleteSavedViewRequest,
     EnvelopeExportReport, ImportContactsRequest, LinkJobRequest, LinkQuoteRequest,
     ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityDetail,
@@ -94,6 +94,7 @@ macro_rules! with_local_api_v1_commands {
             list_companies,
             get_company,
             create_contact,
+            capture_lead,
             update_contact,
             archive_contact,
             unarchive_contact,
@@ -450,6 +451,15 @@ fn create_contact(
 ) -> Result<Contact, CommandError> {
     let mut storage = storage.lock().expect("storage mutex poisoned");
     application::create_contact(&mut storage, request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn capture_lead(
+    storage: State<'_, SharedStorage>,
+    request: CaptureLeadRequest,
+) -> Result<CapturedLead, CommandError> {
+    let mut storage = storage.lock().expect("storage mutex poisoned");
+    application::capture_lead(&mut storage, request).map_err(Into::into)
 }
 
 #[tauri::command]

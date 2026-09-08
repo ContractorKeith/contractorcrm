@@ -264,6 +264,24 @@ export interface ContactPatch {
 export type CreateCompanyRequest = { actor?: Actor } & CompanyPatch;
 export type CreateContactRequest = { actor?: Actor } & ContactPatch;
 
+export interface CaptureLeadRequest {
+  actor?: Actor;
+  name: string;
+  jobRequest: string;
+  phone?: string | null;
+  email?: string | null;
+  note?: string | null;
+  contactId?: string | null;
+  nextStepTitle?: string | null;
+  nextStepDueAt?: string | null;
+}
+
+export interface CapturedLead {
+  contact: Contact;
+  opportunity: Opportunity;
+  task: Task | null;
+}
+
 export interface UpdateCompanyRequest {
   actor?: Actor;
   companyId: string;

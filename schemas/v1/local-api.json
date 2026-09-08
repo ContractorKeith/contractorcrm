@@ -32,6 +32,7 @@
     {"name":"list_companies","mode":"read","input":[{"name":"includeArchived","type":"boolean","required":true}],"output":"Company[]"},
     {"name":"get_company","mode":"read","input":[{"name":"companyId","type":"string","required":true}],"output":"Company"},
     {"name":"create_contact","mode":"write","input":[{"name":"request","type":"CreateContactRequest","required":true}],"output":"Contact"},
+    {"name":"capture_lead","mode":"write","input":[{"name":"request","type":"CaptureLeadRequest","required":true}],"output":"CapturedLead"},
     {"name":"update_contact","mode":"write","input":[{"name":"request","type":"UpdateContactRequest","required":true}],"output":"Contact"},
     {"name":"archive_contact","mode":"write","input":[{"name":"request","type":"ArchiveRequest","required":true}],"output":"Contact"},
     {"name":"unarchive_contact","mode":"write","input":[{"name":"request","type":"ArchiveRequest","required":true}],"output":"Contact"},

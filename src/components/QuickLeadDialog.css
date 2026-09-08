@@ -1,0 +1,11 @@
+.quick-lead-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: var(--space-4); background: rgb(0 0 0 / 45%); }
+.quick-lead-dialog { width: min(34rem, 100%); max-height: calc(100dvh - var(--space-8)); overflow-y: auto; display: grid; gap: var(--space-4); padding: var(--space-6); background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+.quick-lead-fields { display: grid; gap: var(--space-4); border: 0; padding: 0; margin: 0; min-width: 0; }
+.quick-lead-heading, .quick-lead-channels, .quick-lead-next { display: flex; gap: var(--space-4); align-items: end; }
+.quick-lead-heading h2 { margin: 0; margin-right: auto; }
+.quick-lead-dialog label { flex: 1; }
+.quick-lead-dialog input, .quick-lead-dialog textarea { width: 100%; box-sizing: border-box; }
+.quick-lead-matches { display: grid; gap: var(--space-2); padding: var(--space-3); border-left: var(--border-alert) solid var(--color-accent); }
+.quick-lead-matches button, .quick-lead-details { text-align: left; background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; }
+.quick-lead-linked { margin: 0; font-size: .9rem; }
+@media (max-width: 36rem) { .quick-lead-channels, .quick-lead-next { display: grid; } }
