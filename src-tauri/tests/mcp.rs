@@ -35,7 +35,7 @@ const LOCAL_API_SCHEMA: &str = include_str!("../../schemas/v1/local-api.json");
 
 /// Every tool the adapter advertises in read-write mode, in table order.
 /// docs/SLICE5_COVERAGE.md maps each of these to its docs and its test.
-const ALL_TOOLS: [&str; 39] = [
+const ALL_TOOLS: [&str; 43] = [
     "search_records",
     "list_contacts",
     "get_contact",
@@ -46,6 +46,7 @@ const ALL_TOOLS: [&str; 39] = [
     "list_stages",
     "list_lost_reasons",
     "get_timeline",
+    "get_record_brief",
     "list_tasks",
     "get_attention_flags",
     "list_saved_views",
@@ -73,6 +74,9 @@ const ALL_TOOLS: [&str; 39] = [
     "log_activity",
     "create_task",
     "complete_task",
+    "update_task",
+    "reopen_task",
+    "drop_task",
     "link_quote",
     "link_job",
 ];
@@ -368,6 +372,71 @@ fn a_write_tool_on_a_read_only_connection_is_refused_by_name() {
     let error = &result["structuredContent"]["error"];
     assert_eq!(error["kind"], json!("read_only"));
     assert_eq!(error["command"], json!("create_contact"));
+}
+
+#[test]
+fn record_brief_is_bounded_and_keeps_unrelated_records_out() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let mut storage = open_storage(&temp);
+    let target = make_contact(&mut storage, "Dana Ruiz");
+    let unrelated = make_contact(&mut storage, "Keep private");
+    application::log_activity(
+        &mut storage,
+        LogActivityRequest {
+            actor: Actor::User,
+            parent_type: "contact".into(),
+            parent_id: target.id.clone(),
+            activity: ActivityPatch {
+                kind: "note".into(),
+                summary: "Site visit".into(),
+                body: Some("x".repeat(700)),
+                ..ActivityPatch::default()
+            },
+        },
+    )
+    .expect("activity");
+    application::log_activity(
+        &mut storage,
+        LogActivityRequest {
+            actor: Actor::User,
+            parent_type: "contact".into(),
+            parent_id: target.id.clone(),
+            activity: ActivityPatch {
+                kind: "note".into(),
+                summary: "Measurements".into(),
+                body: Some("y".repeat(700)),
+                ..ActivityPatch::default()
+            },
+        },
+    )
+    .expect("second activity");
+    let server = server(&temp, storage, Mode::ReadOnly);
+
+    let brief = ok(
+        &server,
+        "get_record_brief",
+        json!({"parentType": "contact", "parentId": target.id, "activityLimit": 2, "taskLimit": 1}),
+    );
+    assert_eq!(brief["record"]["record"]["displayName"], json!("Dana Ruiz"));
+    let activities = brief["activities"].as_array().expect("activities");
+    assert_eq!(activities.len(), 2);
+    assert!(activities.iter().all(|activity| activity["body"]
+        .as_str()
+        .expect("body")
+        .chars()
+        .count()
+        <= 515));
+    assert_eq!(brief["activityTextTruncated"], json!(true));
+    assert!(!brief.to_string().contains(&unrelated.id));
+    assert!(!brief.to_string().contains("Keep private"));
+    assert_eq!(
+        kind(
+            &server,
+            "get_record_brief",
+            json!({"parentType": "contact", "parentId": "missing", "activityLimit": 0})
+        ),
+        "invalid_input"
+    );
 }
 
 #[test]
@@ -1032,6 +1101,26 @@ fn every_write_tool_round_trips_through_the_ordinary_application_path() {
         json!({"taskId": task["id"], "expectedVersion": task["version"]}),
     );
     assert_eq!(completed["status"], json!("done"));
+    let reopened = ok(
+        &server,
+        "reopen_task",
+        json!({"taskId": completed["id"], "expectedVersion": completed["version"]}),
+    );
+    let updated_task = ok(
+        &server,
+        "update_task",
+        json!({
+            "taskId": reopened["id"], "expectedVersion": reopened["version"],
+            "patch": {"title": "Send revised fence quote", "parentType": "opportunity", "parentId": opportunity["id"], "priority": "high"},
+        }),
+    );
+    assert_eq!(updated_task["title"], json!("Send revised fence quote"));
+    let dropped = ok(
+        &server,
+        "drop_task",
+        json!({"taskId": updated_task["id"], "expectedVersion": updated_task["version"]}),
+    );
+    assert_eq!(dropped["status"], json!("dropped"));
 
     let quoted = ok(
         &server,
@@ -1139,6 +1228,22 @@ fn every_version_checked_write_reports_the_conflict_over_mcp() {
         ),
         (
             "complete_task",
+            json!({"taskId": task.id, "expectedVersion": stale}),
+            "task",
+        ),
+        (
+            "update_task",
+            json!({"taskId": task.id, "expectedVersion": stale,
+                   "patch": {"title": "Call Dana back"}}),
+            "task",
+        ),
+        (
+            "reopen_task",
+            json!({"taskId": task.id, "expectedVersion": stale}),
+            "task",
+        ),
+        (
+            "drop_task",
             json!({"taskId": task.id, "expectedVersion": stale}),
             "task",
         ),

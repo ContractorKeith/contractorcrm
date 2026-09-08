@@ -91,6 +91,7 @@ rather than paged with a cursor (see "Context and privacy").
 - `list_opportunities(includeArchived?, limit?)`
 - `get_opportunity(opportunityId)`
 - `get_timeline(parentType, parentId, includeRelated?, limit?, fullBodies?)`
+- `get_record_brief(parentType, parentId, activityLimit?, taskLimit?)` — one bounded follow-up packet. `parentType` is `contact`, `company`, or `opportunity`; both limits are integers from 1–25 (default 10). It returns the canonical record, directly linked contact/company records, recent activity (including the target's directly related opportunities), the target's open tasks, and deterministic flags for that record or returned task. Text caps at 500 characters; stage history and contact channels cap at 25. `activitiesTruncated`, `tasksTruncated`, `activityTextTruncated`, `taskTextTruncated`, `recordTextTruncated`, and `recordDetailsTruncated` report every omission or shortening. It excludes attachment bytes, unrelated records, credentials, and provider calls.
 - `list_tasks(status?, overdueOnly?, parentType?, parentId?, limit?)`
 - `get_attention_flags(referenceTime?)` — deterministic stale-lead / overdue / no-response flags, evaluated against `referenceTime` (UTC ISO-8601) or now
 - `list_saved_views(entityType)` — typed, versioned filter/sort definitions for contacts, companies, or opportunities
@@ -239,7 +240,7 @@ proposed in one client and applied from another.
 - `update_opportunity(opportunityId, patch, expectedVersion)`
 - `move_opportunity_stage(opportunityId, stageId, lostReasonId?, expectedVersion)`
 - `log_activity(parentType, parentId, activity)`
-- `create_task(task)` / `complete_task(taskId, expectedVersion, logActivity?)`
+- `create_task(task)` / `update_task(taskId, expectedVersion, patch)` / `complete_task(taskId, expectedVersion, logActivity?)` / `reopen_task(taskId, expectedVersion)` / `drop_task(taskId, expectedVersion)` — `patch` is the full editable `{title, body?, parentType?/parentId?, dueAt?, remindAt?, priority?}` set; update, reopen, and drop require the version last read. Task writes use the existing lifecycle and optimistic-version checks; MCP deliberately exposes no hard-delete task command.
 - `link_quote(opportunityId, quoteRef, expectedVersion)`
 - `link_job(opportunityId, jobRef, expectedVersion)` — records the ContractorProject hand-off result
 - `create_saved_view(request)` / `update_saved_view(request)` / `delete_saved_view(request)` — version-checked local list configuration; definitions are validated, bounded, and never interpreted as SQL

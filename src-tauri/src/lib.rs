@@ -9,6 +9,7 @@ pub mod explain;
 pub mod followups;
 pub mod mcp;
 pub mod proposals;
+pub mod record_brief;
 pub mod seed;
 pub mod storage;
 
@@ -46,6 +47,7 @@ use proposals::{
     ApplyProposalRequest, Proposal, ProposalApplied, ProposalEntityType, ProposalStore,
     ProposalUndone, UndoProposalRequest,
 };
+use record_brief::RecordBrief;
 use serde::{Deserialize, Serialize};
 use storage::Storage;
 use tauri::{Manager, State};
@@ -111,6 +113,7 @@ macro_rules! with_local_api_v1_commands {
             update_activity,
             delete_activity,
             get_timeline,
+            get_record_brief,
             create_task,
             update_task,
             complete_task,
@@ -619,6 +622,25 @@ fn get_timeline(
     let storage = storage.lock().expect("storage mutex poisoned");
     application::get_timeline(&storage, &parent_type, &parent_id, include_related)
         .map_err(Into::into)
+}
+
+#[tauri::command]
+fn get_record_brief(
+    storage: State<'_, SharedStorage>,
+    parent_type: String,
+    parent_id: String,
+    activity_limit: Option<usize>,
+    task_limit: Option<usize>,
+) -> Result<RecordBrief, CommandError> {
+    let storage = storage.lock().expect("storage mutex poisoned");
+    record_brief::get_record_brief(
+        &storage,
+        &parent_type,
+        &parent_id,
+        activity_limit,
+        task_limit,
+    )
+    .map_err(Into::into)
 }
 
 // Task commands — follow-ups with due dates, reminders, and priorities.

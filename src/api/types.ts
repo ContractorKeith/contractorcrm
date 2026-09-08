@@ -409,6 +409,28 @@ export type OpportunityDetail = Opportunity & {
   stageHistory: StageHistoryEntry[];
 };
 
+export type RecordBriefRecord =
+  | { type: "contact"; record: Contact }
+  | { type: "company"; record: Company }
+  | { type: "opportunity"; record: OpportunityDetail };
+
+// A bounded, read-only packet for an agent preparing one follow-up.
+export interface RecordBrief {
+  parentType: ParentType;
+  parentId: string;
+  record: RecordBriefRecord;
+  linked: { contact: Contact | null; company: Company | null };
+  activities: Activity[];
+  activitiesTruncated: boolean;
+  activityTextTruncated: boolean;
+  openTasks: Task[];
+  tasksTruncated: boolean;
+  taskTextTruncated: boolean;
+  recordTextTruncated: boolean;
+  recordDetailsTruncated: boolean;
+  attentionFlags: AttentionFlag[];
+}
+
 // Editable opportunity fields; updates replace the full editable set (v1).
 // Stage changes go through move_opportunity_stage, never through updates.
 export interface OpportunityPatch {
