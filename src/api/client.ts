@@ -11,6 +11,8 @@ import type {
   ContactListItem,
   CreateCompanyRequest,
   CreateContactRequest,
+  CaptureLeadRequest,
+  CapturedLead,
   CreateOpportunityRequest,
   CreateSavedViewRequest,
   CreateTaskRequest,
@@ -120,6 +122,7 @@ export interface CoreClient {
   listCompanies(includeArchived: boolean): Promise<Company[]>;
   getCompany(companyId: string): Promise<Company>;
   createContact(request: CreateContactRequest): Promise<Contact>;
+  captureLead(request: CaptureLeadRequest): Promise<CapturedLead>;
   updateContact(request: UpdateContactRequest): Promise<Contact>;
   archiveContact(request: ArchiveRequest): Promise<Contact>;
   unarchiveContact(request: ArchiveRequest): Promise<Contact>;
@@ -237,6 +240,7 @@ export const tauriCoreClient: CoreClient = {
   listCompanies: (includeArchived) => invoke("list_companies", { includeArchived }),
   getCompany: (companyId) => invoke("get_company", { companyId }),
   createContact: (request) => invoke("create_contact", { request }),
+  captureLead: (request) => invoke("capture_lead", { request }),
   updateContact: (request) => invoke("update_contact", { request }),
   archiveContact: (request) => invoke("archive_contact", { request }),
   unarchiveContact: (request) => invoke("unarchive_contact", { request }),

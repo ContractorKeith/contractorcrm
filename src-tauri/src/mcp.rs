@@ -29,11 +29,11 @@ use serde_json::{json, Value};
 
 use crate::ai::{CompletionProvider, ContextPreview, CredentialStore, KeyringCredentialStore};
 use crate::application::{
-    self, ActivityPatch, CompanyPatch, ContactPatch, CreateCompanyRequest, CreateContactRequest,
-    CreateOpportunityRequest, CreateTaskRequest, HandoffRefInput, LinkJobRequest, LinkQuoteRequest,
-    ListTasksRequest, LogActivityRequest, MoveOpportunityStageRequest, OpportunityPatch,
-    SavedViewEntityType, TaskPatch, UpdateCompanyRequest, UpdateContactRequest,
-    UpdateOpportunityRequest,
+    self, ActivityPatch, CaptureLeadRequest, CompanyPatch, ContactPatch, CreateCompanyRequest,
+    CreateContactRequest, CreateOpportunityRequest, CreateTaskRequest, HandoffRefInput,
+    LinkJobRequest, LinkQuoteRequest, ListTasksRequest, LogActivityRequest,
+    MoveOpportunityStageRequest, OpportunityPatch, SavedViewEntityType, TaskPatch,
+    UpdateCompanyRequest, UpdateContactRequest, UpdateOpportunityRequest,
 };
 use crate::attachments::{self, AttachmentParentType, AttachmentStore};
 use crate::domain::Actor;
@@ -621,6 +621,24 @@ impl Server {
                     },
                 )?)
             }
+            "capture_lead" => {
+                let args: CaptureLeadArgs = parse(arguments)?;
+                let mut storage = self.storage_mut();
+                value(application::capture_lead(
+                    &mut storage,
+                    CaptureLeadRequest {
+                        actor: Actor::Agent,
+                        name: args.name,
+                        job_request: args.job_request,
+                        phone: args.phone,
+                        email: args.email,
+                        note: args.note,
+                        contact_id: args.contact_id,
+                        next_step_title: args.next_step_title,
+                        next_step_due_at: args.next_step_due_at,
+                    },
+                )?)
+            }
             "update_contact" => {
                 let args: UpdateContactArgs = parse(arguments)?;
                 let mut storage = self.storage_mut();
@@ -971,6 +989,7 @@ fn instructions(mode: Mode) -> String {
 fn audit_target(tool: &str, result: &Value) -> (&'static str, String) {
     let entity_type = match tool {
         "create_contact" | "update_contact" => "contact",
+        "capture_lead" => "opportunity",
         "create_company" | "update_company" => "company",
         "create_opportunity"
         | "update_opportunity"
@@ -984,6 +1003,11 @@ fn audit_target(tool: &str, result: &Value) -> (&'static str, String) {
     let id = result
         .get("id")
         .or_else(|| result.get("entityId"))
+        .or_else(|| {
+            result
+                .get("opportunity")
+                .and_then(|opportunity| opportunity.get("id"))
+        })
         .and_then(Value::as_str)
         .unwrap_or(tool)
         .to_owned();
@@ -1335,6 +1359,25 @@ struct UndoArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateContactArgs {
     contact: ContactPatch,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CaptureLeadArgs {
+    name: String,
+    job_request: String,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    contact_id: Option<String>,
+    #[serde(default)]
+    next_step_title: Option<String>,
+    #[serde(default)]
+    next_step_due_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1798,6 +1841,21 @@ fn tools() -> Vec<ToolDef> {
                 json!({"contact": record("Contact fields; kind is required.")}),
                 &["contact"],
             ),
+        },
+        ToolDef {
+            name: "capture_lead",
+            description: "Capture an incoming job inquiry: creates or links a lead contact, a first-stage opportunity, and an optional next-step task in one transaction.",
+            write: true,
+            input_schema: schema(json!({
+                "name": text("Lead name."),
+                "jobRequest": text("What work they want."),
+                "phone": text("Optional phone number."),
+                "email": text("Optional email address."),
+                "note": text("Optional intake note."),
+                "contactId": text("Optional active contact to link without changing."),
+                "nextStepTitle": text("Optional follow-up task title."),
+                "nextStepDueAt": text("Optional UTC ISO-8601 task due time; requires nextStepTitle."),
+            }), &["name", "jobRequest"]),
         },
         ToolDef {
             name: "update_contact",

@@ -53,6 +53,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listCompanies: vi.fn().mockResolvedValue([]),
   getCompany: vi.fn(),
   createContact: vi.fn(),
+  captureLead: vi.fn().mockResolvedValue({ contact: makeContact(), opportunity: makeOpportunity(), task: null }),
   updateContact: vi.fn(),
   archiveContact: vi.fn(),
   unarchiveContact: vi.fn(),
