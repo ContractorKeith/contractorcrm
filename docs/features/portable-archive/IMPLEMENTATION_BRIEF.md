@@ -26,11 +26,13 @@ through a native file dialog.
   `verify_archive` (the shared core of `preview_archive_import` and
   `import_archive`) is a pipeline: untrusted-input bounds and entry paths,
   product/version gates, checksums and row shape, parsed-vs-manifest record
-  counts, referential integrity and structural minimums, and finally a
-  **dry-run apply of the full delete-and-replace into a throwaway in-memory
-  database** (`Storage::open_in_memory`, never committed). The dry run
-  exercises every `UNIQUE`/`CHECK` constraint, trigger, and the search-index
-  rebuild, reporting any failure as `constraint_violation`. This closed a
+  counts, referential integrity and structural minimums, application patch
+  validation, and finally a **dry-run apply of the full delete-and-replace
+  into a throwaway in-memory database** (`Storage::open_in_memory`). It
+  exercises every `UNIQUE`/`CHECK` constraint and trigger, rebuilds search,
+  then runs normal application readers over the throwaway state. No scratch
+  database is retained or exposed. Database failures are `constraint_violation`;
+  domain or reader failures are `invalid_record`. This closed a
   real gap in the original design: "no issues reported" used to be a
   best-effort claim (duplicate tag labels or a negative custom-field amount
   could still fail mid-transaction during a real import); now it's true by
@@ -80,15 +82,20 @@ through a native file dialog.
   versions (see `docs/LOCAL_API.md`).
 - **Untrusted-input bounds (review-round addition).** An archive is
   attacker- or corruption-controlled input before it's verified, so
-  `read_entries` reads every entry through a 256 MiB per-entry cap
-  (`MAX_ENTRY_BYTES`) and a 1 GiB total-uncompressed cap
+  the classic ZIP directory count is checked before constructing the ZIP
+  reader (maximum 4,096 entries), and declared per-entry and total expansion
+  are preflighted before body allocation. Runtime reads still enforce
+  Runtime reads enforce a 256 MiB per-entry cap (`MAX_ENTRY_BYTES`) and a 1 GiB total-uncompressed cap
   (`MAX_ARCHIVE_BYTES`, `entry_too_large` / `archive_too_large`) — reading
   through a `Read::take` limit rather than trusting the ZIP's declared size,
   since Deflate hides its true expansion ratio until decompressed and a
   compression bomb only lies once decompressed. An aborted read still
   charges its bytes to the running total, so a pile of oversized entries
-  can't dodge the cap by each being individually rejected. `IssueLog` caps
-  reported issues at 100 (`MAX_ISSUES`) with a trailing `too_many_issues`
+  can't dodge the cap by each being individually rejected. Archive bodies
+  remain buffered up to those caps; attachment bodies are
+  moved into import staging data rather than cloned a second time. This bounds
+  but does not eliminate high memory use; streaming remains tracked by #46.
+  `IssueLog` caps reported issues at 100 (`MAX_ISSUES`) with a trailing `too_many_issues`
   summary of how many more were found, so a pathological archive can't turn
   into a pathological IPC response.
 - **Structural minimum (review-round addition).** `verify_structure`
@@ -224,15 +231,28 @@ Original coverage:
 - **Safety backup.** Import leaves a restorable pre-import backup.
 - **Caller errors.** A file that isn't an archive at all is reported as a
   caller (`invalid_input`) error, not a per-record issue.
+- **Semantic validation.** Contacts, companies, opportunities, activities,
+  and tasks pass their application patch validators. Timestamp/date fields,
+  text limits, hand-off refs, metadata values and saved-view references are
+  checked before live replacement; ordinary application readers decode the
+  throwaway database to catch stored enums and JSON that SQL constraints miss.
+- **Preservation on rejection.** An invalid contact kind is refused while a
+  live CRM with managed attachment bytes remains unchanged.
+- **Compatibility.** Archives with a persisted tag or custom-field value that
+  was valid before its tag/definition was archived still round-trip. Missing
+  or type-incompatible references are rejected.
+- **Resource limits.** A classic ZIP declaring more than 4,096 entries is
+  rejected before central-directory parsing. ZIP64 uses the later entry-count
+  check; whole-archive memory handling remains open under #46.
 
 Review-round coverage (count, constraint, size, and destination guards):
 
 - **Manifest-vs-parsed counts.** An inflated manifest count over an emptied
   `data/<table>.json` is caught by `record_count_mismatch` in preview rather
   than importing as a silent wipe.
-- **Dry-run constraint catch.** Duplicate tag labels and a negative
-  custom-field amount are caught by the preview dry run
-  (`constraint_violation`) instead of surfacing only during a real import.
+- **Validation catch.** Duplicate tag labels are caught by the preview dry run
+  (`constraint_violation`); an opportunity with a negative value is rejected
+  by the application validator (`invalid_record`).
 - **Untrusted-size limits.** An oversized entry is refused
   (`entry_too_large`) without being buffered into memory — proving the
   per-entry cap is enforced during the read, not after.

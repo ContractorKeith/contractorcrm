@@ -16,8 +16,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::application::{
-    check_export_destination, csv_bytes, immediate, log_command, rebuild_search_index,
-    write_contacts_csv, write_export_file, write_opportunities_csv, ProductInfo,
+    check_activity_patch, check_archived_record_metadata, check_archived_saved_view,
+    check_company_patch, check_contact_patch, check_export_destination, check_handoff_ref,
+    check_opportunity_patch, check_task_patch, csv_bytes, immediate, log_command,
+    rebuild_search_index, write_contacts_csv, write_export_file, write_opportunities_csv,
+    ActivityPatch, ChannelInput, CompanyPatch, ContactPatch, HandoffRefInput, OpportunityPatch,
+    ProductInfo, TaskPatch,
 };
 use crate::attachments::{
     file_path_under, sweep_import_staging, AttachmentStore, IMPORT_STAGING_PREFIX,
@@ -498,6 +502,7 @@ fn zip_write_error(error: zip::result::ZipError) -> ApplicationError {
 /// a real contractor database is a few megabytes, and these leave headroom.
 pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 4096;
 
 /// Most issues a preview reports; the payload crosses an IPC boundary, so a
 /// pathological archive cannot turn into a pathological response.
@@ -585,12 +590,23 @@ fn verify_archive(
     connection: &Connection,
     path: &str,
 ) -> Result<VerifiedArchive, ApplicationError> {
+    if let Some(declared) = declared_entry_count(path)? {
+        if declared as usize > MAX_ARCHIVE_ENTRIES {
+            return Err(ApplicationError::ValidationFailed {
+                code: "archive_invalid",
+                field: "path".into(),
+                message: format!(
+                    "archive has {declared} entries; the limit is {MAX_ARCHIVE_ENTRIES}"
+                ),
+            });
+        }
+    }
     let file = std::fs::File::open(path).map_err(|error| unreadable(path, error.to_string()))?;
     let mut zip =
         zip::ZipArchive::new(file).map_err(|error| unreadable(path, error.to_string()))?;
 
     let mut issues = IssueLog::new();
-    let entries = read_entries(&mut zip, path, &mut issues)?;
+    let mut entries = read_entries(&mut zip, path, &mut issues)?;
     if let Some(declared) = declared_entry_count(path)? {
         // Duplicate names collapse when the central directory is indexed, so
         // the declared count is what catches a smuggled second copy.
@@ -677,7 +693,10 @@ fn verify_archive(
         verify_structure(connection, &verified.tables, &mut issues)?;
     }
     if issues.is_empty() {
-        verified.assets = verify_assets(connection, &verified.tables, &entries, &mut issues)?;
+        verify_application_semantics(connection, &verified.tables, &mut issues)?;
+    }
+    if issues.is_empty() {
+        verified.assets = verify_assets(connection, &verified.tables, &mut entries, &mut issues)?;
     }
     if issues.is_empty() {
         dry_run_apply(connection, &verified.tables, &mut issues)?;
@@ -734,6 +753,48 @@ fn read_entries<R: Read + std::io::Seek>(
         contents: BTreeMap::new(),
         digests: BTreeMap::new(),
     };
+    if zip.len() > MAX_ARCHIVE_ENTRIES {
+        issues.push(
+            "too_many_entries",
+            format!(
+                "archive has {} entries; the limit is {MAX_ARCHIVE_ENTRIES}",
+                zip.len()
+            ),
+        );
+        return Ok(entries);
+    }
+
+    // Reject archives whose declared expansion exceeds a bound before any
+    // entry body is allocated. The streaming limits below remain authoritative
+    // because ZIP metadata can lie.
+    let mut declared_total = 0_u64;
+    for index in 0..zip.len() {
+        let entry = zip
+            .by_index(index)
+            .map_err(|error| unreadable(path, error.to_string()))?;
+        if entry.is_dir() {
+            continue;
+        }
+        if entry.size() > MAX_ENTRY_BYTES {
+            issues.push(
+                "entry_too_large",
+                format!(
+                    "entry \"{}\" exceeds the {MAX_ENTRY_BYTES} byte limit (declared size)",
+                    entry.name()
+                ),
+            );
+        }
+        declared_total = declared_total.saturating_add(entry.size());
+        if declared_total > MAX_ARCHIVE_BYTES {
+            return Err(ApplicationError::ValidationFailed {
+                code: "archive_invalid",
+                field: "path".into(),
+                message: format!(
+                    "archive declares more than {MAX_ARCHIVE_BYTES} uncompressed bytes"
+                ),
+            });
+        }
+    }
     let mut total_bytes: u64 = 0;
     for index in 0..zip.len() {
         let mut entry = zip
@@ -1289,14 +1350,14 @@ fn table_predates_archive(table: &str, archive_migration_version: i64) -> bool {
 fn verify_assets(
     connection: &Connection,
     tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
-    entries: &ArchiveEntries,
+    entries: &mut ArchiveEntries,
     issues: &mut IssueLog,
 ) -> Result<BTreeMap<String, Vec<u8>>, ApplicationError> {
     let specs = all_table_columns(connection)?;
     let empty = Vec::new();
     let rows = tables.get("attachments").unwrap_or(&empty);
 
-    let mut verified = BTreeMap::new();
+    let mut verified_names = Vec::new();
     let mut expected = BTreeSet::new();
     for (index, row) in rows.iter().enumerate() {
         let (Some(id), Some(file_name)) = (
@@ -1359,7 +1420,7 @@ fn verify_assets(
             );
             continue;
         }
-        verified.insert(relative_path, content.clone());
+        verified_names.push((entry_name, relative_path));
         if issues.is_full() {
             return Ok(BTreeMap::new());
         }
@@ -1381,7 +1442,17 @@ fn verify_assets(
         // Only a clean archive hands its bytes on to the import.
         return Ok(BTreeMap::new());
     }
-    Ok(verified)
+    // Move the attachment bodies into the verified result. This avoids
+    // holding a second full copy of all asset bytes during import.
+    Ok(verified_names
+        .into_iter()
+        .filter_map(|(name, relative_path)| {
+            entries
+                .contents
+                .remove(&name)
+                .map(|content| (relative_path, content))
+        })
+        .collect())
 }
 
 /// Integer value of one column in a parsed row, if it is set.
@@ -1456,6 +1527,172 @@ fn verify_structure(
     Ok(())
 }
 
+/// Re-run the validators used by interactive writes over archived records.
+/// The database schema deliberately leaves many domain fields unconstrained,
+/// so a successful SQL dry-run alone does not make imported rows readable.
+fn verify_application_semantics(
+    connection: &Connection,
+    tables: &BTreeMap<&'static str, Vec<ArchiveRow>>,
+    issues: &mut IssueLog,
+) -> Result<(), ApplicationError> {
+    let specs = all_table_columns(connection)?;
+    let empty = Vec::new();
+    let channels = tables.get("contact_channels").unwrap_or(&empty);
+    let mut channels_by_contact: BTreeMap<String, Vec<ChannelInput>> = BTreeMap::new();
+    for channel in channels {
+        let Some(contact_id) = cell(&specs, "contact_channels", channel, "contact_id") else {
+            continue;
+        };
+        channels_by_contact
+            .entry(contact_id)
+            .or_default()
+            .push(ChannelInput {
+                kind: cell(&specs, "contact_channels", channel, "kind").unwrap_or_default(),
+                label: cell(&specs, "contact_channels", channel, "label"),
+                value: cell(&specs, "contact_channels", channel, "value").unwrap_or_default(),
+                preferred: number_cell(&specs, "contact_channels", channel, "preferred") == Some(1),
+            });
+    }
+    for (table, rows) in tables {
+        for (index, row) in rows.iter().enumerate() {
+            if let Err(message) = validate_archive_scalar_semantics(table, &specs[table], row) {
+                issues.push("invalid_record", format!("{table} row {index}: {message}"));
+                if issues.is_full() {
+                    return Ok(());
+                }
+            }
+            let result = match *table {
+                "companies" => archived_patch::<CompanyPatch>(&specs, table, row)
+                    .and_then(|patch| check_company_patch(&patch)),
+                "contacts" => {
+                    let patch =
+                        archived_patch::<ContactPatch>(&specs, table, row).map(|mut patch| {
+                            if let Some(id) = cell(&specs, table, row, "id") {
+                                patch.channels =
+                                    channels_by_contact.remove(&id).unwrap_or_default();
+                            }
+                            patch
+                        });
+                    patch.and_then(|patch| check_contact_patch(&patch))
+                }
+                "opportunities" => archived_patch::<OpportunityPatch>(&specs, table, row)
+                    .and_then(|patch| check_opportunity_patch(&patch)),
+                "activities" => archived_patch::<ActivityPatch>(&specs, table, row)
+                    .and_then(|patch| check_activity_patch(&patch))
+                    .and_then(|()| {
+                        let actor = cell(&specs, table, row, "actor").unwrap_or_default();
+                        crate::domain::Actor::from_database_value(&actor)
+                            .map(|_| ())
+                            .ok_or_else(|| ApplicationError::InvalidInput {
+                                field: "actor".into(),
+                                message: format!("unknown actor {actor}"),
+                            })
+                    }),
+                "tasks" => archived_patch::<TaskPatch>(&specs, table, row)
+                    .and_then(|patch| check_task_patch(&patch)),
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                issues.push(
+                    "invalid_record",
+                    format!("{table} row {index} fails application validation: {error}"),
+                );
+            }
+            if issues.is_full() {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bound imported text and validate stored time/date strings before any live
+/// replacement. Readers and projections would otherwise encounter these
+/// fields after an import has replaced usable data.
+fn validate_archive_scalar_semantics(
+    table: &str,
+    columns: &[ColumnSpec],
+    row: &ArchiveRow,
+) -> Result<(), String> {
+    const MAX_TEXT_BYTES: usize = 1024 * 1024;
+    for (column, value) in columns.iter().zip(&row.values) {
+        let Value::Text(text) = value else {
+            continue;
+        };
+        if text.len() > MAX_TEXT_BYTES {
+            return Err(format!("{} exceeds the 1 MiB text limit", column.camel));
+        }
+        if column.name.ends_with("_at") {
+            if chrono::DateTime::parse_from_rfc3339(text).is_err() {
+                return Err(format!("{} is not an RFC 3339 timestamp", column.camel));
+            }
+        } else if matches!(column.name.as_str(), "expected_close_date" | "date_value")
+            && chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").is_err()
+        {
+            return Err(format!("{} is not an ISO date", column.camel));
+        }
+    }
+    if table == "opportunities" {
+        for prefix in ["quote", "job"] {
+            let read = |suffix: &str| {
+                columns
+                    .iter()
+                    .position(|column| column.name == format!("{prefix}_{suffix}"))
+                    .and_then(|position| match &row.values[position] {
+                        Value::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+            };
+            let tool = read("tool");
+            let external_id = read("external_id");
+            let label = read("label");
+            let linked_at = read("linked_at");
+            match (tool, external_id, linked_at) {
+                (None, None, None) if label.is_none() => {}
+                (Some(tool), Some(external_id), Some(_)) => {
+                    check_handoff_ref(&HandoffRefInput {
+                        tool,
+                        external_id,
+                        label,
+                    })
+                    .map_err(|error| error.to_string())?;
+                }
+                _ => return Err(format!("{prefix} reference is incomplete")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn archived_patch<T: serde::de::DeserializeOwned>(
+    specs: &BTreeMap<&'static str, Vec<ColumnSpec>>,
+    table: &str,
+    row: &ArchiveRow,
+) -> Result<T, ApplicationError> {
+    let mut object = serde_json::Map::new();
+    for (column, value) in specs[table].iter().zip(&row.values) {
+        let json = match value {
+            Value::Null => serde_json::Value::Null,
+            Value::Integer(number) if column.name == "favorite" => {
+                serde_json::Value::Bool(*number != 0)
+            }
+            Value::Integer(number) => serde_json::Value::from(*number),
+            Value::Real(number) => serde_json::Number::from_f64(*number)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Value::Text(text) => serde_json::Value::String(text.clone()),
+            Value::Blob(_) => serde_json::Value::Null,
+        };
+        object.insert(column.camel.clone(), json);
+    }
+    serde_json::from_value(serde_json::Value::Object(object)).map_err(|error| {
+        ApplicationError::InvalidInput {
+            field: table.to_owned(),
+            message: error.to_string(),
+        }
+    })
+}
+
 /// Apply the whole replace into a throwaway in-memory database. UNIQUE and
 /// CHECK constraints, triggers, and the search rebuild are all exercised here,
 /// so "no issues" really does mean the real import will succeed.
@@ -1477,9 +1714,75 @@ fn dry_run_apply(
             "constraint_violation",
             format!("the search index cannot be rebuilt: {error}"),
         );
+    } else {
+        transaction.commit()?;
+        if let Err(error) = validate_application_readers(&scratch) {
+            issues.push(
+                "invalid_record",
+                format!("an archived record is not readable by the application: {error}"),
+            );
+        }
     }
-    // Never committed: the scratch database exists only to be thrown away.
-    drop(transaction);
+    // This database is throwaway; committing only lets normal application
+    // readers validate its complete replacement state.
+    Ok(())
+}
+
+fn validate_application_readers(storage: &Storage) -> Result<(), ApplicationError> {
+    use crate::application::{
+        get_opportunity, get_record_metadata, list_companies, list_contacts,
+        list_custom_field_defs, list_lost_reasons, list_opportunities, list_saved_views,
+        list_stages, list_tags, list_tasks, ListTasksRequest, SavedViewEntityType,
+    };
+
+    list_companies(storage, true)?;
+    list_contacts(storage, true)?;
+    list_stages(storage)?;
+    list_lost_reasons(storage)?;
+    list_opportunities(storage, true)?;
+    list_tasks(storage, ListTasksRequest::default())?;
+    list_tags(storage, true)?;
+    for entity in [
+        SavedViewEntityType::Contact,
+        SavedViewEntityType::Company,
+        SavedViewEntityType::Opportunity,
+    ] {
+        list_custom_field_defs(storage, entity.clone(), true)?;
+        for view in list_saved_views(storage, entity.clone())? {
+            check_archived_saved_view(storage, &entity, &view.definition)?;
+        }
+    }
+
+    let opportunity_ids = storage
+        .connection()
+        .prepare("SELECT id FROM opportunities ORDER BY id")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for id in opportunity_ids {
+        get_opportunity(storage, &id)?;
+    }
+
+    let metadata_owners = storage
+        .connection()
+        .prepare(
+            "SELECT entity_type, record_id FROM record_tags
+             UNION SELECT entity_type, record_id FROM custom_field_values
+             ORDER BY entity_type, record_id",
+        )?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (entity, id) in metadata_owners {
+        let entity = match entity.as_str() {
+            "contact" => SavedViewEntityType::Contact,
+            "company" => SavedViewEntityType::Company,
+            "opportunity" => SavedViewEntityType::Opportunity,
+            _ => continue, // the earlier reference check reports unknown types
+        };
+        let metadata = get_record_metadata(storage, entity.clone(), &id)?;
+        check_archived_record_metadata(storage, entity, &id, &metadata)?;
+    }
     Ok(())
 }
 

@@ -386,6 +386,38 @@ pub fn attachment_path(
     })
 }
 
+/// Whether the CRM may hand a managed file to the operating system's default
+/// application. Unknown types and files whose extension disagrees with their
+/// signature are revealed in the file manager instead.
+pub fn safe_to_open_direct(path: &std::path::Path) -> bool {
+    use std::io::Read;
+
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let extension = extension.to_ascii_lowercase();
+    let allowed_signature = match extension.as_str() {
+        "pdf" => b"%PDF-".as_slice(),
+        "png" => b"\x89PNG\r\n\x1a\n".as_slice(),
+        "jpg" | "jpeg" => b"\xff\xd8\xff".as_slice(),
+        "gif" => b"GIF8".as_slice(),
+        "webp" => b"RIFF".as_slice(),
+        "bmp" => b"BM".as_slice(),
+        _ => return false,
+    };
+    let mut prefix = [0_u8; 12];
+    let Ok(read) = std::fs::File::open(path).and_then(|mut file| file.read(&mut prefix)) else {
+        return false;
+    };
+    if read < allowed_signature.len() || !prefix.starts_with(allowed_signature) {
+        return false;
+    }
+    match extension.as_str() {
+        "webp" => read >= 12 && &prefix[8..12] == b"WEBP",
+        _ => true,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers (also used by the archive seam)
 // ---------------------------------------------------------------------------

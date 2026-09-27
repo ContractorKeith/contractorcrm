@@ -1,0 +1,20 @@
+{
+  "productName": "ContractorCRM Pilot",
+  "identifier": "com.contractorkeith.contractorcrm.pilot",
+  "bundle": {
+    "externalBin": ["binaries/contractorcrm-mcp"]
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ContractorCRM Pilot",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 540,
+        "resizable": true
+      }
+    ]
+  }
+}

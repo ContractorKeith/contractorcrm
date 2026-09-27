@@ -167,9 +167,21 @@ fn won_opportunity_becomes_a_contractorproject_job_and_links_back() {
     assert_eq!(stored.label.as_deref(), Some(imported.job_name.as_str()));
     assert!(!stored.linked_at.is_empty());
 
-    // A second import of the same envelope is a second job — no dedup magic.
+    // Retry in a new importer process: source identity survives process restart.
     let second = run_import(binary, &envelope_path, &sibling_database);
-    assert_ne!(second.job_id, imported.job_id);
+    assert_eq!(second.job_id, imported.job_id);
+    assert_eq!(second.created_at, imported.created_at);
+
+    // Re-export after linking changes metadata, but must not create another job.
+    export_handoff_envelope(
+        &mut storage,
+        &won.id,
+        envelope_path.to_str().expect("utf-8 path"),
+        true,
+    )
+    .expect("re-export linked opportunity");
+    let reexported = run_import(binary, &envelope_path, &sibling_database);
+    assert_eq!(reexported.job_id, imported.job_id);
 
     println!(
         "hand-off ok: opportunity {} -> job {} ({})",

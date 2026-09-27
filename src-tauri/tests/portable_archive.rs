@@ -754,6 +754,176 @@ fn preview_summarizes_a_clean_archive_without_issues() {
 }
 
 #[test]
+fn semantically_invalid_archive_preserves_live_records_and_attachment_bytes() {
+    let (temp, path, _source) = exported();
+    let tampered = repack(temp.path(), &path, "invalid-kind.zip", |entries| {
+        let mut contacts = table_rows(entries, "contacts");
+        contacts[0]["kind"] = json!("not-a-party-kind");
+        set_table(entries, "contacts", &contacts);
+    });
+
+    let mut target = storage(temp.path(), "target");
+    let target_store = attachments(temp.path(), "target");
+    let source_dir = temp.path().join("target-source");
+    populated(&mut target, &target_store, &source_dir);
+    let before = dump(&target);
+    let attachment_files = ids(&target, "SELECT id FROM attachments ORDER BY id")
+        .into_iter()
+        .map(|id| {
+            let location =
+                contractorcrm_lib::attachments::attachment_path(&target, &target_store, &id)
+                    .unwrap();
+            (
+                location.path.clone(),
+                std::fs::read(&location.path).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+    assert!(
+        issue_codes(&preview).contains(&"invalid_record"),
+        "{preview:?}"
+    );
+    let error = import_archive(&mut target, &target_store, tampered.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert_eq!(dump(&target), before);
+    for (path, bytes) in attachment_files {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn archive_validation_rejects_invalid_handoff_metadata_and_saved_view_references() {
+    let (temp, path, _source) = exported();
+    let cases = [
+        repack(temp.path(), &path, "partial-quote.zip", |entries| {
+            let mut rows = table_rows(entries, "opportunities");
+            rows[0]["quoteTool"] = json!("contractorproject");
+            set_table(entries, "opportunities", &rows);
+        }),
+        repack(temp.path(), &path, "blank-quote.zip", |entries| {
+            let mut rows = table_rows(entries, "opportunities");
+            rows[0]["quoteTool"] = json!("  ");
+            rows[0]["quoteExternalId"] = json!("quote-7");
+            rows[0]["quoteLinkedAt"] = json!("2026-01-01T00:00:00.000Z");
+            set_table(entries, "opportunities", &rows);
+        }),
+        repack(temp.path(), &path, "bad-custom-value.zip", |entries| {
+            let mut rows = table_rows(entries, "custom_field_values");
+            let number = rows
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|row| !row["numberValue"].is_null())
+                .unwrap();
+            number["numberValue"] = json!(1.0e16);
+            set_table(entries, "custom_field_values", &rows);
+        }),
+        repack(temp.path(), &path, "bad-activity-time.zip", |entries| {
+            let mut rows = table_rows(entries, "activities");
+            rows[0]["occurredAt"] = json!("not-a-timestamp");
+            set_table(entries, "activities", &rows);
+        }),
+        repack(temp.path(), &path, "oversized-name.zip", |entries| {
+            let mut rows = table_rows(entries, "contacts");
+            rows[0]["displayName"] = json!("x".repeat(1024 * 1024 + 1));
+            set_table(entries, "contacts", &rows);
+        }),
+        repack(temp.path(), &path, "oversized-custom-text.zip", |entries| {
+            let mut rows = table_rows(entries, "custom_field_values");
+            let text = rows
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|row| !row["textValue"].is_null())
+                .unwrap();
+            text["textValue"] = json!("x".repeat(4001));
+            set_table(entries, "custom_field_values", &rows);
+        }),
+        repack(temp.path(), &path, "stale-view.zip", |entries| {
+            let mut rows = table_rows(entries, "saved_views");
+            let mut definition: serde_json::Value =
+                serde_json::from_str(rows[0]["definitionJson"].as_str().unwrap()).unwrap();
+            definition["filter"]["tagIdsAll"] = json!(["missing-tag"]);
+            rows[0]["definitionJson"] = json!(definition.to_string());
+            set_table(entries, "saved_views", &rows);
+        }),
+    ];
+
+    let target = storage(temp.path(), "target");
+    for tampered in cases {
+        let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
+        assert!(
+            issue_codes(&preview).contains(&"invalid_record"),
+            "{tampered:?}: {preview:?}"
+        );
+        std::fs::remove_file(tampered).unwrap();
+    }
+}
+
+#[test]
+fn archive_round_trip_preserves_previously_linked_archived_metadata() {
+    use contractorcrm_lib::application as app;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut source = storage(temp.path(), "source");
+    let source_store = attachments(temp.path(), "source");
+    populated(&mut source, &source_store, &temp.path().join("inbox"));
+
+    let tag = app::list_tags(&source, true)
+        .unwrap()
+        .into_iter()
+        .find(|tag| tag.label == "Priority")
+        .unwrap();
+    app::archive_tag(
+        &mut source,
+        serde_json::from_value(json!({"tagId": tag.id, "expectedVersion": tag.version})).unwrap(),
+    )
+    .unwrap();
+    let definition = app::list_custom_field_defs(&source, app::SavedViewEntityType::Contact, true)
+        .unwrap()
+        .into_iter()
+        .find(|definition| definition.label == "Referred by")
+        .unwrap();
+    app::archive_custom_field_def(
+        &mut source,
+        serde_json::from_value(json!({
+            "definitionId": definition.id,
+            "expectedVersion": definition.version
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let archive_path = temp.path().join("archived-metadata.zip");
+    export_archive(
+        &mut source,
+        &source_store,
+        archive_path.to_str().unwrap(),
+        false,
+    )
+    .unwrap();
+    let mut target = storage(temp.path(), "target");
+    let preview = preview_archive_import(&target, archive_path.to_str().unwrap()).unwrap();
+    assert_eq!(preview.issues, vec![], "{preview:?}");
+    import_archive(
+        &mut target,
+        &attachments(temp.path(), "target"),
+        archive_path.to_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        dump(&target)["record_tags"].len(),
+        dump(&source)["record_tags"].len()
+    );
+    assert_eq!(
+        dump(&target)["custom_field_values"].len(),
+        dump(&source)["custom_field_values"].len()
+    );
+}
+
+#[test]
 fn import_leaves_a_restorable_pre_import_safety_backup() {
     let (temp, path, _source) = exported();
     let mut target = storage(temp.path(), "target");
@@ -790,6 +960,24 @@ fn a_file_that_is_not_an_archive_is_a_caller_error() {
     let missing = temp.path().join("missing.zip");
     let error = preview_archive_import(&target, missing.to_str().unwrap()).unwrap_err();
     assert_eq!(error.kind(), "invalid_input");
+}
+
+#[test]
+fn archive_entry_count_is_refused_before_the_zip_directory_is_parsed() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = storage(temp.path(), "target");
+    let path = temp.path().join("too-many-entries.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for index in 0..4097 {
+        zip.start_file(format!("csv/row-{index}.csv"), options)
+            .unwrap();
+    }
+    zip.finish().unwrap();
+
+    let error = preview_archive_import(&target, path.to_str().unwrap()).unwrap_err();
+    assert_eq!(error.kind(), "validation_failed");
+    assert!(error.to_string().contains("limit is 4096"));
 }
 
 #[test]
@@ -857,12 +1045,15 @@ fn constraint_violations_are_caught_by_the_preview_dry_run() {
         set_table(entries, "opportunities", &opportunities);
     });
 
-    for tampered in [duplicate_label, negative_value] {
+    for (tampered, expected_code) in [
+        (duplicate_label, "constraint_violation"),
+        (negative_value, "invalid_record"),
+    ] {
         let mut target = storage(temp.path(), "target");
         let before = dump(&target);
         let preview = preview_archive_import(&target, tampered.to_str().unwrap()).unwrap();
         assert!(
-            issue_codes(&preview).contains(&"constraint_violation"),
+            issue_codes(&preview).contains(&expected_code),
             "{tampered:?}: {preview:?}"
         );
         let error = import_archive(

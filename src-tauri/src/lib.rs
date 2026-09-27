@@ -41,7 +41,7 @@ use attachments::{
 };
 use attention::{AttentionFlag, Thresholds};
 use domain::{Activity, Actor, Company, Contact, LostReason, Opportunity, Stage, Task};
-use error::CommandError;
+use error::{ApplicationError, CommandError};
 use explain::AttentionExplanation;
 use followups::{FollowupDraft, FollowupTemplates, HistorySummary, SetFollowupTemplatesRequest};
 use proposals::{
@@ -148,6 +148,7 @@ macro_rules! with_local_api_v1_commands {
             list_attachments,
             remove_attachment,
             attachment_path,
+            open_attachment,
             get_ai_settings,
             set_ai_settings,
             set_ai_api_key,
@@ -971,6 +972,58 @@ fn attachment_path(
 ) -> Result<AttachmentLocation, CommandError> {
     let storage = storage.lock().expect("storage mutex poisoned");
     attachments::attachment_path(&storage, &attachments, &attachment_id).map_err(Into::into)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachmentOpenResult {
+    revealed: bool,
+}
+
+/// Open only recognized, signature-matched document and image formats. Every
+/// other managed file is shown in Finder/Explorer without launching it.
+#[tauri::command]
+fn open_attachment(
+    app: tauri::AppHandle,
+    storage: State<'_, SharedStorage>,
+    attachments: State<'_, AttachmentStore>,
+    attachment_id: String,
+) -> Result<AttachmentOpenResult, CommandError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let storage = storage.lock().expect("storage mutex poisoned");
+    let location = attachments::attachment_path(&storage, &attachments, &attachment_id)
+        .map_err(CommandError::from)?;
+    if !location.exists {
+        return Err(ApplicationError::NotFound {
+            resource: "attachment file",
+            id: attachment_id,
+        }
+        .into());
+    }
+    drop(storage);
+    let path = std::path::Path::new(&location.path)
+        .canonicalize()
+        .map_err(ApplicationError::from)?;
+    let root = attachments
+        .root()
+        .canonicalize()
+        .map_err(ApplicationError::from)?;
+    if !path.starts_with(root) || !path.is_file() {
+        return Err(ApplicationError::InvalidStoredData(
+            "attachment path is outside the managed folder".to_owned(),
+        )
+        .into());
+    }
+    let revealed = !attachments::safe_to_open_direct(&path);
+    let result = if revealed {
+        app.opener().reveal_item_in_dir(&path)
+    } else {
+        app.opener().open_path(path.to_string_lossy(), None::<&str>)
+    };
+    result
+        .map_err(|error| CommandError::from(ApplicationError::Io(std::io::Error::other(error))))?;
+    Ok(AttachmentOpenResult { revealed })
 }
 
 // AI provider commands — non-secret settings, the keychain-held API key, and

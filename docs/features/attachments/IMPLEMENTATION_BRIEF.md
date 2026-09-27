@@ -63,11 +63,13 @@ database backup/restore (`backup_to`/`restore_from` remain database-file only).
 - **Self-ingestion refused.** `add_attachment` canonicalizes both the managed root and the source
   path and refuses a `sourcePath` that already resolves inside the attachments root — attaching a
   managed file to itself would duplicate or clobber the store.
-- **`attachment_path` resolves, it doesn't open.** The command returns an absolute path plus
-  `exists: bool` rather than opening the file itself; the frontend hands that path to the new
-  `tauri-plugin-opener` dependency to launch the OS default handler. `exists: false` is not an
-  error — it's how a caller learns a managed file is missing (e.g., after restoring a database
-  backup, which never touches attachment files).
+- **Native open policy.** `open_attachment` resolves an attachment id inside Rust and opens only
+  PDF and raster-image extensions whose leading bytes match the expected signature. Unknown file
+  types and signature mismatches are revealed in Finder/Explorer so a hostile archive cannot use
+  an executable extension to launch a program. The webview has no opener permission to bypass this
+  policy. This is a small format screen; it does not scan document contents for exploits.
+  `attachment_path` remains available to read-only callers and reports `exists: false` after a
+  database restore that retained rows but not attachment bytes.
 - **Archive carries real files, verified three ways.** `attachments` joins `ARCHIVE_TABLES` as the
   17th canonical table, and export writes each managed file to `assets/<attachment id>/<file name>`
   reading it fresh from disk — refusing the whole export (`attachment_file_missing`) if a
@@ -113,8 +115,8 @@ database backup/restore (`backup_to`/`restore_from` remain database-file only).
   replacing it.
 - **Media type from a small extension map.** `media_type_for` covers common contractor-relevant
   types (PDF, images, Office documents, plain text/Markdown/CSV, ZIP) and falls back to
-  `application/octet-stream` for anything else — good enough for a UI icon or an opener hint,
-  without pulling in a magic-byte sniffing dependency.
+  `application/octet-stream` for anything else. This metadata is only a display hint; the native
+  opener makes its own extension and signature decision.
 - **Explicitly out of scope for v1.** Attachment file names are not indexed by FTS5 search.
   Merge-import is not supported (attachments replace in full along with everything else). Database
   backup/restore is unchanged and database-file only — it never copies attachment bytes, so a
@@ -123,18 +125,21 @@ database backup/restore (`backup_to`/`restore_from` remain database-file only).
 
 ## Contracts
 
-`schemas/v1/local-api.json` adds four commands and their wire types (`src-tauri/src/attachments.rs`
+`schemas/v1/local-api.json` adds five commands and their wire types (`src-tauri/src/attachments.rs`
 is the single source; the schema is verified against it by `src-tauri/tests/schema_contracts.rs`):
 
 - `add_attachment(request: AddAttachmentRequest)` — write; returns `Attachment`.
 - `list_attachments(parentType, parentId)` — read; returns `Attachment[]`.
 - `remove_attachment(request: RemoveAttachmentRequest)` — write; returns `AttachmentRemoval`.
 - `attachment_path(attachmentId)` — read; returns `AttachmentLocation`.
+- `open_attachment(attachmentId)` — desktop command; opens allowlisted, signature-matched PDFs
+  and images, and otherwise reveals the managed file in Finder/Explorer (`AttachmentOpenResult`).
 
 Wire types: `Attachment { id, parentType, parentId, fileName, mediaType, sizeBytes, sha256,
 createdAt, version }` (never exposes `relative_path`), `AddAttachmentRequest { actor?, parentType,
 parentId, sourcePath }`, `RemoveAttachmentRequest { actor?, attachmentId, expectedVersion }`,
-`AttachmentRemoval { fileRemoved }`, `AttachmentLocation { path, exists }`.
+`AttachmentRemoval { fileRemoved }`, `AttachmentLocation { path, exists }`, and
+`AttachmentOpenResult { revealed }`.
 
 `schemas/v1/data-model.json` adds the `attachments` table (migration 010, indexed on
 `(parent_type, parent_id, created_at)`) and its four triggers
@@ -146,7 +151,8 @@ See `docs/DATA_MODEL.md` "attachments" and "Archive contract" for the on-disk la
 
 ## Verification
 
-`src-tauri/tests/attachments.rs` (10 tests) covers:
+`src-tauri/tests/attachments.rs` includes a policy probe that confirms an executable renamed as a
+PDF is never opened directly, alongside the attachment-storage tests:
 
 - **Round trip.** A file is copied under management, listed, and removed; removal deletes the row
   and best-effort the file, reporting `fileRemoved`.

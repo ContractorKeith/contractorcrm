@@ -3878,6 +3878,91 @@ pub fn check_task_patch(patch: &TaskPatch) -> Result<(), ApplicationError> {
     validate_task_patch(patch.clone()).map(|_| ())
 }
 
+/// Validate a hand-off reference with the same bounds used by link commands.
+pub fn check_handoff_ref(input: &HandoffRefInput) -> Result<(), ApplicationError> {
+    validate_handoff_ref(input.clone()).map(|_| ())
+}
+
+/// Check a saved definition's persisted references while allowing references
+/// that became archived later. Archive export preserves those historical
+/// views; missing or incompatible ids are still invalid.
+pub fn check_archived_saved_view(
+    storage: &Storage,
+    entity_type: &SavedViewEntityType,
+    definition: &SavedViewDefinition,
+) -> Result<(), ApplicationError> {
+    validate_saved_view_definition(entity_type.clone(), definition.clone())?;
+    for tag in &definition.filter.tag_ids_all {
+        let exists: bool = storage.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1)",
+            [tag],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "saved view references missing tag {tag}"
+            )));
+        }
+    }
+    for predicate in &definition.filter.custom_fields {
+        let definition = require_custom_field_def(storage.connection(), &predicate.definition_id)?;
+        if definition.entity_type != *entity_type || definition.field_type != predicate.field_type {
+            return Err(ApplicationError::InvalidStoredData(format!(
+                "saved view references incompatible custom field {}",
+                predicate.definition_id
+            )));
+        }
+        if predicate.field_type == "select" {
+            let option_id = predicate.value.as_str().unwrap_or_default();
+            if !definition
+                .options
+                .iter()
+                .any(|option| option.id == option_id)
+            {
+                return Err(ApplicationError::InvalidStoredData(format!(
+                    "saved view references missing option {option_id}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Revalidate persisted record metadata using the writer's value-shape and
+/// reference rules while preserving already-attached archived tags/fields.
+pub fn check_archived_record_metadata(
+    storage: &Storage,
+    entity_type: SavedViewEntityType,
+    record_id: &str,
+    metadata: &RecordMetadata,
+) -> Result<(), ApplicationError> {
+    let request = SetRecordMetadataRequest {
+        actor: Actor::Import,
+        entity_type,
+        record_id: record_id.to_owned(),
+        expected_version: 1,
+        tag_ids: metadata.tag_ids.clone(),
+        values: metadata
+            .values
+            .iter()
+            .map(|value| CustomFieldValueInput {
+                definition_id: value.definition_id.clone(),
+                text_value: value.text_value.clone(),
+                number_value: value.number_value,
+                date_value: value.date_value.clone(),
+                option_id: value.option_id.clone(),
+            })
+            .collect(),
+    };
+    validate_metadata_request(&request)?;
+    validate_metadata_references(storage.connection(), &request, metadata)
+}
+
+/// Validate an archived or drafted activity patch without writing it.
+pub fn check_activity_patch(patch: &ActivityPatch) -> Result<(), ApplicationError> {
+    validate_activity_patch(patch.clone()).map(|_| ())
+}
+
 /// Company patch after validation, with parsed enums and trimmed text.
 struct ValidCompanyFields {
     name: String,

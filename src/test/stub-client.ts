@@ -132,6 +132,7 @@ export const stubClient = (overrides: Partial<CoreClient> = {}): CoreClient => (
   listAttachments: vi.fn().mockResolvedValue([]),
   removeAttachment: vi.fn().mockResolvedValue({ fileRemoved: true }),
   attachmentPath: vi.fn().mockResolvedValue({ path: "", exists: true }),
+  openAttachment: vi.fn().mockResolvedValue({ revealed: false }),
   getAiSettings: vi.fn().mockResolvedValue({
     version: 1,
     enabled: false,

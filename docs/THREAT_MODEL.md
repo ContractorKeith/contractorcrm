@@ -69,7 +69,7 @@ hostile archive) whose `relative_path` points somewhere else.
 | Parent must exist and be active | `src-tauri/src/attachments.rs:440-467` |
 | Row and audit entry commit together; a failed insert removes the copy | `src-tauri/src/attachments.rs:258-263` |
 | Deletion only ever touches `<root>/<validated id>` | `src-tauri/src/attachments.rs:583-593` |
-| Handing a path to the OS default application is capability-scoped to the managed attachments folder, so a webview compromise cannot open anything else on disk | `src-tauri/capabilities/default.json:11` |
+| Only PDF and raster-image extensions with matching file signatures are opened directly; every other file is revealed in Finder/Explorer. The native command resolves the attachment id, verifies canonical containment and regular-file status, and is the only UI path to the OS opener | `src-tauri/src/lib.rs` (`open_attachment`), `src-tauri/src/attachments.rs` (`safe_to_open_direct`) |
 | Crashed-import staging directories are swept on the next import or export | `src-tauri/src/attachments.rs:565-578` |
 
 ### Adversarial findings
@@ -84,11 +84,12 @@ hostile archive) whose `relative_path` points somewhere else.
   `tests/attachments.rs::a_drive_relative_stored_path_never_leaves_the_managed_root`
   and
   `tests/portable_archive.rs::an_attachment_row_with_a_drive_relative_id_is_refused`.
-- **Filed (high, needs a product decision) — #47.** Sanitization makes a name
-  *path*-safe, not *content*-safe. `.command`, `.exe`, `.bat`, `.html` all
-  survive, and the UI hands the absolute path straight to the OS with
-  `openPath` (`src/components/RecordAttachments.tsx:65`). A hostile archive can
-  therefore plant an executable that one click runs.
+- **Fixed (high) — #47.** A native `open_attachment` command opens only PDF and
+  raster-image extensions with matching signatures; unknown types and a
+  mismatched file (such as a shell script renamed `.pdf`) are revealed in the
+  file manager. The webview no longer has opener permissions, so it cannot
+  bypass this policy. This is format screening, not content scanning: a
+  malicious document could still exploit its viewer.
 
 ### Residual risks
 
@@ -183,14 +184,17 @@ ids or names that try to escape the managed root.
   Attachments was reachable here: `assets/C:evil/name.txt` with a matching
   `attachments` row would have been staged through `file_path_under` into a
   drive-relative path. Now refused during verification.
-- **Filed (medium) — #46.** Verification retains every accepted entry in memory
-  and `verify_assets` clones every asset body, so peak memory is roughly twice
-  the archive, up to ~2 GiB at the 1 GiB cap. There is also no cap on entry
-  *count*.
-- **Filed (medium) — #49.** Verification checks structure, not meaning: fields
-  the schema does not constrain (`contacts.kind`, text lengths, timestamp
-  formats) are only validated in the application layer, which the import does
-  not re-run.
+- **Partially fixed (medium) — #46.** ZIP entry count is capped at 4,096 and declared
+  uncompressed size is preflighted before entry bodies are allocated; actual
+  streaming remains bounded at 256 MiB per entry and 1 GiB total. Verified
+  attachment bodies move into staging data without a second full copy. The
+  archive is still buffered in memory up to those caps, so streaming import
+  remains open under #46.
+- **Fixed (medium) — #49.** Archive rows pass the same record patch validators
+  as interactive writes, stored timestamps and dates are parsed, text fields
+  are capped at 1 MiB, and typed application readers validate enums, saved
+  view definitions, metadata, and hand-off data in a throwaway database before
+  live replacement.
 
 ### Residual risks
 
@@ -401,10 +405,10 @@ write in read-only mode or to point the helper at somebody else's database.
 | 1 | `:` accepted in managed path components → Windows drive-relative escape from a stored path or an archived attachment id | Attachments, archive | High (Windows) | Fixed, `attachments.rs:525-536` |
 | 2 | CSV import buffered an unbounded file and row count | CSV import | Medium | Fixed, `application.rs:5830-5837`, `6404-6470` |
 | 3 | MCP stdio read had no message-size bound | MCP | Medium | Fixed, `mcp.rs:65`, `879-947` |
-| 4 | Archive verification buffers the whole archive and clones asset bytes; no entry-count cap | Archive | Medium | Filed [#46](https://github.com/ContractorKeith/contractorcrm/issues/46) |
-| 5 | Attachments open through the OS shell with any extension a hostile archive chooses | Attachments | High | Filed [#47](https://github.com/ContractorKeith/contractorcrm/issues/47) |
+| 4 | Archive verification buffers the whole archive near its configured cap | Archive | Medium | Partially mitigated; #46 remains open for streaming |
+| 5 | Attachments open through the OS shell with any extension a hostile archive chooses | Attachments | High | Fixed, `open_attachment` allowlist and signature checks |
 | 6 | MCP read-only mode did not open SQLite read-only | MCP | Low | Fixed, `mcp.rs:153-156`, `storage.rs:627-634` |
-| 7 | Archive import skips application-level field validation | Archive | Medium | Filed [#49](https://github.com/ContractorKeith/contractorcrm/issues/49) |
+| 7 | Archive import skips application-level field validation | Archive | Medium | Fixed, current validators plus typed-reader verification |
 | 8 | Prompt injection can produce a plausible wrong draft or summary | Provider context | Medium | Accepted; bounded, disclosed, validated, undoable |
 
 ## Keeping this honest

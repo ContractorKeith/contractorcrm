@@ -150,13 +150,13 @@ under the attachments root; the database backup/restore commands are database-fi
 touch attachment files (see "Archive contract" below for how attachments travel in a portable
 archive, and how a restored database can end up with rows that reference missing files).
 
-Four commands cover the surface: `add_attachment` (copies a file from `sourcePath` under
+Five commands cover the surface: `add_attachment` (copies a file from `sourcePath` under
 management; refuses a `sourcePath` that already resolves inside the managed root, so a managed
 file can't be attached to itself), `list_attachments`, `remove_attachment` (versioned; deletes the
 row first, then best-effort removes the managed file — `fileRemoved` reports whether that cleanup
-succeeded), and `attachment_path` (resolves the absolute path plus whether the file still exists on
-disk, for the frontend to hand to the `tauri-plugin-opener` opener rather than building a path
-itself). FTS indexing of attachment file names and merge-import are both out of scope for v1.
+succeeded), `attachment_path` (read-only absolute location and existence), and `open_attachment`
+(opens signature-matched PDFs and raster images; reveals other file types in the file manager).
+FTS indexing of attachment file names and merge-import are both out of scope for v1.
 
 ### `saved_views`
 
