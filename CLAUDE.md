@@ -14,6 +14,10 @@ local agent API, and a clean opportunity → quote → ContractorProject job han
 
 ## Status
 
+The personal developer pilot is tracked in `docs/features/developer-pilot/PLAN.md`.
+Use its isolated build and acceptance record before consulting use. The original
+release history below does not establish acceptance of a newer Pilot build.
+
 Core ready — v0.1.0 development. MVP slices 0–3 are implemented and verified:
 native contacts/companies, durable SQLite storage and backup/restore, pipeline and
 won-opportunity hand-off, activities, tasks, and needs-attention workflows. Slice 4

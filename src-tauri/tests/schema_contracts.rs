@@ -629,6 +629,7 @@ fn attachments_publish_strict_bounded_wire_types() {
         "list_attachments",
         "remove_attachment",
         "attachment_path",
+        "open_attachment",
     ] {
         assert!(
             commands.iter().any(|command| command["name"] == name),
@@ -641,6 +642,7 @@ fn attachments_publish_strict_bounded_wire_types() {
         "RemoveAttachmentRequest",
         "AttachmentRemoval",
         "AttachmentLocation",
+        "AttachmentOpenResult",
     ] {
         assert_eq!(
             schema["wireTypes"][strict_type]["additionalProperties"], false,

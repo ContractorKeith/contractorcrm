@@ -836,6 +836,10 @@ export interface AttachmentLocation {
   exists: boolean;
 }
 
+export interface AttachmentOpenResult {
+  revealed: boolean;
+}
+
 // Where the live database file is and how big it is.
 export interface DatabaseInfo {
   databasePath: string;

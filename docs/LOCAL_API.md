@@ -103,7 +103,8 @@ rather than paged with a cursor (see "Context and privacy").
 - `list_stages()` — pipeline stages in board order with their kind (open, won, lost); the source of the ids `move_opportunity_stage` takes
 - `list_lost_reasons()` — the stored lost reasons; moving to a lost stage requires one of these ids
 - `list_attachments(parentType, parentId)` — every managed file on a contact or opportunity, oldest first; each returns `id`, `fileName`, `mediaType`, `sizeBytes`, `sha256`, `createdAt`, `version` (never the internal `relative_path`)
-- `attachment_path(attachmentId)` — resolves a managed file's absolute path and whether it still exists on disk (`AttachmentLocation { path, exists }`), for the frontend to hand to the OS opener; `exists: false` after a database restore means the row survived but its bytes did not
+- `attachment_path(attachmentId)` — read-only absolute location and existence (`AttachmentLocation { path, exists }`); `exists: false` after a database restore means the row survived but its bytes did not
+- `open_attachment(attachmentId)` — desktop-only native action: directly opens signature-matched PDFs and raster images; reveals other file types in Finder/Explorer (`AttachmentOpenResult { revealed }`)
 - `preview_contact_import(path, mapping?)` — parses a CSV file's headers and sample rows without writing; returns the effective mapping (caller's or auto-guessed from header aliases) and per-row validation issues, but does not touch the database. A trailing empty header column (and its cells) is dropped and tolerated; an interior blank header, a duplicate header, or a non-UTF-8/malformed file fails as `invalid_input` (the encoding case with re-save-as-UTF-8 guidance) rather than a partial read.
 - `preview_archive_import(path)` — reads a portable archive ZIP and fully
   verifies it without writing anything: untrusted-input size bounds (256 MiB

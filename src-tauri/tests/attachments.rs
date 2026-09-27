@@ -158,6 +158,28 @@ fn removing_an_unknown_attachment_is_not_found() {
 }
 
 #[test]
+fn only_signature_matched_pdf_and_raster_formats_open_directly() {
+    use contractorcrm_lib::attachments::safe_to_open_direct;
+
+    let temp = tempfile::tempdir().unwrap();
+    let pdf = temp.path().join("quote.pdf");
+    std::fs::write(&pdf, b"%PDF-1.7\nquote").unwrap();
+    assert!(safe_to_open_direct(&pdf));
+
+    let renamed_script = temp.path().join("quote.pdf");
+    std::fs::write(&renamed_script, b"#!/bin/sh\nopen calculator").unwrap();
+    assert!(!safe_to_open_direct(&renamed_script));
+
+    let script = temp.path().join("run.command");
+    std::fs::write(&script, b"#!/bin/sh\nopen calculator").unwrap();
+    assert!(!safe_to_open_direct(&script));
+
+    let text = temp.path().join("notes.txt");
+    std::fs::write(&text, b"gate measurements").unwrap();
+    assert!(!safe_to_open_direct(&text));
+}
+
+#[test]
 fn file_names_are_sanitized_into_a_safe_managed_layout() {
     // Separators and traversal collapse to the base name.
     assert_eq!(

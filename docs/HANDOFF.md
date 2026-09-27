@@ -78,14 +78,14 @@ The envelope is a snapshot, not a live link. Once ContractorProject creates the
 job, the two modules own different things and neither writes into the other.
 
 What the v1 importer actually consumes is narrow: it reads
-`opportunity.name` and nothing else, and creates a job with that name and its
+`opportunity.id` for retry identity and `opportunity.name`, and creates a job with that name and its
 own `--timezone`. Every other envelope field travels for the receiving side's
 own records (it keeps the envelope file) and for future consumers; none of it
 lands in the job.
 
 | Field | Owner after the job exists | Notes |
 | --- | --- | --- |
-| Opportunity name | ContractorCRM | The only field the v1 importer reads. It seeds the job name at import time and is never synced again — renaming the opportunity does not rename the job. |
+| Opportunity identity and name | ContractorCRM | Identity deduplicates retries. The name seeds the job at import time and is never synced again. |
 | Opportunity value, stage, source, notes | ContractorCRM | Carried in the envelope but not consumed by the v1 importer; nothing about them exists in the job. |
 | Contact and company records | ContractorCRM | Carried in the envelope but not consumed by the v1 importer. The job has no contact or company of its own; the envelope file is the receiving side's only copy. |
 | `quoteRef`, `jobRef` on the opportunity | ContractorCRM | Bookmarks: tool, external id, label, linked timestamp. |
@@ -96,8 +96,9 @@ Practical rules:
 
 - Nothing syncs back automatically. Editing the opportunity does not touch the
   job, and finishing the job does not move the opportunity.
-- Re-exporting and re-importing an envelope creates a second job — it is not an
-  update. Fix mistakes in whichever module owns the field.
+- Re-importing the same opportunity ID and imported content returns the existing
+  job, including after a process restart. Changed imported content returns a
+  conflict. Fix mistakes in whichever module owns the field.
 - If the job's name changes in ContractorProject and you want the CRM label to
   match, re-run `link_job` with the new label. That is a CRM-side edit.
 - Breaking envelope changes bump `schemaVersion`; consumers pinned to v1 keep
@@ -137,8 +138,27 @@ Run it with `scripts/handoff_e2e.sh` (set `CONTRACTORPROJECT_DIR` when the
 sibling checkout is not at `../contractorproject`). The script builds the
 sibling binary, exports `HANDOFF_IMPORT_BIN`, and runs
 `src-tauri/tests/handoff_e2e.rs`. That test is `#[ignore]`d and skips when the
-variable is unset, so CI never needs the sibling repository. Imports are not
-deduplicated: importing the same envelope twice creates two jobs.
+variable is unset, so CI never needs the sibling repository. The pilot acceptance
+also retries and re-exports the linked opportunity, proving one stable job ID.
+
+## ContractorBooks party reference
+
+Books stores a CRM contact or company reference on its own customer/vendor:
+
+```json
+{ "tool": "contractorcrm", "id": "contact-id", "label": "Example builder", "linkedAt": "2026-09-27T14:00:00Z" }
+```
+
+CRM's `quoteRef` and `jobRef` use `externalId`; Books uses `id` for that identity.
+The CRM owns `tool`, `id` and `label`. Books stamps `linkedAt` itself and owns the
+reference lifecycle through `link_crm_party(entityType, entityId, crmRef,
+expectedVersion)`. Callers do not supply the timestamp. The operation is
+version-checked and audited, and never writes into CRM's database.
+
+Books knows the CRM party; CRM has no back-reference to a Books customer/vendor.
+The canonical contracts and field ownership are in
+`../contractorbooks/docs/HANDOFF.md`. This section incorporates the intent of
+PR #45 while preserving the later CRM field-ownership and verification sections.
 
 ## Won-stage rule
 

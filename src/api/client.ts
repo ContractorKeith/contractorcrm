@@ -71,6 +71,7 @@ import type {
   AddAttachmentRequest,
   Attachment,
   AttachmentLocation,
+  AttachmentOpenResult,
   AttachmentParentType,
   AttachmentRemoval,
   RemoveAttachmentRequest,
@@ -180,6 +181,7 @@ export interface CoreClient {
   listAttachments(parentType: AttachmentParentType, parentId: string): Promise<Attachment[]>;
   removeAttachment(request: RemoveAttachmentRequest): Promise<AttachmentRemoval>;
   attachmentPath(attachmentId: string): Promise<AttachmentLocation>;
+  openAttachment(attachmentId: string): Promise<AttachmentOpenResult>;
   getAiSettings(): Promise<AiSettings>;
   setAiSettings(request: SetAiSettingsRequest): Promise<AiSettings>;
   setAiApiKey(apiKey: string): Promise<AiSettings>;
@@ -298,6 +300,7 @@ export const tauriCoreClient: CoreClient = {
   listAttachments: (parentType, parentId) => invoke("list_attachments", { parentType, parentId }),
   removeAttachment: (request) => invoke("remove_attachment", { request }),
   attachmentPath: (attachmentId) => invoke("attachment_path", { attachmentId }),
+  openAttachment: (attachmentId) => invoke("open_attachment", { attachmentId }),
   getAiSettings: () => invoke("get_ai_settings"),
   setAiSettings: (request) => invoke("set_ai_settings", { request }),
   setAiApiKey: (apiKey) => invoke("set_ai_api_key", { apiKey }),

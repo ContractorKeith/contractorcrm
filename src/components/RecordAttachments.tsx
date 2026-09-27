@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
 
 import type { CoreClient } from "../api/client";
 import { isCommandError, type Attachment, type AttachmentParentType } from "../api/types";
@@ -22,6 +21,7 @@ function formatSize(sizeBytes: number): string {
 export function RecordAttachments({ client, parentType, parentId }: RecordAttachmentsProps) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -53,16 +53,15 @@ export function RecordAttachments({ client, parentType, parentId }: RecordAttach
     await load();
   };
 
-  // The core owns the path; a missing managed file is reported, not opened.
+  // The native boundary decides whether a file is safe to open directly.
   const openAttachment = async (attachment: Attachment) => {
     setError(null);
+    setNotice(null);
     try {
-      const location = await client.attachmentPath(attachment.id);
-      if (!location.exists) {
-        setError(`${attachment.fileName} is missing from the attachments folder.`);
-        return;
+      const result = await client.openAttachment(attachment.id);
+      if (result.revealed) {
+        setNotice(`${attachment.fileName} was shown in its folder because this file type is not opened directly.`);
       }
-      await openPath(location.path);
     } catch (rejection) {
       setError(isCommandError(rejection) ? rejection.message : "The file could not be opened.");
     }
@@ -101,6 +100,7 @@ export function RecordAttachments({ client, parentType, parentId }: RecordAttach
           {error}
         </p>
       ) : null}
+      {notice ? <p role="status">{notice}</p> : null}
 
       {attachments.length === 0 ? (
         <p className="detail-empty">No attachments yet.</p>
@@ -115,10 +115,10 @@ export function RecordAttachments({ client, parentType, parentId }: RecordAttach
                 <button
                   type="button"
                   className="button"
-                  aria-label={`Open ${attachment.fileName}`}
+                  aria-label={`Open or show ${attachment.fileName}`}
                   onClick={() => void openAttachment(attachment)}
                 >
-                  Open
+                  Open / Show
                 </button>
                 {confirmingId === attachment.id ? (
                   <>

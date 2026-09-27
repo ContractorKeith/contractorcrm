@@ -1,4 +1,6 @@
 node_modules/
+pilot-artifacts/
+src-tauri/binaries/
 dist/
 *.tsbuildinfo
 vite.config.js

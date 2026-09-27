@@ -1,18 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeAttachment, stubClient } from "../test/stub-client";
 import { RecordAttachments } from "./RecordAttachments";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn() }));
 
 const openDialog = vi.mocked(open);
-const openWithOs = vi.mocked(openPath);
-
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -91,35 +87,30 @@ describe("RecordAttachments add", () => {
 });
 
 describe("RecordAttachments open", () => {
-  it("opens the managed copy at the path the core reports", async () => {
+  it("asks the native boundary to open the managed attachment by id", async () => {
     const user = userEvent.setup();
     const client = stubClient({
       listAttachments: vi.fn().mockResolvedValue([makeAttachment({ fileName: "site-plan.pdf" })]),
-      attachmentPath: vi
-        .fn()
-        .mockResolvedValue({ path: "/data/attachments/attachment-1/site-plan.pdf", exists: true }),
+      openAttachment: vi.fn().mockResolvedValue({ revealed: false }),
     });
     render(<RecordAttachments client={client} parentType="contact" parentId="contact-1" />);
 
-    await user.click(await screen.findByRole("button", { name: "Open site-plan.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Open or show site-plan.pdf" }));
 
-    await waitFor(() =>
-      expect(openWithOs).toHaveBeenCalledWith("/data/attachments/attachment-1/site-plan.pdf"),
-    );
+    await waitFor(() => expect(client.openAttachment).toHaveBeenCalledWith("attachment-1"));
   });
 
-  it("reports a missing managed file instead of opening it", async () => {
+  it("explains when an unsupported file is revealed in its folder", async () => {
     const user = userEvent.setup();
     const client = stubClient({
-      listAttachments: vi.fn().mockResolvedValue([makeAttachment({ fileName: "site-plan.pdf" })]),
-      attachmentPath: vi.fn().mockResolvedValue({ path: "/data/gone.pdf", exists: false }),
+      listAttachments: vi.fn().mockResolvedValue([makeAttachment({ fileName: "installer.command" })]),
+      openAttachment: vi.fn().mockResolvedValue({ revealed: true }),
     });
     render(<RecordAttachments client={client} parentType="contact" parentId="contact-1" />);
 
-    await user.click(await screen.findByRole("button", { name: "Open site-plan.pdf" }));
+    await user.click(await screen.findByRole("button", { name: "Open or show installer.command" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("site-plan.pdf is missing");
-    expect(openWithOs).not.toHaveBeenCalled();
+    expect(await screen.findByRole("status")).toHaveTextContent("shown in its folder");
   });
 });
 
