@@ -17,3 +17,10 @@ extra contact; a checksum-correct archive with invalid contact kind was rejected
 before replacement, with the restored contact still readable after restart.
 Automated gates and full implementation review passed. Next: clean pinned package,
 provenance and PR integration.
+
+## 2026-09-27 — Pinned CRM candidate
+
+Clean source 42ff770ad2281d4f07425bf69fda5b542765a399 built, installed and passed strict ad-hoc
+signature verification. The restored contact and dated follow-up remained readable.
+Retained synthetic profile and backups separately in the Downloads pilot handoff.
+Artifact hash is in ACCEPTANCE.md. PR #73 is pushed; CI/merge remains.

@@ -1,6 +1,6 @@
 # Developer pilot acceptance
 
-Status: automated and installed workflow gates passed; final clean build provenance and merge pending.
+Status: automated and installed clean candidate gates passed; merge pending.
 Date: 2026-09-27, America/New_York.
 
 ## Automated evidence
@@ -40,7 +40,19 @@ A second archive with a recomputed valid checksum but an unknown contact kind wa
 rejected during preview with a field-specific application-validation error. The
 replace button stayed disabled. Restarted and read the original contact normally.
 
-Pending: install the clean pinned build, record its checksum and merge/push.
+## Pinned artifact
+
+Source: `42ff770ad2281d4f07425bf69fda5b542765a399`, clean worktree at build.
+Version 0.1.0; macOS 26.6.2; aarch64-apple-darwin.
+Archive: `ContractorCRM-Pilot-42ff770ad228.zip`.
+SHA-256: `2df6237b91d902c6a468211b44b93961d4f3447bb670d4026dcd1371b559d152`.
+
+Installed this exact clean build in ~/Applications and verified its complete
+ad-hoc signature. Reopened the restored contact and dated follow-up successfully.
+Synthetic records and the archive are retained separately from the fresh working
+Pilot profile in the Downloads handoff folder. Subsequent evidence-only commits
+do not change the runtime represented by this source SHA. Integration is tracked
+in PR #73 and issue #71.
 
 ## Limits
 
