@@ -1,6 +1,6 @@
 # Personal developer pilot
 
-Status: implementation and acceptance in progress. No installed acceptance claimed.
+Status: engineering pilot preparation complete; installed acceptance passed and PR #73 merged. Keith’s real consulting trial follows.
 Tracker: https://github.com/ContractorKeith/contractorcrm/issues/71
 
 ## Goal and boundary
@@ -28,16 +28,16 @@ The script records exact source SHA, dirty state, app version, macOS version and
 
 ## Acceptance gates
 
-- [ ] Required safety and recovery issues pass focused regression coverage.
-- [ ] Repository frontend, Rust and applicable browser/version gates pass.
-- [ ] Packaged Pilot app launches using the isolated data directory.
-- [ ] Create realistic synthetic records, edit and restart; records persist.
-- [ ] Export human-readable data and check it against the synthetic scenario.
-- [ ] Create backup, change data, restore a copy, reopen and compare.
-- [ ] Corrupt recovery input fails without destroying current usable data.
-- [ ] Optional AI/model availability does not block ordinary work.
-- [ ] Parent reviews full branch diff and canonical website docs.
-- [ ] Scoped commits merged to main and pushed; artifact SHA and checks recorded.
+- [x] Required safety and recovery issues pass focused regression coverage.
+- [x] Repository frontend, Rust and applicable browser/version gates pass.
+- [x] Packaged Pilot app launches using the isolated data directory.
+- [x] Create realistic synthetic records, edit and restart; records persist.
+- [x] Export human-readable data and check it against the synthetic scenario.
+- [x] Create backup, change data, restore a copy, reopen and compare.
+- [x] Corrupt recovery input fails without destroying current usable data.
+- [x] Optional AI/model availability does not block ordinary work.
+- [x] Parent reviews full branch diff and canonical website docs.
+- [x] Scoped commits merged to main and pushed; artifact SHA and checks recorded.
 
 Use `ACCEPTANCE.md` in this directory for evidence. Mark incomplete native steps pending. Keith's later client-data trial and business/accountant decisions cannot be inferred from synthetic engineering tests.
 

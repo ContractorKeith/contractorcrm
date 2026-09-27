@@ -24,3 +24,13 @@ Clean source 42ff770ad2281d4f07425bf69fda5b542765a399 built, installed and passe
 signature verification. The restored contact and dated follow-up remained readable.
 Retained synthetic profile and backups separately in the Downloads pilot handoff.
 Artifact hash is in ACCEPTANCE.md. PR #73 is pushed; CI/merge remains.
+
+## 2026-09-27 — Pilot preparation complete
+
+PR #73 merged as 974ea608f444887a966c565ce03b3f847a5e0de1 after all PR checks passed.
+Main fast-forwarded; complete branch reviewed. Fresh Pilot profile verified empty,
+retained ZIP independently extracted/signature-checked and matched to installed
+runtime. Packaged Project importer passed cross-app retry/re-export acceptance.
+Normal app data and pre-existing untracked backups preserved.
+Next: Keith enters confirmed consulting records with Sheets in parallel; #46
+streaming archive work remains separate from this bounded trusted-archive pilot.

@@ -1,6 +1,6 @@
 # Developer pilot acceptance
 
-Status: automated and installed clean candidate gates passed; merge pending.
+Status: engineering acceptance complete; PR #73 merged with all checks green.
 Date: 2026-09-27, America/New_York.
 
 ## Automated evidence
@@ -60,3 +60,7 @@ Issue #46 remains open: entry/size caps and moved attachment buffers reduce
 memory pressure, but archive contents still remain in memory. Pilot imports
 are restricted to trusted self-created archives. Documents need their own
 backup plan. PDF/raster signature screening is not a malware scan.
+
+## Integration and handoff
+
+PR #73 merged as `974ea608f444887a966c565ce03b3f847a5e0de1`. Frontend, Linux Rust/native build and documentation marker checks passed on the final PR head. The original main checkout was fast-forwarded without changing its pre-existing untracked instruction backups. Independently extracted the retained ZIP, verified its signature and matched the installed executable hash. The installed packaged Project importer also passed the CRM retry/re-export E2E test. Fresh CRM Pilot opens with zero contacts; synthetic records are retained in the handoff folder.
