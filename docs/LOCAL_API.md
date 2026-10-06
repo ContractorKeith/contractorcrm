@@ -37,13 +37,14 @@ Wire it into an agent client with the command line Settings â†’ Backup & Data â†
 
 ```
 "<app>/Contents/MacOS/contractorcrm-mcp" --database "<app data>/contractorcrm.sqlite3"
-"<app>/Contents/MacOS/contractorcrm-mcp" --database "<app data>/contractorcrm.sqlite3" --read-write
+"<app>/Contents/MacOS/contractorcrm-mcp" --database "<app data>/contractorcrm.sqlite3" --read-only
 ```
 
-- **Read-only is the default.** Write tools are not listed at all; calling one
-  anyway returns the `read_only` error kind naming the command. The mode is
-  whatever the helper was launched with, so it is reversible: drop
-  `--read-write` and restart the client.
+- **Read-write is the default**, so an agent can manage the CRM. With
+  `--read-only` write tools are not listed at all; calling one anyway returns
+  the `read_only` error kind naming the command. The mode is whatever the helper
+  was launched with, so it is reversible: add or drop `--read-only` and restart
+  the client. `--read-write` is still accepted for older client configs.
 - In read-only mode the helper opens SQLite with read-only flags. It never
   creates or migrates the database.
 - A missing database, a file with no readable `schema_migrations` table (it is
@@ -52,8 +53,8 @@ Wire it into an agent client with the command line Settings â†’ Backup & Data â†
 - A database written by an *older* build is refused too in read-only mode: a
   connection the user granted no write permission to never rewrites their
   schema. The message says to launch the desktop app once (or relaunch the
-  helper with `--read-write`, which is an explicit write grant and does migrate
-  forward, saying so on stderr).
+  helper without `--read-only`; read-write mode migrates forward, saying so on
+  stderr).
 - Every mutating tool call runs as actor `agent` and writes an extra
   `command_log` row naming the MCP client from the `initialize` handshake.
 - `preview_context(tool, arguments)` returns the exact bounded projection text

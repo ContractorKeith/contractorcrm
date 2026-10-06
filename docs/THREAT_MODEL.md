@@ -329,8 +329,10 @@ Second-order residual risks:
 
 - Injected text can also target the *client agent* rather than the app: an MCP
   client reading `get_timeline` gets record text, and what that agent does with
-  it is outside this app's control. The read-only default is the mitigation
-  (medium, documented in `docs/LOCAL_API.md`).
+  it is outside this app's control. `--read-only` is the mitigation for a client
+  that should only look; since 2026-10-06 read-write is the default, because the
+  helper exists so an agent can manage the CRM (medium, documented in
+  `docs/LOCAL_API.md`).
 - Context projections read whatever is in the database, including rows imported
   from an untrusted archive (§3) (low, bounded by the truncation caps).
 
@@ -339,7 +341,7 @@ Second-order residual risks:
 ## 6. MCP helper
 
 **Asset.** Everything the granted mode allows: all records on read, and writes
-when the user launched with `--read-write`.
+unless the user launched with `--read-only`.
 
 **Boundary.** stdio only. No socket, no port, no listener — the client is a
 process the user's agent launched, and the OS process boundary is the perimeter.
@@ -354,7 +356,7 @@ write in read-only mode or to point the helper at somebody else's database.
 | Control | Where |
 | --- | --- |
 | stdio transport only; no network listener anywhere in the helper | `src-tauri/src/mcp.rs:879-918`, `src-tauri/src/bin/contractorcrm-mcp.rs` |
-| Read-only is the default; write tools are absent from `tools/list` *and* refused by name with a stable `read_only` error rather than a silent no-op | `src-tauri/src/mcp.rs:279-324` |
+| Read-write is the default (2026-10-06); with `--read-only`, write tools are absent from `tools/list` *and* refused by name with a stable `read_only` error rather than a silent no-op | `src-tauri/src/mcp.rs:279-324` |
 | A database written by a newer build is refused instead of blindly migrated; read-only mode opens SQLite with `SQLITE_OPEN_READ_ONLY` and never migrates | `src-tauri/src/mcp.rs:137-179`, `src-tauri/src/storage.rs:627-634` |
 | A file without a readable `schema_migrations` table is refused, so the helper cannot create a CRM schema inside someone else's SQLite file | `src-tauri/src/mcp.rs:856-871` |
 | Writes are always attributed to `Actor::Agent`, plus a second audit row naming the client from `initialize` | `src-tauri/src/mcp.rs:828-848`, tool arms at `:586-757` |
@@ -383,8 +385,8 @@ write in read-only mode or to point the helper at somebody else's database.
 
 ### Residual risks
 
-- Anyone who can run a process as the user can launch the helper themselves with
-  `--read-write`. Mode is a user grant, not an authentication boundary (low, by
+- Anyone who can run a process as the user can launch the helper themselves in
+  read-write mode. Mode is a user grant, not an authentication boundary (low, by
   design — see "what this app is").
 - The helper and the desktop app can hold the database at once; SQLite's locking
   keeps that safe, but a long agent read can slow a desktop write (low).

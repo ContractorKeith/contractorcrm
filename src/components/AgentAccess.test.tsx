@@ -6,7 +6,7 @@ import { stubClient } from "../test/stub-client";
 import { AgentAccess } from "./AgentAccess";
 
 describe("personal agent setup", () => {
-  it("copies exact paths as JSON and makes write access an explicit choice", async () => {
+  it("copies exact paths as JSON with write access by default and read-only as a choice", async () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const helper = 'C:\\Program Files\\ContractorCRM\\contractorcrm-mcp.exe';
@@ -18,21 +18,21 @@ describe("personal agent setup", () => {
 
     const copy = screen.getByRole("button", { name: "Copy configuration" });
     await waitFor(() => expect(copy).toBeEnabled());
-    expect(screen.getByRole("combobox", { name: "Agent access" })).toHaveValue("read");
+    expect(screen.getByRole("combobox", { name: "Agent access" })).toHaveValue("write");
+    expect(screen.getByText(/only applied AI proposals have undo/)).toBeVisible();
     await user.click(copy);
     expect(JSON.parse(writeText.mock.calls[0]![0])).toEqual({
       mcpServers: { contractorcrm: { command: helper, args: ["--database", database] } },
     });
     expect(screen.getByRole("status")).toHaveTextContent("Configuration copied.");
 
-    await user.selectOptions(screen.getByRole("combobox"), "write");
+    await user.selectOptions(screen.getByRole("combobox"), "read");
     await user.click(copy);
     expect(JSON.parse(writeText.mock.calls[1]![0]).mcpServers.contractorcrm.args)
-      .toEqual(["--database", database, "--read-write"]);
-    expect(screen.getByText(/only applied AI proposals have undo/)).toBeVisible();
+      .toEqual(["--database", database, "--read-only"]);
     await user.click(screen.getByText("Connection details"));
     expect(screen.getByLabelText("PowerShell command"))
-      .toHaveValue(`& '${helper}' --database '${database.replaceAll("'", "''")}' --read-write`);
+      .toHaveValue(`& '${helper}' --database '${database.replaceAll("'", "''")}' --read-only`);
   });
 
   it("keeps copy disabled until both real paths resolve", async () => {

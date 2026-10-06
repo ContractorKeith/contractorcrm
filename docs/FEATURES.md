@@ -84,8 +84,8 @@ local or BYOK endpoint, and every provider call names the records it includes.
 - [x] Risk flags ("no contact in 21 days", "proposal sent but no response") —
   deterministic rules the model explains, never invents
 - [x] Local agent API so other tools or agents can read/write CRM data — the
-  `contractorcrm-mcp` stdio helper, read-only unless you launch it
-  `--read-write` (see `docs/LOCAL_API.md`)
+  `contractorcrm-mcp` stdio helper, read-write by default, read-only when you
+  launch it `--read-only` (see `docs/LOCAL_API.md`)
 
 ---
 
