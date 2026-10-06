@@ -1715,8 +1715,8 @@ fn the_shipped_binary_serves_a_handshake_and_a_read_over_stdio() {
         .collect::<Vec<_>>();
     assert!(names.contains(&"list_contacts".to_owned()));
     assert!(
-        !names.contains(&"create_contact".to_owned()),
-        "the binary defaults to read-only"
+        names.contains(&"create_contact".to_owned()),
+        "the binary defaults to read-write"
     );
 
     let contacts = &responses[2]["result"]["structuredContent"]["result"];
@@ -2019,4 +2019,48 @@ fn hostile_tool_arguments_come_back_as_errors_not_panics() {
         ),
         "invalid_input"
     );
+}
+
+/// `--read-only` is the opt-out from the read-write default: the shipped binary
+/// hides every write tool when it is passed.
+#[test]
+fn the_shipped_binary_hides_write_tools_with_read_only() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let database = {
+        let storage = open_storage(&temp);
+        storage.database_path().to_path_buf()
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_contractorcrm-mcp"))
+        .arg("--database")
+        .arg(&database)
+        .arg("--read-only")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the helper");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        writeln!(
+            stdin,
+            "{}",
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        )
+        .expect("write a request");
+    }
+    drop(child.stdin.take());
+    let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let responses = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(&line.expect("a line")).expect("valid JSON"))
+        .collect::<Vec<_>>();
+    assert!(child.wait().expect("wait").success());
+    let names = responses[0]["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("a name").to_owned())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"list_contacts".to_owned()));
+    assert!(!names.contains(&"create_contact".to_owned()));
 }

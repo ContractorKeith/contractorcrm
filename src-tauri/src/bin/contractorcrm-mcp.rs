@@ -1,8 +1,8 @@
 //! ContractorCRM's local agent helper: an MCP server over stdio.
 //!
-//! Usage: `contractorcrm-mcp --database <path to contractorcrm.sqlite3> [--read-write]`
+//! Usage: `contractorcrm-mcp --database <path to contractorcrm.sqlite3> [--read-only]`
 //!
-//! Read-only unless `--read-write` is passed. No network listener is opened;
+//! Read-write unless `--read-only` is passed. No network listener is opened;
 //! the agent client launches this process and talks to it over stdin/stdout.
 //! All logic lives in `contractorcrm_lib::mcp` so it is testable without
 //! spawning a process.
@@ -17,11 +17,12 @@ const USAGE: &str = "\
 ContractorCRM agent helper (MCP over stdio)
 
 Usage:
-  contractorcrm-mcp --database <path> [--read-write]
+  contractorcrm-mcp --database <path> [--read-only]
 
 Options:
   --database <path>  The app's SQLite file (see Settings → AI Assistant).
-  --read-write       Allow write tools. Default is read-only.
+  --read-only        Hide write tools. Default is read-write.
+  --read-write       The default; accepted for older client configs.
   -h, --help         Show this message.
 ";
 
@@ -67,12 +68,13 @@ struct Options {
 /// Parse the command line. `Ok(None)` means "help was asked for".
 fn parse_arguments(arguments: &[String]) -> Result<Option<Options>, String> {
     let mut database: Option<PathBuf> = None;
-    let mut mode = Mode::ReadOnly;
+    let mut mode = Mode::ReadWrite;
     let mut index = 0;
 
     while index < arguments.len() {
         match arguments[index].as_str() {
             "-h" | "--help" => return Ok(None),
+            "--read-only" => mode = Mode::ReadOnly,
             "--read-write" => mode = Mode::ReadWrite,
             "--database" => {
                 index += 1;

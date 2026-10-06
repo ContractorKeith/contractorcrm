@@ -40,8 +40,8 @@ version-pinned undo, audited, held in memory with a 15-minute TTL — only
 apply_proposal writes); history summaries, next-action suggestions, and
 follow-up drafting from built-in templates that work verbatim with AI off;
 AI explanations layered on the untouched deterministic attention flags; and
-a contractorcrm-mcp stdio helper (39 tools, read-only by default, write
-tools only with --read-write, preview_context shows exactly what a provider
+a contractorcrm-mcp stdio helper (39 tools, read-write by default, write
+tools hidden with --read-only, preview_context shows exactly what a provider
 call would send before it goes out — on both the MCP and desktop surfaces).
 docs/SLICE5_COVERAGE.md maps every tool, limit, error kind, and version-
 conflict path to its documentation and tests. The slice passed an

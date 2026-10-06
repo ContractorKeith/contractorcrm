@@ -9,9 +9,9 @@
 //! * **No business logic.** Every tool converts JSON arguments, calls the same
 //!   application/library function the desktop calls, and serializes the result.
 //!   Validation, version checks, and audit rows happen where they always did.
-//! * **Read-only by default.** Write tools are not even listed unless the user
-//!   launched the helper with `--read-write`; calling one anyway is the
-//!   `read_only` error kind, never a silent no-op.
+//! * **Read-write by default, read-only on request.** The helper exists so an
+//!   agent can manage the CRM. With `--read-only` write tools are not even
+//!   listed; calling one anyway is the `read_only` error kind, never a silent no-op.
 //! * **No implicit provider calls.** The AI-backed tools reach a model only
 //!   when the client invokes that tool, and they carry the same disclosure list
 //!   the desktop shows. `preview_context` shows what would be sent without
@@ -158,8 +158,8 @@ impl Server {
             // Nothing to apply either way; open without the migration pass.
             Storage::open_existing(database_path)
         } else if mode.allows_writes() {
-            // `--read-write` is an explicit write grant, so migrating forward
-            // is allowed — but say so, because it changes the user's file.
+            // Read-write mode may migrate forward — but say so, because it
+            // changes the user's file.
             eprintln!(
                 "contractorcrm-mcp: migrating {} from schema v{stored} to v{known}",
                 database_path.display()
@@ -169,7 +169,7 @@ impl Server {
             return Err(format!(
                 "{} is at schema v{stored} and this helper knows v{known}; \
                  launch the ContractorCRM desktop app once to migrate it (or relaunch this \
-                 helper with --read-write) before connecting an agent",
+                 helper without --read-only) before connecting an agent",
                 database_path.display()
             ));
         };
@@ -1033,8 +1033,8 @@ fn instructions(mode: Mode) -> String {
     match mode {
         Mode::ReadOnly => "ContractorCRM, read-only. You can look up contacts, companies, \
             opportunities, activities, tasks, and attention flags, and you can draft \
-            proposals — but nothing is written. Ask the user to restart this helper with \
-            --read-write to apply anything."
+            proposals — but nothing is written. Ask the user to restart this helper \
+            without --read-only to apply anything."
             .to_owned(),
         Mode::ReadWrite => "ContractorCRM, read-write. Reads are unrestricted; every write \
             is recorded in the CRM's audit log against this client. Prefer propose_* plus \

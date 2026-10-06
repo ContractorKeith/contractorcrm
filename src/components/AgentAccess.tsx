@@ -13,13 +13,13 @@ function shellCommand(paths: AgentPaths, readWrite: boolean): string {
   const windows = /^[a-z]:[\\/]|^\\\\/i.test(paths.helper);
   const quote = (value: string) =>
     windows ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\"'\"'")}'`;
-  return `${windows ? "& " : ""}${quote(paths.helper)} --database ${quote(paths.database)}${readWrite ? " --read-write" : ""}`;
+  return `${windows ? "& " : ""}${quote(paths.helper)} --database ${quote(paths.database)}${readWrite ? "" : " --read-only"}`;
 }
 
 /** Connect the user's own agent without enabling the built-in assistant. */
 export function AgentAccess({ client }: { client: CoreClient }) {
   const [paths, setPaths] = useState<AgentPaths | null>(null);
-  const [readWrite, setReadWrite] = useState(false);
+  const [readWrite, setReadWrite] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -46,7 +46,7 @@ export function AgentAccess({ client }: { client: CoreClient }) {
         mcpServers: {
           contractorcrm: {
             command: paths.helper,
-            args: ["--database", paths.database, ...(readWrite ? ["--read-write"] : [])],
+            args: ["--database", paths.database, ...(readWrite ? [] : ["--read-only"])],
           },
         },
       }, null, 2)
@@ -73,8 +73,8 @@ export function AgentAccess({ client }: { client: CoreClient }) {
           setReadWrite(event.target.value === "write");
           setCopyStatus("");
         }}>
-          <option value="read">Read-only</option>
           <option value="write">Read and write</option>
+          <option value="read">Read-only</option>
         </select>
       </Field>
       <p>{readWrite
